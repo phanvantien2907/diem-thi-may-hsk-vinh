@@ -30,17 +30,21 @@ Tên đầy đủ: **Vinh University HSK Computer-based Test Registration System
 
 ### 2. Button
 - **Tất cả button phải bo tròn** — luôn dùng `rounded-full` hoặc biến thể `size="rounded"` của shadcn.
+- **Tương tác (Interaction):** Bắt buộc phải có class `cursor-pointer` để hiển thị bàn tay khi di chuột vào (tránh trường hợp base UI không có sẵn). Phải có hiệu ứng hover mượt mà (vd: `hover:opacity-90` hoặc `hover:bg-primary/90`).
 - Sử dụng `<Button>` từ shadcn/ui (`@/components/ui/button`).
 - Ví dụ chuẩn:
   ```tsx
-  <Button className="rounded-full">Đăng ký</Button>
+  <Button className="rounded-full cursor-pointer hover:bg-primary/90">Đăng ký</Button>
   ```
 
 ### 3. Dialog, Alert, Toast, Confirm
-- Sử dụng **100% component mặc định của shadcn/ui**: `<Dialog>`, `<AlertDialog>`, `<Toast>`.
+- Sử dụng **100% component mặc định của shadcn/ui**: `<Dialog>`, `<AlertDialog>`, `<Toast>`, `<Toaster>`.
 - KHÔNG custom thêm style, class, hay animation vào các component này.
 - Giữ nguyên border-radius mặc định của shadcn (đã bo tròn theo theme).
 - Ví dụ dialog đăng xuất: dùng `<AlertDialog>` của shadcn, KHÔNG tự viết modal.
+- **Quy tắc chuyển trang sau hành động quan trọng (ví dụ: Đăng ký thành công):** 
+  - PHẢI hiển thị Toast thông báo thành công.
+  - PHẢI chờ một khoảng thời gian (delay 3 - 5 giây bằng `setTimeout`) trước khi dùng `navigate` (client-side) để chuyển trang, giúp người dùng kịp đọc thông báo. Không dùng `redirect` trực tiếp từ server action nếu cần hiển thị Toast.
 
 ### 4. Typography & Font
 - Font chữ chính: **Be Vietnam Pro** (Google Fonts).
