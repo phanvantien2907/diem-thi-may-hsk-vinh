@@ -6,12 +6,14 @@
  *
  * Tất cả routes lồng bên trong đây đều được bảo vệ tự động.
  */
-import { redirect, Outlet, useLoaderData } from "react-router";
+import { redirect, Outlet, useLoaderData, useNavigation } from "react-router";
 import type { Route } from "./+types/_app";
 
 import { SidebarProvider, SidebarTrigger, SidebarInset } from "~/components/ui/sidebar";
 import { Separator } from "~/components/ui/separator";
 import { AppSidebar } from "~/components/layout/AppSidebar";
+import { DashboardSkeleton } from "~/components/layout/DashboardSkeleton";
+import { ContentSkeleton } from "~/components/layout/ContentSkeleton";
 
 import { requireAuth } from "~/lib/auth.server";
 
@@ -30,9 +32,16 @@ export const meta: Route.MetaFunction = () => [
   },
 ];
 
-// ─── Layout Component ─────────────────────────────────────────────────────────
+// ─── HydrateFallback — Skeleton hiển thị trong quá trình SSR hydration ──────────────
+export function HydrateFallback() {
+  return <DashboardSkeleton />;
+}
+
+// ─── Layout Component ─────────────────────────────────────────────────────────────
 export default function AppLayout() {
   const { user } = useLoaderData<typeof loader>();
+  const navigation = useNavigation();
+  const isNavigating = navigation.state === "loading";
 
   return (
     <SidebarProvider>
@@ -59,7 +68,7 @@ export default function AppLayout() {
 
         {/* ── Page content ────────────────────────────────────────────────── */}
         <main className="flex min-w-0 flex-1 flex-col gap-6 p-4 sm:p-6 lg:p-8">
-          <Outlet />
+          {isNavigating ? <ContentSkeleton /> : <Outlet />}
         </main>
       </SidebarInset>
     </SidebarProvider>
