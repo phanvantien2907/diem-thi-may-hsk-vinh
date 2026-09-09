@@ -1,11 +1,16 @@
 import { type RouteConfig, index, layout, route } from "@react-router/dev/routes";
 
 export default [
-  index("routes/home.tsx"),
-  // Auth routes — dùng layout route để share split-screen layout
-  layout("routes/(auth)/layout.tsx", [
-    route("login", "routes/(auth)/login.tsx"),
-    route("register", "routes/(auth)/register.tsx"),
+  // ── Protected app routes — bọc bởi _app.tsx layout (AuthGuard) ────────────
+  layout("routes/_app.tsx", [
+    index("routes/_app.index.tsx"),
+    route("thong-tin-thi-sinh", "routes/_app.thong-tin-thi-sinh.tsx"),
   ]),
-] satisfies RouteConfig;
 
+  layout("routes/(auth)/layout.tsx", [
+    route("dang-nhap", "routes/(auth)/dang-nhap.tsx"),
+    route("dang-ky", "routes/(auth)/dang-ky.tsx"),
+  ]),
+
+  route("dang-xuat", "routes/dang-xuat.tsx"),
+] satisfies RouteConfig;

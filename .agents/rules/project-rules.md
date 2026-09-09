@@ -41,7 +41,10 @@ Tên đầy đủ: **Vinh University HSK Computer-based Test Registration System
 - Sử dụng **100% component mặc định của shadcn/ui**: `<Dialog>`, `<AlertDialog>`, `<Toast>`, `<Toaster>`.
 - KHÔNG custom thêm style, class, hay animation vào các component này.
 - Giữ nguyên border-radius mặc định của shadcn (đã bo tròn theo theme).
-- Ví dụ dialog đăng xuất: dùng `<AlertDialog>` của shadcn, KHÔNG tự viết modal.
+- **Quy chuẩn AlertDialog (Ví dụ: Đăng xuất, Xóa):** 
+  - Phải dùng `<AlertDialog>` của shadcn để chặn tương tác nền.
+  - Các nút hành động bên trong (`<AlertDialogCancel>`, `<AlertDialogAction>`) phải tuân thủ chuẩn Button: `rounded-full`, `cursor-pointer`, hover mượt.
+  - Nút xác nhận hành động nguy hiểm (như Đăng xuất) phải dùng `variant="destructive"`.
 - **Quy tắc chuyển trang sau hành động quan trọng (ví dụ: Đăng ký thành công):** 
   - PHẢI hiển thị Toast thông báo thành công.
   - PHẢI chờ một khoảng thời gian (delay 3 - 5 giây bằng `setTimeout`) trước khi dùng `navigate` (client-side) để chuyển trang, giúp người dùng kịp đọc thông báo. Không dùng `redirect` trực tiếp từ server action nếu cần hiển thị Toast.

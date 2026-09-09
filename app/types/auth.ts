@@ -101,3 +101,27 @@ export interface RegisterActionError {
     password?: string;
   };
 }
+
+/**
+ * Interface cho thông tin người dùng được sử dụng xuyên suốt ứng dụng.
+ */
+export interface UserProfile {
+  name: string;
+  email?: string;
+  username?: string;
+  cccd?: string;
+  phone?: string;
+  role?: string;
+}
+
+/**
+ * Cấu trúc payload của JWT token.
+ * Tránh việc ép kiểu any khi decode token.
+ */
+export interface JwtPayload {
+  user_id?: string | number;
+  user_role?: string;
+  exp?: number;
+  iat?: number;
+  [key: string]: unknown;
+}

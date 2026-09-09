@@ -11,7 +11,7 @@
  * Flow:
  * 1. Client-side validation với react-hook-form + zod
  * 2. Submit → action() → POST /api/v1/auth/register
- * 3. Success (201) → action trả { success: true } → client hiện toast → 5s → navigate /login
+ * 3. Success (201) → action trả { success: true } → client hiện toast → 5s → navigate /dang-nhap
  * 4. Error 409 → "Tài khoản đã tồn tại"
  * 5. Error 400 → lỗi validation từ server
  */
@@ -19,7 +19,8 @@ import * as React from "react";
 import { Link, Form, data, useActionData, useNavigation, useNavigate } from "react-router";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import type { Route } from "./+types/register";
+import { API_BASE_URL } from "~/lib/env.server";
+import { type Route } from "./+types/dang-ky";
 
 import { registerSchema, type RegisterFormValues } from "~/lib/schemas/auth";
 import type { ApiErrorResponse } from "~/types/auth";
@@ -73,7 +74,7 @@ export async function action({ request }: Route.ActionArgs) {
 
   try {
     const response = await fetch(
-      `${process.env.API_BASE_URL ?? "http://localhost:8080"}/api/v1/auth/register`,
+      `${API_BASE_URL}/api/v1/auth/register`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -247,7 +248,7 @@ export default function RegisterPage() {
 
   // Callback navigate sau 5 giây (từ SuccessBanner)
   const handleNavigateToLogin = React.useCallback(() => {
-    navigate("/login");
+    navigate("/dang-nhap");
   }, [navigate]);
 
   return (
@@ -479,7 +480,7 @@ export default function RegisterPage() {
         <p className="text-center text-sm text-muted-foreground">
           Đã có tài khoản?{" "}
           <Link
-            to="/login"
+            to="/dang-nhap"
             className="font-semibold text-foreground underline-offset-4 hover:underline transition-colors"
           >
             Đăng nhập ngay

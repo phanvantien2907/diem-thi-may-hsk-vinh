@@ -13,7 +13,8 @@ import * as React from "react";
 import { Link, Form, redirect, data, useActionData, useNavigation, useNavigate } from "react-router";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import type { Route } from "./+types/login";
+import { API_BASE_URL } from "~/lib/env.server";
+import type { Route } from "./+types/dang-nhap";
 
 import { loginSchema, type LoginFormValues } from "~/lib/schemas/auth";
 import type { LoginResponseData, ApiErrorResponse } from "~/types/auth";
@@ -33,6 +34,24 @@ export const meta: Route.MetaFunction = () => [
       "Đăng nhập vào hệ thống đăng ký thi HSK máy tính Trường Đại học Vinh.",
   },
 ];
+
+// ─── Loader — Chuyển hướng nếu đã đăng nhập ──────────────────────────────────
+export async function loader({ request }: Route.LoaderArgs) {
+  const cookieHeader = request.headers.get("Cookie") ?? "";
+  if (cookieHeader.includes("session=")) {
+    const url = new URL(request.url);
+    const returnTo = url.searchParams.get("returnTo");
+    const isSafeReturnTo =
+      returnTo &&
+      returnTo.startsWith("/") &&
+      !returnTo.startsWith("//") &&
+      !returnTo.includes(".data") &&
+      !returnTo.startsWith("/_");
+
+    return redirect(isSafeReturnTo ? returnTo : "/thong-tin-thi-sinh");
+  }
+  return null;
+}
 
 // ─── Action — Xử lý form submission ──────────────────────────────────────────
 export async function action({ request }: Route.ActionArgs) {
@@ -61,7 +80,7 @@ export async function action({ request }: Route.ActionArgs) {
 
   try {
     const response = await fetch(
-      `${process.env.API_BASE_URL ?? "http://localhost:8080"}/api/v1/auth/login`,
+      `${API_BASE_URL}/api/v1/auth/login`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -92,13 +111,44 @@ export async function action({ request }: Route.ActionArgs) {
       return redirect("/auth/force-change-password");
     }
 
-    // TODO: Lưu token vào cookie hoặc session
-    // Thành công — trả flag cho client xử lý toast + countdown
-    return data({
-      success: true as const,
-      error: undefined,
-      fieldErrors: undefined,
-    });
+    // Thiết lập session cookies cho browser
+    const headers = new Headers();
+    const expiresIn = result.data.expires_in || 86400;
+    headers.append(
+      "Set-Cookie",
+      `session=${result.data.access_token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${expiresIn}`
+    );
+    if (result.data.refresh_token) {
+      headers.append(
+        "Set-Cookie",
+        `refresh_token=${result.data.refresh_token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 3600}`
+      );
+    }
+
+    // Lưu thông tin người dùng ban đầu vào cookie
+    const isEmail = parsed.data.identifier.includes("@");
+    const basicUser = {
+      username: parsed.data.identifier,
+      name: isEmail
+        ? parsed.data.identifier.split("@")[0]
+        : `Thí sinh (${parsed.data.identifier.slice(-4)})`,
+      email: isEmail ? parsed.data.identifier : "",
+      cccd: !isEmail ? parsed.data.identifier : "",
+      role: "Thí sinh",
+    };
+    headers.append(
+      "Set-Cookie",
+      `user_info=${encodeURIComponent(JSON.stringify(basicUser))}; Path=/; SameSite=Lax; Max-Age=${expiresIn}`
+    );
+
+    return data(
+      {
+        success: true as const,
+        error: undefined,
+        fieldErrors: undefined,
+      },
+      { headers }
+    );
   } catch {
     return data(
       {
@@ -109,33 +159,6 @@ export async function action({ request }: Route.ActionArgs) {
       { status: 500 }
     );
   }
-}
-
-// ─── SuccessBanner — Countdown 3 giây → navigate "/" ─────────────────────────
-function SuccessBanner({ onNavigate }: { onNavigate: () => void }) {
-  const [seconds, setSeconds] = React.useState(3);
-
-  React.useEffect(() => {
-    if (seconds <= 0) {
-      onNavigate();
-      return;
-    }
-    const t = setTimeout(() => setSeconds((s) => s - 1), 1000);
-    return () => clearTimeout(t);
-  }, [seconds, onNavigate]);
-
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="rounded-xl bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800 dark:bg-green-950/30 dark:border-green-800 dark:text-green-300"
-    >
-      <p className="font-semibold">Đăng nhập thành công! 🎉</p>
-      <p className="text-xs mt-0.5 text-green-700 dark:text-green-400">
-        Đang chuyển đến trang chủ sau {seconds} giây…
-      </p>
-    </div>
-  );
 }
 
 // ─── Login Form Component ─────────────────────────────────────────────────────
@@ -165,22 +188,28 @@ export default function LoginPage() {
     }
   }, [actionData?.error]);
 
-  // Toast khi đăng nhập thành công
+  // Toast khi đăng nhập thành công & chuyển hướng ngay lập tức (không trễ)
   React.useEffect(() => {
     if (actionData?.success) {
       toast.add({
         type: "success",
         title: "Đăng nhập thành công!",
-        description: "Đang chuyển hướng đến trang chủ…",
-        timeout: 4000,
+        description: "Chào mừng bạn quay trở lại.",
+        timeout: 3000,
       });
-    }
-  }, [actionData?.success]);
 
-  // Callback navigate — được truyền vào SuccessBanner
-  const handleNavigateToHome = React.useCallback(() => {
-    navigate("/");
-  }, [navigate]);
+      const params = new URLSearchParams(window.location.search);
+      const returnTo = params.get("returnTo");
+      const isSafeReturnTo =
+        returnTo &&
+        returnTo.startsWith("/") &&
+        !returnTo.startsWith("//") &&
+        !returnTo.includes(".data") &&
+        !returnTo.startsWith("/_");
+
+      navigate(isSafeReturnTo ? returnTo : "/thong-tin-thi-sinh", { replace: true });
+    }
+  }, [actionData?.success, navigate]);
 
   return (
     <div className="flex flex-col gap-5 min-w-0">
@@ -197,9 +226,16 @@ export default function LoginPage() {
         </p>
       </div>
 
-      {/* Success banner + countdown — hiện thay thế form */}
+      {/* Thông báo chuyển hướng khi thành công */}
       {actionData?.success && (
-        <SuccessBanner onNavigate={handleNavigateToHome} />
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-2xl bg-green-50/80 border border-green-200/80 p-4 text-sm text-green-800 dark:bg-green-950/30 dark:border-green-800 dark:text-green-300 flex items-center gap-3"
+        >
+          <div className="size-4 rounded-full border-2 border-green-600 border-t-transparent animate-spin shrink-0" />
+          <p className="font-medium">Đăng nhập thành công! Đang chuyển hướng…</p>
+        </div>
       )}
 
       {/* Form — ẩn sau khi đăng nhập thành công */}
@@ -311,7 +347,7 @@ export default function LoginPage() {
         <p className="text-center text-sm text-muted-foreground">
           Chưa có tài khoản?{" "}
           <Link
-            to="/register"
+            to="/dang-ky"
             className="font-semibold text-foreground underline-offset-4 hover:underline transition-colors"
           >
             Đăng ký ngay
