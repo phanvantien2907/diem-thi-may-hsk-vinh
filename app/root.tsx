@@ -10,6 +10,7 @@ import {
 import type { Route } from "./+types/root";
 import { Toaster } from "~/components/ui/toast";
 import { TooltipProvider } from "~/components/ui/tooltip";
+import { NotFound } from "~/components/layout/NotFound";
 import "./app.css";
 
 
@@ -53,30 +54,49 @@ export default function App() {
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
-  let message = "Oops!";
-  let details = "An unexpected error occurred.";
+  if (isRouteErrorResponse(error) && error.status === 404) {
+    return <NotFound />;
+  }
+
+  let title = "Đã xảy ra lỗi hệ thống";
+  let description =
+    "Hệ thống gặp sự cố không mong muốn. Vui lòng tải lại trang hoặc thử lại sau.";
   let stack: string | undefined;
 
   if (isRouteErrorResponse(error)) {
-    message = error.status === 404 ? "404" : "Error";
-    details =
-      error.status === 404
-        ? "The requested page could not be found."
-        : error.statusText || details;
+    title = `Lỗi ${error.status} - ${error.statusText || "Không thể xử lý yêu cầu"}`;
+    description =
+      typeof error.data === "string"
+        ? error.data
+        : error.data?.message || description;
   } else if (import.meta.env.DEV && error && error instanceof Error) {
-    details = error.message;
+    description = error.message;
     stack = error.stack;
   }
 
   return (
-    <main className="pt-16 p-4 container mx-auto">
-      <h1>{message}</h1>
-      <p>{details}</p>
-      {stack && (
-        <pre className="w-full p-4 overflow-x-auto">
-          <code>{stack}</code>
-        </pre>
-      )}
+    <main className="relative flex min-h-dvh min-w-0 w-full flex-col items-center justify-center overflow-hidden bg-background px-4 py-8 sm:px-6 lg:px-8">
+      <div className="relative z-10 flex w-full max-w-lg flex-col items-center text-center">
+        <h1 className="text-2xl font-bold tracking-tight text-destructive sm:text-3xl">
+          {title}
+        </h1>
+        <p className="mt-3 max-w-md text-sm leading-relaxed text-muted-foreground sm:text-base">
+          {description}
+        </p>
+        <div className="mt-6 flex items-center justify-center gap-3">
+          <a
+            href="/"
+            className="inline-flex h-10 items-center justify-center rounded-full bg-primary px-5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors shadow-xs"
+          >
+            Quay lại trang chủ
+          </a>
+        </div>
+        {stack && (
+          <pre className="mt-6 max-h-60 w-full overflow-auto rounded-xl border border-border bg-muted/60 p-4 text-left text-xs font-mono text-muted-foreground">
+            <code>{stack}</code>
+          </pre>
+        )}
+      </div>
     </main>
   );
 }

@@ -13,4 +13,7 @@ export default [
   ]),
 
   route("dang-xuat", "routes/dang-xuat.tsx"),
+
+  // ── Catch-all 404 route ───────────────────────────────────────────────────
+  route("*", "routes/$.tsx"),
 ] satisfies RouteConfig;
