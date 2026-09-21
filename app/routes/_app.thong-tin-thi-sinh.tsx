@@ -1,60 +1,210 @@
 /**
- * Candidate module — /thong-tin-thi-sinh
- * Placeholder route — module Đăng ký thi (chưa triển khai)
+ * _app.thong-tin-thi-sinh.tsx — /thong-tin-thi-sinh
+ *
+ * Trang "Thông tin thí sinh" — form hồ sơ cá nhân + giấy tờ tùy thân.
+ *
+ * Loader:
+ *   - GET /api/v1/me/candidate-profile → populate profile form (404 = chưa có)
+ *   - Trả về { profile, token, apiBaseUrl }
+ *
+ * Không dùng action — submit qua client-side fetch (Cloudinary upload cần client).
  */
+import * as React from "react";
 import type { Route } from "./+types/_app.thong-tin-thi-sinh";
+import { requireAuth } from "~/lib/auth.server";
+import { API_BASE_URL } from "~/lib/env.server";
 
+import type {
+  CandidateResponseDTO,
+  DocumentResponseDTO,
+} from "~/types/candidate";
+import type { CandidateProfileFormValues } from "~/lib/schemas/candidate";
+import type { CandidateDocumentFormValues } from "~/lib/schemas/candidate";
+
+import { ProfileForm } from "~/components/candidate/ProfileForm";
+import { DocumentForm } from "~/components/candidate/DocumentForm";
+import { toast } from "~/components/ui/toast";
+
+// ─── SEO Meta ─────────────────────────────────────────────────────────────────
 export const meta: Route.MetaFunction = () => [
-  { title: "Đăng ký thi — HSK Đại học Vinh" },
+  { title: "Thông tin thí sinh" },
   {
     name: "description",
-    content: "Đăng ký tham dự kỳ thi HSK máy tính tại Trường Đại học Vinh",
+    content:
+      "Hoàn thiện hồ sơ thí sinh để đăng ký thi HSK máy tính tại Trường Đại học Vinh.",
   },
 ];
 
-export default function CandidatePage() {
+export async function loader({ request }: Route.LoaderArgs) {
+  const { user, token } = await requireAuth(request);
+  const userCccd = user?.cccd || user?.username || "";
+
+  let profile: CandidateResponseDTO | null = null;
+  let document: DocumentResponseDTO | null = null;
+
+  // Fetch candidate profile
+  try {
+    const profileRes = await fetch(`${API_BASE_URL}/api/v1/me/candidate-profile`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (profileRes.ok) {
+      const result = (await profileRes.json()) as { data: CandidateResponseDTO };
+      profile = result.data;
+    }
+    // 404 = chưa có hồ sơ → profile stays null
+  } catch (error) {
+    console.error("[CandidateProfile] Error fetching profile:", error);
+  }
+
+  // Fetch documents (nếu đã có profile)
+  if (profile) {
+    try {
+      const docRes = await fetch(
+        `${API_BASE_URL}/api/v1/me/candidate-profile/documents`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      if (docRes.ok) {
+        const result = (await docRes.json()) as { data: DocumentResponseDTO | DocumentResponseDTO[] };
+        // API trả về object hoặc array — normalize
+        const docData = result.data;
+        document = Array.isArray(docData)
+          ? docData[0] ?? null
+          : docData ?? null;
+      }
+    } catch (error) {
+      console.error("[CandidateProfile] Error fetching documents:", error);
+    }
+  }
+
+  return { profile, document, token, apiBaseUrl: API_BASE_URL, userCccd };
+}
+
+// ─── Page Component ─────────────────────────────────────────────────────────
+export default function CandidateProfilePage({
+  loaderData,
+}: Route.ComponentProps) {
+  const { token, apiBaseUrl, userCccd } = loaderData;
+
+  // Local state — populate from loader, then update on successful submit
+  const [profile, setProfile] = React.useState(loaderData.profile);
+  const [document, setDocument] = React.useState(loaderData.document);
+
+  // ── Profile submit ────────────────────────────────────────────────────────
+  async function handleProfileSubmit(
+    data: CandidateProfileFormValues,
+    isNew: boolean
+  ) {
+    const method = isNew ? "POST" : "PATCH";
+    const url = `${apiBaseUrl}/api/v1/me/candidate-profile`;
+
+    // Clean up optional fields: remove empty strings, convert NaN to undefined
+    const body: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value === "" || (typeof value === "number" && isNaN(value))) continue;
+      body[key] = value;
+    }
+
+    const response = await fetch(url, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const err = (await response.json().catch(() => null)) as {
+        msg?: string;
+      } | null;
+      throw new Error(
+        err?.msg ?? "Không thể lưu thông tin. Vui lòng thử lại."
+      );
+    }
+
+    const result = (await response.json()) as { data: CandidateResponseDTO };
+    setProfile(result.data);
+    toast.add({
+      type: "success",
+      title: isNew ? "Tạo hồ sơ thành công!" : "Cập nhật thành công!",
+    });
+  }
+
+  // ── Document submit ───────────────────────────────────────────────────────
+  async function handleDocumentSubmit(data: CandidateDocumentFormValues) {
+    const url = `${apiBaseUrl}/api/v1/me/candidate-profile/documents`;
+
+    // Clean up optional fields
+    const body: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (
+        value === "" ||
+        value === undefined ||
+        (typeof value === "number" && isNaN(value))
+      )
+        continue;
+      body[key] = value;
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const err = (await response.json().catch(() => null)) as {
+        msg?: string;
+      } | null;
+      throw new Error(
+        err?.msg ?? "Không thể lưu giấy tờ. Vui lòng thử lại."
+      );
+    }
+
+    const result = (await response.json()) as { data: DocumentResponseDTO };
+    setDocument(result.data);
+    toast.add({
+      type: "success",
+      title: "Lưu giấy tờ thành công!",
+    });
+  }
+
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       {/* Page heading */}
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">
-          Đăng ký thi
+          Thông tin thí sinh
         </h1>
         <p className="text-sm text-muted-foreground">
-          Module đăng ký thi HSK — đang trong quá trình phát triển.
+          Hoàn thiện hồ sơ cá nhân và giấy tờ tùy thân để đăng ký thi HSK.
         </p>
       </div>
 
-      {/* Placeholder card */}
-      <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-dashed border-border bg-muted/30">
-        <div className="flex flex-col items-center gap-3 text-center px-6">
-          <div className="flex size-14 items-center justify-center rounded-full bg-muted">
-            {/* Construction icon */}
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              className="size-7 text-muted-foreground"
-              aria-hidden="true"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M11.42 15.17 17.25 21A2.652 2.652 0 0 0 21 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 1 1-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 0 0 4.486-6.336l-3.276 3.277a3.004 3.004 0 0 1-2.25-2.25l3.276-3.276a4.5 4.5 0 0 0-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437 1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008Z"
-              />
-            </svg>
-          </div>
-          <div className="flex flex-col gap-1">
-            <p className="text-sm font-semibold text-foreground">
-              Module Đăng ký thi
-            </p>
-            <p className="text-xs text-muted-foreground max-w-xs">
-              Tính năng đang được phát triển. Vui lòng quay lại sau.
-            </p>
-          </div>
-        </div>
-      </div>
+      {/* Section 1: Thông tin cá nhân */}
+      <ProfileForm profile={profile} onSubmit={handleProfileSubmit} />
+
+      {/* Section 2: Giấy tờ tùy thân */}
+      <DocumentForm
+        document={document}
+        token={token}
+        apiBaseUrl={apiBaseUrl}
+        onSubmit={handleDocumentSubmit}
+        disabled={profile === null}
+        userCccd={userCccd}
+      />
+
+      {/* Hint khi chưa có profile */}
+      {profile === null && (
+        <p className="text-center text-xs text-muted-foreground">
+          Vui lòng tạo hồ sơ cá nhân trước khi upload giấy tờ tùy thân.
+        </p>
+      )}
     </div>
   );
 }

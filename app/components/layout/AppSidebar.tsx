@@ -50,8 +50,13 @@ import { Avatar, AvatarFallback } from "~/components/ui/avatar";
 // ─── Nav items definition ──────────────────────────────────────────────────────
 const NAV_ITEMS = [
   {
-    label: "Đăng ký thi",
+    label: "Thông tin thí sinh",
     href: "/thong-tin-thi-sinh",
+    icon: UserCircleIcon,
+  },
+  {
+    label: "Đăng ký thi",
+    href: "/dang-ky-thi",
     icon: BookOpenCheckIcon,
   },
   {
