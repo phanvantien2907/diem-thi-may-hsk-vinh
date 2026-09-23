@@ -907,10 +907,66 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 | `portrait_image_url` | `string` | ❌ | URL ảnh chân dung |
 | `verification_status` | `string` | ❌ | `pending`, `verified`, `rejected` |
 | `rejection_reason` | `string` | ✅ | Lý do từ chối (chỉ khi `rejected`) |
+| `ward_id` | `integer` | ✅ | ID của Xã/Phường |
+| `province_id` | `integer` | ✅ | ID của Tỉnh/Thành phố |
+| `address_detail` | `string` | ✅ | Địa chỉ chi tiết |
 
 ---
 
-### 3.5. Lấy chữ ký Upload (Cloudinary)
+### 3.5. Lấy danh sách giấy tờ tùy thân
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/me/candidate-profile/documents` |
+| **Auth** | 🔐 JWT |
+| **Use-case** | Thí sinh xem toàn bộ giấy tờ tùy thân đã nộp |
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 2,
+      "candidate_id": 1,
+      "doc_type": "cccd",
+      "doc_number": "012345678901",
+      "issue_date": "2021-06-15T00:00:00Z",
+      "issue_place": "Cục Cảnh sát QLHC về TTXH",
+      "front_image_url": "https://res.cloudinary.com/.../front.jpg",
+      "back_image_url": "https://res.cloudinary.com/.../back.jpg",
+      "portrait_image_url": "https://res.cloudinary.com/.../portrait.jpg",
+      "verification_status": "verified",
+      "ward_id": 123,
+      "province_id": 4,
+      "address_detail": "Số 123 Đường ABC"
+    },
+    {
+      "id": 1,
+      "candidate_id": 1,
+      "doc_type": "passport",
+      "doc_number": "B12345678",
+      "issue_date": "2020-03-10T00:00:00Z",
+      "issue_place": "Cục Xuất nhập cảnh",
+      "front_image_url": "https://res.cloudinary.com/.../pp_front.jpg",
+      "portrait_image_url": "https://res.cloudinary.com/.../pp_portrait.jpg",
+      "verification_status": "pending",
+      "ward_id": 456,
+      "province_id": 5,
+      "address_detail": "Thôn XYZ"
+    }
+  ],
+  "error": null,
+  "meta": null
+}
+```
+
+> Trả về mảng `DocumentResponseDTO` (cùng cấu trúc đã mô tả ở [3.4](#34-upload-giấy-tờ-tùy-thân)). Sắp xếp theo thời gian tạo giảm dần (mới nhất trước).
+
+---
+
+### 3.6. Lấy chữ ký Upload (Cloudinary)
 
 | | |
 |---|---|
@@ -937,7 +993,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 ---
 
-### 3.6. [Admin] Danh sách thí sinh
+### 3.7. [Admin] Danh sách thí sinh
 
 | | |
 |---|---|
@@ -989,7 +1045,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 ---
 
-### 3.7. [Admin] Xem chi tiết thí sinh
+### 3.8. [Admin] Xem chi tiết thí sinh
 
 | | |
 |---|---|
@@ -1003,7 +1059,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 ---
 
-### 3.8. [Admin] Duyệt giấy tờ
+### 3.9. [Admin] Duyệt giấy tờ
 
 | | |
 |---|---|
@@ -1028,7 +1084,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 ---
 
-### 3.9. [Admin] Từ chối giấy tờ
+### 3.10. [Admin] Từ chối giấy tờ
 
 | | |
 |---|---|
@@ -1052,7 +1108,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 ---
 
-### 3.10. [Admin] Danh sách hồ sơ trùng
+### 3.11. [Admin] Danh sách hồ sơ trùng
 
 | | |
 |---|---|
@@ -1080,7 +1136,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 ---
 
-### 3.11. [Admin] Danh sách điểm danh phòng thi
+### 3.12. [Admin] Danh sách điểm danh phòng thi
 
 | | |
 |---|---|
@@ -2861,61 +2917,62 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 | 16 | `GET` | `/me/candidate-profile` | 🔐 | Candidate |
 | 17 | `PATCH` | `/me/candidate-profile` | 🔐 | Candidate |
 | 18 | `POST` | `/me/candidate-profile/documents` | 🔐 | Candidate |
-| 19 | `GET` | `/me/candidate-profile/upload-signature` | 🔐 | Candidate |
-| 20 | `GET` | `/admin/candidates` | 🔐👑 | Candidate |
-| 21 | `GET` | `/admin/candidates/duplicates` | 🔐👑 | Candidate |
-| 22 | `GET` | `/admin/candidates/:id` | 🔐👑 | Candidate |
-| 23 | `POST` | `/admin/candidates/:id/approve` | 🔐👑 | Candidate |
-| 24 | `POST` | `/admin/candidates/:id/reject` | 🔐👑 | Candidate |
-| 25 | `GET` | `/admin/exam-sessions/:id/roster` | 🔐👑 | Candidate |
-| 26 | `GET` | `/exam-types` | 🔓 | Exam |
-| 27 | `GET` | `/exam-rooms` | 🔓 | Exam |
-| 28 | `GET` | `/exam-sessions` | 🔓 | Exam |
-| 29 | `GET` | `/exam-sessions/:id` | 🔓 | Exam |
-| 30 | `GET` | `/exam-sessions/:id/seats` | 🔓 | Exam |
-| 31 | `POST` | `/admin/exam-sessions/batch-create` | 🔐👑 | Exam |
-| 32 | `POST` | `/admin/exam-sessions/:id/seats/generate` | 🔐👑 | Exam |
-| 33 | `POST` | `/admin/exam-sessions/:id/cancel` | 🔐👑 | Exam |
-| 34 | `POST` | `/me/registrations` | 🔐 | Registration |
-| 35 | `GET` | `/me/registrations` | 🔐 | Registration |
-| 36 | `POST` | `/me/registrations/:id/payment-confirm` | 🔐 | Registration |
-| 37 | `POST` | `/me/registrations/:id/transfer` | 🔐 | Registration |
-| 38 | `POST` | `/me/registrations/:id/cancel` | 🔐 | Registration |
-| 39 | `GET` | `/me/registrations/:id/admission-slip` | 🔐 | Registration |
-| 40 | `POST` | `/me/exam-sessions/:id/waitlist` | 🔐 | Registration |
-| 41 | `PATCH` | `/proctor/exam-sessions/:id/attendance/:registration_id` | 🔐 | Registration |
-| 42 | `GET` | `/admin/exam-sessions/:id/dashboard` | 🔐👑 | Registration |
-| 43 | `GET` | `/admin/payments/reconcile` | 🔐👑 | Registration |
-| 44 | `POST` | `/payments` | 🔐 | Payment |
-| 45 | `POST` | `/payments/callback` | 🔐 | Payment |
-| 46 | `GET` | `/payments` | 🔐 | Payment |
-| 47 | `GET` | `/results/:registration_id` | 🔐 | Result |
-| 48 | `POST` | `/rechecks` | 🔐 | Result |
-| 49 | `POST` | `/admin/results` | 🔐👑 | Result |
-| 50 | `GET` | `/me/certificates` | 🔐 | Certificate |
-| 51 | `GET` | `/me/certificates/:id` | 🔐 | Certificate |
-| 52 | `GET` | `/me/certificates/:id/pdf` | 🔐 | Certificate |
-| 53 | `POST` | `/me/certificates/:id/deliveries` | 🔐 | Certificate |
-| 54 | `GET` | `/me/certificates/:id/deliveries` | 🔐 | Certificate |
-| 55 | `POST` | `/me/certificates/:id/reissue-request` | 🔐 | Certificate |
-| 56 | `PATCH` | `/me/deliveries/:delivery_id` | 🔐 | Certificate |
-| 57 | `GET` | `/public/certificates/verify` | 🔓 | Certificate |
-| 58 | `POST` | `/admin/certificates/:id/issue` | 🔐👑 | Certificate |
-| 59 | `POST` | `/admin/certificates/issue-batch` | 🔐👑 | Certificate |
-| 60 | `POST` | `/admin/certificates/:id/revoke` | 🔐👑 | Certificate |
-| 61 | `GET` | `/admin/certificates` | 🔐👑 | Certificate |
-| 62 | `GET` | `/admin/certificates/print-batch` | 🔐👑 | Certificate |
-| 63 | `GET` | `/admin/deliveries` | 🔐👑 | Certificate |
-| 64 | `PATCH` | `/admin/deliveries/:id` | 🔐👑 | Certificate |
-| 65 | `POST` | `/webhooks/shipping/:courier` | HMAC | Certificate |
-| 66 | `GET` | `/notifications` | 🔐 | Notification |
-| 67 | `PUT` | `/notifications/:id/read` | 🔐 | Notification |
-| 68 | `GET` | `/locations/provinces` | 🔓 | Location |
-| 69 | `GET` | `/locations/provinces/:id/wards` | 🔓 | Location |
-| 70 | `GET` | `/locations/wards/:id/delivery-coverage` | 🔓 | Location |
-| 71 | `GET` | `/admin/locations/stats/candidates-by-province` | 🔐👑 | Location |
-| 72 | `POST` | `/admin/locations/wards/:id/merge` | 🔐👑 | Location |
-| 73 | `GET` | `/admin/audit-logs` | 🔐👑 | Audit |
+| 19 | `GET` | `/me/candidate-profile/documents` | 🔐 | Candidate |
+| 20 | `GET` | `/me/candidate-profile/upload-signature` | 🔐 | Candidate |
+| 21 | `GET` | `/admin/candidates` | 🔐👑 | Candidate |
+| 22 | `GET` | `/admin/candidates/duplicates` | 🔐👑 | Candidate |
+| 23 | `GET` | `/admin/candidates/:id` | 🔐👑 | Candidate |
+| 24 | `POST` | `/admin/candidates/:id/approve` | 🔐👑 | Candidate |
+| 25 | `POST` | `/admin/candidates/:id/reject` | 🔐👑 | Candidate |
+| 26 | `GET` | `/admin/exam-sessions/:id/roster` | 🔐👑 | Candidate |
+| 27 | `GET` | `/exam-types` | 🔓 | Exam |
+| 28 | `GET` | `/exam-rooms` | 🔓 | Exam |
+| 29 | `GET` | `/exam-sessions` | 🔓 | Exam |
+| 30 | `GET` | `/exam-sessions/:id` | 🔓 | Exam |
+| 31 | `GET` | `/exam-sessions/:id/seats` | 🔓 | Exam |
+| 32 | `POST` | `/admin/exam-sessions/batch-create` | 🔐👑 | Exam |
+| 33 | `POST` | `/admin/exam-sessions/:id/seats/generate` | 🔐👑 | Exam |
+| 34 | `POST` | `/admin/exam-sessions/:id/cancel` | 🔐👑 | Exam |
+| 35 | `POST` | `/me/registrations` | 🔐 | Registration |
+| 36 | `GET` | `/me/registrations` | 🔐 | Registration |
+| 37 | `POST` | `/me/registrations/:id/payment-confirm` | 🔐 | Registration |
+| 38 | `POST` | `/me/registrations/:id/transfer` | 🔐 | Registration |
+| 39 | `POST` | `/me/registrations/:id/cancel` | 🔐 | Registration |
+| 40 | `GET` | `/me/registrations/:id/admission-slip` | 🔐 | Registration |
+| 41 | `POST` | `/me/exam-sessions/:id/waitlist` | 🔐 | Registration |
+| 42 | `PATCH` | `/proctor/exam-sessions/:id/attendance/:registration_id` | 🔐 | Registration |
+| 43 | `GET` | `/admin/exam-sessions/:id/dashboard` | 🔐👑 | Registration |
+| 44 | `GET` | `/admin/payments/reconcile` | 🔐👑 | Registration |
+| 45 | `POST` | `/payments` | 🔐 | Payment |
+| 46 | `POST` | `/payments/callback` | 🔐 | Payment |
+| 47 | `GET` | `/payments` | 🔐 | Payment |
+| 48 | `GET` | `/results/:registration_id` | 🔐 | Result |
+| 49 | `POST` | `/rechecks` | 🔐 | Result |
+| 50 | `POST` | `/admin/results` | 🔐👑 | Result |
+| 51 | `GET` | `/me/certificates` | 🔐 | Certificate |
+| 52 | `GET` | `/me/certificates/:id` | 🔐 | Certificate |
+| 53 | `GET` | `/me/certificates/:id/pdf` | 🔐 | Certificate |
+| 54 | `POST` | `/me/certificates/:id/deliveries` | 🔐 | Certificate |
+| 55 | `GET` | `/me/certificates/:id/deliveries` | 🔐 | Certificate |
+| 56 | `POST` | `/me/certificates/:id/reissue-request` | 🔐 | Certificate |
+| 57 | `PATCH` | `/me/deliveries/:delivery_id` | 🔐 | Certificate |
+| 58 | `GET` | `/public/certificates/verify` | 🔓 | Certificate |
+| 59 | `POST` | `/admin/certificates/:id/issue` | 🔐👑 | Certificate |
+| 60 | `POST` | `/admin/certificates/issue-batch` | 🔐👑 | Certificate |
+| 61 | `POST` | `/admin/certificates/:id/revoke` | 🔐👑 | Certificate |
+| 62 | `GET` | `/admin/certificates` | 🔐👑 | Certificate |
+| 63 | `GET` | `/admin/certificates/print-batch` | 🔐👑 | Certificate |
+| 64 | `GET` | `/admin/deliveries` | 🔐👑 | Certificate |
+| 65 | `PATCH` | `/admin/deliveries/:id` | 🔐👑 | Certificate |
+| 66 | `POST` | `/webhooks/shipping/:courier` | HMAC | Certificate |
+| 67 | `GET` | `/notifications` | 🔐 | Notification |
+| 68 | `PUT` | `/notifications/:id/read` | 🔐 | Notification |
+| 69 | `GET` | `/locations/provinces` | 🔓 | Location |
+| 70 | `GET` | `/locations/provinces/:id/wards` | 🔓 | Location |
+| 71 | `GET` | `/locations/wards/:id/delivery-coverage` | 🔓 | Location |
+| 72 | `GET` | `/admin/locations/stats/candidates-by-province` | 🔐👑 | Location |
+| 73 | `POST` | `/admin/locations/wards/:id/merge` | 🔐👑 | Location |
+| 74 | `GET` | `/admin/audit-logs` | 🔐👑 | Audit |
 
 > **Chú thích:** 🔓 = Public | 🔐 = JWT | 🔐👑 = JWT + Admin | HMAC = Webhook signature
 

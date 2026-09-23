@@ -1,13 +1,3 @@
-/**
- * DocumentForm — Card "Giấy tờ tùy thân"
- *
- * Fields: doc_type, doc_number, issue_date, issue_place,
- *         front_image_url, back_image_url, portrait_image_url,
- *         province (UI-only), ward_id, address_detail
- *
- * Upload flow: Cloudinary (signature → upload → URL)
- * Address: cascade dropdown (Tỉnh → Xã/Phường)
- */
 import * as React from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -53,6 +43,10 @@ import { toast } from "~/components/ui/toast";
 interface DocumentFormProps {
   /** Giấy tờ hiện có (null = chưa upload) */
   document: DocumentResponseDTO | null;
+  /** Danh sách Tỉnh/Thành phố từ server loader */
+  provinces: Province[];
+  /** Danh sách Xã/Phường ban đầu từ server loader */
+  initialWards: Ward[];
   /** Token JWT để gọi API lấy upload signature */
   token: string;
   /** API base URL */
@@ -72,13 +66,20 @@ function formatDateForInput(isoDate: string | null | undefined): string {
 }
 
 const DOC_TYPE_OPTIONS = [
-  { value: "cccd", label: "Căn cước công dân (CCCD)" },
-  { value: "passport", label: "Hộ chiếu (Passport)" },
+  { value: "cccd", label: "Căn cước công dân" },
+  { value: "passport", label: "Hộ chiếu" },
 ] as const;
 
+const DOC_TYPE_LABEL_MAP: Record<string, string> = {
+  cccd: "Căn cước công dân",
+  passport: "Hộ chiếu",
+};
+
 // ─── Component ────────────────────────────────────────────────────────────────
-export function DocumentForm({
+export const DocumentForm = React.memo(function DocumentForm({
   document,
+  provinces,
+  initialWards,
   token,
   apiBaseUrl,
   onSubmit,
@@ -86,9 +87,10 @@ export function DocumentForm({
   userCccd,
 }: DocumentFormProps) {
   // Province/Ward state
-  const [provinces, setProvinces] = React.useState<Province[]>([]);
-  const [wards, setWards] = React.useState<Ward[]>([]);
-  const [selectedProvinceId, setSelectedProvinceId] = React.useState<string>("");
+  const [wards, setWards] = React.useState<Ward[]>(initialWards);
+  const [selectedProvinceId, setSelectedProvinceId] = React.useState<string>(
+    document?.province_id ? String(document.province_id) : ""
+  );
   const [loadingWards, setLoadingWards] = React.useState(false);
 
   // Upload state per image
@@ -103,6 +105,7 @@ export function DocumentForm({
     control,
     setValue,
     watch,
+    reset,
     formState: { errors, isSubmitting },
   } = useForm<CandidateDocumentFormValues>({
     resolver: zodResolver(candidateDocumentSchema),
@@ -114,10 +117,29 @@ export function DocumentForm({
       front_image_url: document?.front_image_url ?? "",
       back_image_url: document?.back_image_url ?? "",
       portrait_image_url: document?.portrait_image_url ?? "",
-      ward_id: undefined,
-      address_detail: "",
+      ward_id: document?.ward_id ?? undefined,
+      address_detail: document?.address_detail ?? "",
     },
   });
+
+  React.useEffect(() => {
+    if (document) {
+      reset({
+        doc_type: document.doc_type ?? "cccd",
+        doc_number: document.doc_number || userCccd || "",
+        issue_date: formatDateForInput(document.issue_date),
+        issue_place: document.issue_place ?? "",
+        front_image_url: document.front_image_url ?? "",
+        back_image_url: document.back_image_url ?? "",
+        portrait_image_url: document.portrait_image_url ?? "",
+        ward_id: document.ward_id ?? undefined,
+        address_detail: document.address_detail ?? "",
+      });
+      if (document.province_id) {
+        setSelectedProvinceId(String(document.province_id));
+      }
+    }
+  }, [document, reset, userCccd]);
 
   // Auto-fill doc_number from user CCCD if empty
   React.useEffect(() => {
@@ -130,22 +152,19 @@ export function DocumentForm({
   const frontUrl = watch("front_image_url");
   const backUrl = watch("back_image_url");
 
-  // ─── Load provinces on mount ────────────────────────────────────────────────
-  React.useEffect(() => {
-    fetch(`${apiBaseUrl}/api/v1/locations/provinces`)
-      .then((res) => res.json())
-      .then((result: { data: Province[] }) => {
-        setProvinces(result.data ?? []);
-      })
-      .catch(console.error);
-  }, [apiBaseUrl]);
-
   // ─── Load wards when province changes ───────────────────────────────────────
   React.useEffect(() => {
     if (!selectedProvinceId) {
       setWards([]);
       return;
     }
+
+    // Reuse initial wards if the selected province is the same as the initial document's province
+    if (document?.province_id && selectedProvinceId === String(document.province_id)) {
+      setWards(initialWards);
+      return;
+    }
+
     setLoadingWards(true);
     fetch(`${apiBaseUrl}/api/v1/locations/provinces/${selectedProvinceId}/wards`)
       .then((res) => res.json())
@@ -154,7 +173,7 @@ export function DocumentForm({
       })
       .catch(console.error)
       .finally(() => setLoadingWards(false));
-  }, [selectedProvinceId, apiBaseUrl]);
+  }, [selectedProvinceId, apiBaseUrl, document?.province_id, initialWards]);
 
   // ─── Upload handler ─────────────────────────────────────────────────────────
   async function handleImageUpload(
@@ -246,12 +265,17 @@ export function DocumentForm({
                   <Select
                     value={field.value}
                     onValueChange={field.onChange}
+                    items={DOC_TYPE_OPTIONS}
                   >
                     <SelectTrigger
-                      className="w-full"
+                      className="w-full cursor-pointer"
                       aria-invalid={!!errors.doc_type}
                     >
-                      <SelectValue placeholder="Chọn loại giấy tờ" />
+                      <SelectValue placeholder="Chọn loại giấy tờ">
+                        {(val) =>
+                          val ? DOC_TYPE_LABEL_MAP[String(val)] ?? String(val) : "Chọn loại giấy tờ"
+                        }
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {DOC_TYPE_OPTIONS.map((opt) => (
@@ -413,8 +437,8 @@ export function DocumentForm({
                         !selectedProvinceId
                           ? "Chọn tỉnh/thành trước"
                           : loadingWards
-                          ? "Đang tải..."
-                          : "Chọn xã/phường"
+                            ? "Đang tải..."
+                            : "Chọn xã/phường"
                       }
                       searchPlaceholder="Tìm xã/phường..."
                       emptyMessage={
@@ -475,4 +499,4 @@ export function DocumentForm({
       </CardContent>
     </Card>
   );
-}
+});

@@ -13,7 +13,7 @@ export function decodeJwtPayload(token: string): JwtPayload | null {
 
     // Chuẩn hóa Base64URL sang Base64
     const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    
+
     // Decode base64. Dùng decodeURIComponent + escape để bảo toàn chuỗi Unicode (ví dụ tiếng Việt)
     const jsonPayload = decodeURIComponent(
       atob(base64)
@@ -65,7 +65,7 @@ export async function requireAuth(request: Request): Promise<{ user: UserProfile
   if (!token) {
     const url = new URL(request.url);
     let returnTo = url.pathname + url.search;
-    
+
     if (!returnTo || returnTo === "/" || returnTo.startsWith("/_") || returnTo.includes(".data")) {
       returnTo = "/thong-tin-thi-sinh";
     }
@@ -96,6 +96,10 @@ export async function requireAuth(request: Request): Promise<{ user: UserProfile
     if (payload.user_role) {
       user.role = payload.user_role === "candidate" ? "Thí sinh" : String(payload.user_role);
     }
+    if (payload.full_name && typeof payload.full_name === "string") {
+      user.full_name = payload.full_name;
+      user.name = payload.full_name;
+    }
   }
 
   // 3. Đồng bộ hóa với API hệ thống
@@ -110,8 +114,16 @@ export async function requireAuth(request: Request): Promise<{ user: UserProfile
       const result = (await response.json()) as { data?: Record<string, unknown> };
       const data = result.data;
       if (data) {
+        const apiDob =
+          (typeof data.dob === "string" && data.dob) ||
+          (typeof data.birth_date === "string" && data.birth_date) ||
+          (typeof data.date_of_birth === "string" && data.date_of_birth) ||
+          (typeof data.birthday === "string" && data.birthday) ||
+          undefined;
+
         user = {
           name: typeof data.full_name === "string" ? data.full_name : user.name,
+          full_name: typeof data.full_name === "string" ? data.full_name : user.full_name,
           email: typeof data.email === "string" ? data.email : user.email,
           username: typeof data.username === "string" ? data.username : user.username,
           cccd: typeof data.username === "string" ? data.username : user.cccd, // Theo logic cũ

@@ -1,10 +1,3 @@
-/**
- * ProfileForm — Card "Thông tin cá nhân"
- *
- * 8 fields (full_name, full_name_cn, dob, gender, ethnicity, religion, nationality, chinese_study_years)
- * Responsive grid: 1 col mobile → 2 col tablet → 3 col desktop
- * react-hook-form + zod
- */
 import * as React from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -40,6 +33,12 @@ import { ETHNICITIES } from "~/lib/constants/ethnicities";
 interface ProfileFormProps {
   /** Dữ liệu hồ sơ hiện có (null = chưa có hồ sơ, cần tạo mới) */
   profile: CandidateResponseDTO | null;
+  /** Họ tên lấy từ thông tin đăng nhập/tài khoản (fallback khi profile chưa có) */
+  defaultFullName?: string;
+  /** Ngày sinh lấy từ thông tin đăng nhập/tài khoản hoặc CCCD (fallback khi profile chưa có) */
+  defaultDob?: string;
+  /** Giới tính suy luận từ CCCD (fallback khi profile chưa có) */
+  defaultGender?: "male" | "female";
   /** Callback khi submit form thành công */
   onSubmit: (data: CandidateProfileFormValues, isNew: boolean) => Promise<void>;
 }
@@ -57,28 +56,68 @@ const GENDER_OPTIONS = [
   { value: "other", label: "Khác" },
 ] as const;
 
+const GENDER_LABEL_MAP: Record<string, string> = {
+  male: "Nam",
+  female: "Nữ",
+  other: "Khác",
+};
+
 // ─── Component ────────────────────────────────────────────────────────────────
-export function ProfileForm({ profile, onSubmit }: ProfileFormProps) {
+export const ProfileForm = React.memo(function ProfileForm({
+  profile,
+  defaultFullName = "",
+  defaultDob = "",
+  defaultGender,
+  onSubmit,
+}: ProfileFormProps) {
   const isNew = profile === null;
+
+  const initialFullName = profile?.full_name || defaultFullName;
+  const initialDob = formatDateForInput(profile?.dob) || defaultDob;
+  const initialGender = profile?.gender ?? defaultGender ?? undefined;
 
   const {
     register,
     handleSubmit,
     control,
+    reset,
     formState: { errors, isSubmitting },
   } = useForm<CandidateProfileFormValues>({
     resolver: zodResolver(candidateProfileSchema),
     defaultValues: {
-      full_name: profile?.full_name ?? "",
+      full_name: initialFullName,
       full_name_cn: profile?.full_name_cn ?? "",
-      dob: formatDateForInput(profile?.dob),
-      gender: profile?.gender ?? undefined,
+      dob: initialDob,
+      gender: initialGender,
       ethnicity: profile?.ethnicity ?? "",
       religion: profile?.religion ?? "",
       nationality: profile?.nationality ?? "Việt Nam",
       chinese_study_years: profile?.chinese_study_years ?? undefined,
     },
   });
+
+  // Tự động đồng bộ khi dữ liệu profile hoặc thông tin tài khoản thay đổi
+  React.useEffect(() => {
+    if (profile) {
+      reset({
+        full_name: profile.full_name || defaultFullName,
+        full_name_cn: profile.full_name_cn ?? "",
+        dob: formatDateForInput(profile.dob) || defaultDob,
+        gender: profile.gender ?? defaultGender ?? undefined,
+        ethnicity: profile.ethnicity ?? "",
+        religion: profile.religion ?? "",
+        nationality: profile.nationality ?? "Việt Nam",
+        chinese_study_years: profile.chinese_study_years ?? undefined,
+      });
+    } else {
+      reset((prev) => ({
+        ...prev,
+        full_name: prev.full_name || defaultFullName,
+        dob: prev.dob || defaultDob,
+        gender: prev.gender ?? defaultGender ?? undefined,
+      }));
+    }
+  }, [profile, defaultFullName, defaultDob, defaultGender, reset]);
 
   async function handleFormSubmit(data: CandidateProfileFormValues) {
     await onSubmit(data, isNew);
@@ -161,12 +200,17 @@ export function ProfileForm({ profile, onSubmit }: ProfileFormProps) {
                   <Select
                     value={field.value ?? ""}
                     onValueChange={field.onChange}
+                    items={GENDER_OPTIONS}
                   >
                     <SelectTrigger
-                      className="w-full"
+                      className="w-full cursor-pointer"
                       aria-invalid={!!errors.gender}
                     >
-                      <SelectValue placeholder="Chọn giới tính" />
+                      <SelectValue placeholder="Chọn giới tính">
+                        {(val) =>
+                          val ? GENDER_LABEL_MAP[String(val)] ?? String(val) : "Chọn giới tính"
+                        }
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {GENDER_OPTIONS.map((opt) => (
@@ -284,4 +328,4 @@ export function ProfileForm({ profile, onSubmit }: ProfileFormProps) {
       </CardContent>
     </Card>
   );
-}
+});

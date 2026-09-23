@@ -1,7 +1,3 @@
-/**
- * Types cho Module Auth (Xác thực)
- * Tham chiếu: API Documentation — Section 2. Module Auth
- */
 
 // ─── Request DTOs ──────────────────────────────────────────────────────────────
 
@@ -36,6 +32,7 @@ export interface AccountResponseDTO {
   full_name: string;
   email: string;
   phone: string | null;
+  dob?: string | null;
   status: "active" | "locked" | "pending";
   role_id: number;
   created_at: string;
@@ -107,6 +104,7 @@ export interface RegisterActionError {
  */
 export interface UserProfile {
   name: string;
+  full_name?: string;
   email?: string;
   username?: string;
   cccd?: string;

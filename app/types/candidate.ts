@@ -77,6 +77,9 @@ export interface DocumentResponseDTO {
   portrait_image_url: string;
   verification_status: VerificationStatus;
   rejection_reason: string | null;
+  ward_id?: number | null;
+  province_id?: number | null;
+  address_detail?: string | null;
 }
 
 // ─── Cloudinary Upload ────────────────────────────────────────────────────────
