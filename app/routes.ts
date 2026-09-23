@@ -5,6 +5,8 @@ export default [
   layout("routes/_app.tsx", [
     index("routes/_app.index.tsx"),
     route("thong-tin-thi-sinh", "routes/_app.thong-tin-thi-sinh.tsx"),
+    route("ket-qua-thi", "routes/_app.ket-qua-thi.tsx"),
+    route("van-chuyen-chung-chi", "routes/_app.van-chuyen-chung-chi.tsx"),
   ]),
 
   layout("routes/(auth)/layout.tsx", [
