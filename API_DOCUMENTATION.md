@@ -1764,29 +1764,36 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 ## 6. Module Payment (Thanh toán)
 
-### 6.1. Tạo yêu cầu thanh toán
+> **Cơ chế bảo vệ tích hợp (Idempotency & Zero-Trust):**
+> Toàn bộ logic thanh toán được thực hiện trong **PostgreSQL Stored Procedure** (`fn_process_payos_webhook`), đảm bảo:
+> - **Idempotent**: Webhook cùng `orderCode` bắn nhiều lần chỉ xử lý một lần duy nhất.
+> - **Concurrency-safe**: Dùng `SELECT … FOR UPDATE` — chặn tuyệt đối giao dịch song song cho cùng 1 đơn hàng.
+> - **Amount Guard**: Webhook có số tiền khác với số tiền đã tạo sẽ bị từ chối (trả về mã lỗi `-2`), không được confirm.
+> - **Webhook Logging**: Mọi Webhook đều được ghi vào bảng `payment_webhook_logs` TRƯỚC khi xử lý logic, bảo đảm có thể truy vết kể cả khi bị tấn công DoS.
+
+---
+
+### 6.1. Tạo link thanh toán PayOS
 
 | | |
 |---|---|
-| **Endpoint** | `POST /api/v1/payments` |
-| **Auth** | 🔐 JWT |
-| **Use-case** | Tạo giao dịch thanh toán cho đơn đăng ký thi |
+| **Endpoint** | `POST /api/v1/payments/payos/create` |
+| **Auth** | 🔐 JWT (Candidate) |
+| **Use-case** | Thí sinh tạo link thanh toán qua PayOS cho phiếu đăng ký đang chờ (`pending_payment`). Số tiền được lấy từ `exam_session_fee` — thí sinh KHÔNG tự khai báo số tiền |
 
 **Request Body:**
 
 ```json
 {
-  "exam_registration_id": 1,
-  "amount": 500000,
-  "method": "vnpay"
+  "exam_registration_id": 42
 }
 ```
 
 | Field | Kiểu | Bắt buộc | Validate | Mô tả |
 |---|---|---|---|---|
-| `exam_registration_id` | `integer` | ✅ | Min 1 | ID đăng ký thi |
-| `amount` | `integer` | ✅ | Min 1 | Số tiền (VNĐ) |
-| `method` | `string` | ✅ | `vnpay`, `momo`, `zalopay`, `bank_transfer`, `cash` | Phương thức thanh toán |
+| `exam_registration_id` | `integer` | ✅ | Min 1 | ID phiếu đăng ký thi (lấy từ `POST /me/registrations`) |
+
+> **Lưu ý bảo mật:** Số tiền thanh toán (`amount`) được server tự động lấy từ `exam_session_fee` trong database — FE **KHÔNG** được truyền số tiền lên. Điều này ngăn chặn hoàn toàn việc hack giá.
 
 **Response (201 Created):**
 
@@ -1794,86 +1801,200 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 {
   "success": true,
   "data": {
-    "id": 1,
-    "exam_registration_id": 1,
+    "payment_id": 101,
+    "exam_registration_id": 42,
     "amount": 500000,
-    "method": "vnpay",
-    "transaction_ref": null,
+    "method": "payos",
     "status": "pending",
-    "paid_at": null,
-    "created_at": "2026-09-07T10:30:00+07:00"
+    "checkout_url": "https://pay.payos.vn/web/abc123",
+    "transaction_ref": "101",
+    "created_at": "2026-09-27T09:00:00+07:00"
   },
   "error": null,
   "meta": null
 }
 ```
 
-**Response fields (PaymentResponseDTO):**
-
 | Field | Kiểu | Nullable | Mô tả |
 |---|---|---|---|
-| `id` | `integer` | ❌ | ID giao dịch |
-| `exam_registration_id` | `integer` | ❌ | ID đăng ký thi |
-| `amount` | `integer` | ❌ | Số tiền (VNĐ) |
-| `method` | `string` | ❌ | Phương thức thanh toán |
-| `transaction_ref` | `string` | ✅ | Mã tham chiếu giao dịch |
-| `status` | `string` | ❌ | `pending`, `success`, `failed`, `refunded` |
-| `paid_at` | `datetime` | ✅ | Thời điểm thanh toán thành công |
-| `created_at` | `datetime` | ❌ | Thời điểm tạo |
+| `payment_id` | `integer` | ❌ | ID giao dịch |
+| `exam_registration_id` | `integer` | ❌ | ID phiếu đăng ký |
+| `amount` | `integer` | ❌ | Số tiền (VNĐ) — lấy từ phí của ca thi |
+| `method` | `string` | ❌ | Luôn là `"payos"` |
+| `status` | `string` | ❌ | `"pending"` khi mới tạo |
+| `checkout_url` | `string` | ❌ | URL trang thanh toán PayOS — FE redirect user đến đây |
+| `transaction_ref` | `string` | ❌ | Mã đơn hàng (dùng để đối soát) |
+| `created_at` | `datetime` | ❌ | Thời điểm tạo giao dịch |
+
+**Lỗi có thể xảy ra:**
+
+| HTTP Code | Thông báo | Nguyên nhân |
+|---|---|---|
+| `400` | `"Dữ liệu yêu cầu không hợp lệ"` | Body thiếu hoặc sai format |
+| `404` | `"Không tìm thấy phiếu đăng ký"` | ID không tồn tại |
+| `409` | `"Đã tồn tại giao dịch chờ thanh toán cho phiếu đăng ký này"` | Đã có payment `pending` → chuyển thẳng sang trang thanh toán cũ |
+| `409` | `"Phiếu đăng ký đã được xác nhận thanh toán"` | Đã `confirmed` → không cần thanh toán lại |
+| `409` | `"Không thể thanh toán cho phiếu đăng ký đã hủy"` | Phiếu đã `cancelled` |
+| `500` | `"Tạo link thanh toán thất bại"` | Lỗi kết nối PayOS API |
 
 ---
 
-### 6.2. Callback thanh toán (Webhook)
+### 6.2. Webhook PayOS (IPN Callback)
 
 | | |
 |---|---|
 | **Endpoint** | `POST /api/v1/payments/callback` |
-| **Auth** | 🔐 JWT |
-| **Use-case** | Cổng thanh toán gửi kết quả xử lý (IPN/Callback) |
+| **Auth** | 🔓 Public (Xác thực bằng HMAC-SHA256 Signature trong payload) |
+| **Use-case** | PayOS gọi về khi giao dịch hoàn thành. Endpoint luôn trả `200 OK` để tránh PayOS retry vô hạn |
 
-**Request Body:**
+**Request Body (do PayOS gửi):**
 
 ```json
 {
-  "transaction_ref": "VNP20260907ABC123",
-  "status": "success"
+  "code": "00",
+  "success": true,
+  "data": {
+    "orderCode": 101,
+    "amount": 500000,
+    "reference": "REF_ABC",
+    "accountNumber": "12345678",
+    "transactionDateTime": "2026-09-27 09:05:00",
+    "currency": "VND",
+    "paymentLinkId": "LINK123",
+    "code": "00",
+    "desc": "success",
+    "counterAccountBankId": "MB",
+    "counterAccountBankName": "MBBank",
+    "counterAccountName": "Nguyen Van A",
+    "counterAccountNumber": "987654321",
+    "virtualAccountName": "HSK Vinh",
+    "virtualAccountNumber": "VN001"
+  },
+  "signature": "hmac_sha256_hex_string"
 }
 ```
 
-| Field | Kiểu | Bắt buộc | Validate | Mô tả |
-|---|---|---|---|---|
-| `transaction_ref` | `string` | ✅ | Không rỗng | Mã tham chiếu giao dịch |
-| `status` | `string` | ✅ | `pending`, `success`, `failed`, `refunded` | Trạng thái mới |
+> **Cơ chế xử lý (Stored Procedure `fn_process_payos_webhook`):**
+> 1. Luôn ghi log webhook vào `payment_webhook_logs` trước.
+> 2. Kiểm tra `orderCode` → tìm payment tương ứng.
+> 3. Nếu payment không phải `pending` → trả về `-1` (Idempotent, bỏ qua).
+> 4. **So sánh số tiền** trong webhook vs số tiền đã lưu trong DB → nếu lệch trả về `-2` (Amount Mismatch Guard).
+> 5. Nếu hợp lệ → cập nhật payment `success`/`failed` → cập nhật `exam_registrations.status = 'confirmed'` → đặt `exam_seats.status = 'booked'` trong một atomic transaction.
 
-> **⚠️ Khi `status = "success"`:** Hệ thống tự động chuyển đăng ký thi sang `confirmed` và ghế sang `booked`.
+**Response (200 OK)** — Luôn là 200 dù thành công hay thất bại nội bộ:
 
-**Response (200 OK):** Trả về `PaymentResponseDTO` đã cập nhật.
+```json
+{ "message": "Webhook received" }
+```
 
-**Lỗi có thể xảy ra:**
+**Lỗi có thể xảy ra (HTTP):**
 
-| Code | Thông báo | Nguyên nhân |
-|---|---|---|
-| `409` | `"Giao dịch đã được xử lý"` | Callback trùng (đã xử lý trước đó) |
+| HTTP Code | Nguyên nhân |
+|---|---|
+| `401` | Chữ ký HMAC-SHA256 không hợp lệ (có thể là tấn công giả mạo) |
+| `400` | Số tiền webhook lệch với số tiền trong DB (`amount mismatch`) |
 
 ---
 
-### 6.3. Lịch sử thanh toán
+### 6.3. Lịch sử thanh toán của thí sinh
 
 | | |
 |---|---|
-| **Endpoint** | `GET /api/v1/payments` |
+| **Endpoint** | `GET /api/v1/payments?candidate_id=42` |
 | **Auth** | 🔐 JWT |
-| **Use-case** | Xem danh sách giao dịch thanh toán |
+| **Use-case** | Xem danh sách tất cả giao dịch thanh toán của một thí sinh |
 
 **Query Params:**
 
-| Param | Kiểu | Bắt buộc | Validate | Mô tả |
-|---|---|---|---|---|
-| `candidate_id` | `integer` | ✅ | Lớn hơn 0 | ID thí sinh |
-
-**Ví dụ:** `GET /api/v1/payments?candidate_id=42`
+| Param | Kiểu | Bắt buộc | Mô tả |
+|---|---|---|---|
+| `candidate_id` | `integer` | ✅ | ID thí sinh (lấy từ profile) |
 
 **Response (200 OK):** Mảng `PaymentResponseDTO`.
+
+---
+
+### 6.4. [Admin] Danh sách tất cả giao dịch (Phân trang)
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/payments` |
+| **Auth** | 🔐👑 JWT + Admin |
+| **Use-case** | Admin xem toàn bộ giao dịch, lọc theo trạng thái, phân trang |
+
+**Query Params:**
+
+| Param | Kiểu | Mặc định | Mô tả |
+|---|---|---|---|
+| `page` | `integer` | `1` | Trang hiện tại |
+| `limit` | `integer` | `20` | Số lượng mỗi trang (tối đa 100) |
+| `status` | `string` | *(tất cả)* | Lọc: `pending`, `success`, `failed`, `refunded` |
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": [ /* mảng AdminPaymentResponseDTO */ ],
+  "error": null,
+  "meta": {
+    "page": 1,
+    "per_page": 20,
+    "total_items": 150,
+    "total_pages": 8
+  }
+}
+```
+
+---
+
+### 6.5. [Admin] Xác nhận thanh toán thủ công
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/payments/:id/confirm` |
+| **Auth** | 🔐👑 JWT + Admin |
+| **Use-case** | Admin xác nhận thủ công cho các giao dịch chuyển khoản ngân hàng hoặc thanh toán ngoại tuyến (Bank Transfer / Cash). Chuyển trạng thái `pending → success` và tự động confirm đăng ký + đặt ghế |
+
+**Path Params:** `id` — ID giao dịch
+
+**Response (200 OK):** Trả về `AdminPaymentResponseDTO` đã cập nhật.
+
+**Lỗi có thể xảy ra:**
+
+| HTTP Code | Thông báo | Nguyên nhân |
+|---|---|---|
+| `404` | `"Không tìm thấy giao dịch"` | ID không tồn tại |
+| `409` | `"Giao dịch không ở trạng thái chờ thanh toán"` | Giao dịch không phải `pending` |
+
+---
+
+### 6.6. [Admin] Hủy / Hoàn tiền giao dịch
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/payments/:id/cancel` |
+| **Auth** | 🔐👑 JWT + Admin |
+| **Use-case** | Admin hủy giao dịch. Logic chuyển trạng thái thông minh theo State Machine |
+
+**Path Params:** `id` — ID giao dịch
+
+**State Machine:**
+
+| Trạng thái hiện tại | Kết quả sau Cancel |
+|---|---|
+| `pending` | → `failed` |
+| `success` | → `refunded` |
+| `failed` / `refunded` | ❌ Không thể hủy (409) |
+
+**Response (200 OK):** Trả về `AdminPaymentResponseDTO` đã cập nhật.
+
+**Lỗi có thể xảy ra:**
+
+| HTTP Code | Thông báo | Nguyên nhân |
+|---|---|---|
+| `404` | `"Không tìm thấy giao dịch"` | ID không tồn tại |
+| `409` | `"Không thể hủy giao dịch ở trạng thái này"` | Trạng thái không hợp lệ để hủy |
 
 ---
 
