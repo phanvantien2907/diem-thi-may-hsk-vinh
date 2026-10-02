@@ -112,3 +112,28 @@ export interface AdmissionSlip {
   seat_number: number;
   exam_type_name: string;
 }
+
+/** Giao dịch thanh toán */
+export interface PaymentRecord {
+  id: number;
+  exam_registration_id: number;
+  amount: number;
+  method: string;
+  transaction_ref: string;
+  status: "pending" | "success" | "failed" | "refunded";
+  paid_at?: string | null;
+  created_at: string;
+}
+
+/** Dữ liệu hiển thị chi tiết thanh toán cho dialog */
+export interface PaymentDetailData {
+  payment?: PaymentRecord | null;
+  registration: ExamRegistration;
+  session?: ExamSessionWithSlots | null;
+  examTypeName?: string;
+  candidateName?: string;
+  idNumber?: string;
+  roomName?: string;
+  roomLocation?: string;
+}
+

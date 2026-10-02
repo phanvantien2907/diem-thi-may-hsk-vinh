@@ -16,7 +16,10 @@ Tên đầy đủ: **Vinh University HSK Computer-based Test Registration System
 | Styling         | TailwindCSS v4                    |
 | UI Components   | shadcn/ui (Base UI + Tailwind v4) |
 | Template/Theme  | shadcn/ui default theme           |
+| Package Manager | **pnpm** (BẮT BUỘC - TUYỆT ĐỐI KHÔNG DÙNG npm/yarn/bun) |
 
+> **QUY TẮC PACKAGE MANAGER**: Dự án **BẮT BUỘC** sử dụng `pnpm` (dùng `pnpm-lock.yaml`). **TUYỆT ĐỐI CẤM** sử dụng `npm`, `yarn`, `bun` hoặc bất kỳ package manager nào khác trong mọi tình huống (cài đặt, chạy script, shadcn dlx,...). Khi chạy lệnh shadcn phải dùng `pnpm dlx shadcn@latest`.
+>
 > **QUAN TRỌNG**: Luôn đọc skill `react-router` trước khi thao tác với routing, loaders, actions, forms, fetchers. Dự án đang dùng **Framework Mode** (có `app/routes.ts`, `react-router.config.ts`, `@react-router/dev`).
 
 ---
@@ -127,11 +130,20 @@ app/
 
 ## Coding Standards
 
+- **Package Manager**: **BẮT BUỘC sử dụng `pnpm`**. TUYỆT ĐỐI KHÔNG được sử dụng `npm`, `yarn`, `bun` hay bất kỳ package manager nào khác trong toàn bộ dự án.
 - **TypeScript strict mode** — luôn khai báo type, không dùng `any`.
 - Ưu tiên `async/await` hơn `.then()/.catch()`.
 - Xử lý lỗi đầy đủ trong loaders và actions.
 - Comment bằng **tiếng Việt** cho logic nghiệp vụ, tiếng Anh cho code thuần kỹ thuật.
-- Dùng `pnpm` làm package manager (dự án đang dùng `pnpm-lock.yaml`).
+
+---
+
+## Forms & Validation
+
+- **BẮT BUỘC** sử dụng `react-hook-form` kết hợp với `@hookform/resolvers/zod` cho tất cả các form trong dự án (ví dụ: đăng nhập, đăng ký, cập nhật hồ sơ, đổi mật khẩu,...).
+- TUYỆT ĐỐI KHÔNG dùng `React.useState` để tự quản lý state của từng field trong form.
+- Tham khảo cách triển khai chuẩn trong các file như `app/routes/_app.tai-khoan-cua-toi.tsx` hoặc `app/routes/(auth)/dang-nhap.tsx`.
+- Schema validation phải được định nghĩa bằng Zod và đặt tại `app/lib/schemas/`.
 
 ---
 

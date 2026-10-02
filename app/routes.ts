@@ -8,6 +8,7 @@ export default [
     route("dang-ky-thi", "routes/_app.dang-ky-thi.tsx"),
     route("ket-qua-thi", "routes/_app.ket-qua-thi.tsx"),
     route("van-chuyen-chung-chi", "routes/_app.van-chuyen-chung-chi.tsx"),
+    route("tai-khoan-cua-toi", "routes/_app.tai-khoan-cua-toi.tsx"),
   ]),
 
   layout("routes/(auth)/layout.tsx", [

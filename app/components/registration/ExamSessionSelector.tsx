@@ -52,6 +52,7 @@ interface ExamSessionSelectorProps {
   sessions: ExamSessionWithSlots[];
   selectedSessionId: number | null;
   onSelect: (session: ExamSessionWithSlots) => void;
+  highlightLevel?: string | null;
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────────
@@ -60,7 +61,22 @@ export const ExamSessionSelector = React.memo(function ExamSessionSelector({
   sessions,
   selectedSessionId,
   onSelect,
+  highlightLevel,
 }: ExamSessionSelectorProps) {
+  React.useEffect(() => {
+    if (highlightLevel && sessions.length > 0) {
+      const firstHighlighted = sessions.find((s) => s.exam_type_name?.includes(`Cấp độ ${highlightLevel}`));
+      if (firstHighlighted) {
+        const timer = setTimeout(() => {
+          const el = document.getElementById(`session-card-${firstHighlighted.id}`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+        }, 150);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [highlightLevel, sessions]);
   if (sessions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -79,26 +95,33 @@ export const ExamSessionSelector = React.memo(function ExamSessionSelector({
         const isFull = session.available_slots <= 0;
         const isDeadlinePassed = new Date(session.registration_deadline) < new Date();
         const isDisabled = isFull || isDeadlinePassed || session.status !== "open";
+        const isHighlighted = highlightLevel && session.exam_type_name?.includes(`Cấp độ ${highlightLevel}`);
 
         return (
           <button
             key={session.id}
+            id={`session-card-${session.id}`}
             type="button"
             disabled={isDisabled}
             onClick={() => onSelect(session)}
             className={cn(
               "group relative flex w-full flex-col gap-3 rounded-xl border p-4 text-left",
-              "transition-all duration-200 outline-none",
+              "transition-all duration-500 outline-none",
               "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
               // Trạng thái bình thường
-              !isDisabled && !isSelected && [
+              !isDisabled && !isSelected && !isHighlighted && [
                 "cursor-pointer border-border bg-card hover:border-primary/40 hover:bg-accent/30",
                 "hover:shadow-sm",
               ],
+              // Trạng thái highlight
+              !isDisabled && !isSelected && isHighlighted && [
+                "cursor-pointer border-blue-500 bg-card shadow-[0_0_15px_rgba(59,130,246,0.3)] ring-2 ring-blue-500/50 scale-[1.01] z-10",
+                "hover:border-blue-600 hover:ring-blue-600/50",
+              ],
               // Trạng thái được chọn
               isSelected && [
-                "cursor-pointer border-primary bg-primary/5 shadow-sm",
-                "ring-1 ring-primary/30",
+                "cursor-pointer border-primary bg-primary/10 shadow-sm",
+                "ring-2 ring-primary",
               ],
               // Trạng thái bị vô hiệu
               isDisabled && "cursor-not-allowed border-border/50 bg-muted/30 opacity-60"

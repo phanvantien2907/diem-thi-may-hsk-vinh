@@ -60,6 +60,42 @@ export const registerSchema = z.object({
   password: passwordSchema,
 });
 
+// ─── Update Profile Schema (PUT /api/v1/me) ────────────────────────────
+export const updateProfileSchema = z.object({
+  fullName: z
+    .string()
+    .min(1, "Vui lòng nhập họ và tên")
+    .max(100, "Họ tên không được vượt quá 100 ký tự"),
+  email: z
+    .string()
+    .min(1, "Vui lòng nhập địa chỉ email")
+    .email("Địa chỉ email không hợp lệ")
+    .max(150, "Email không được vượt quá 150 ký tự"),
+  phone: z
+    .string()
+    .max(20, "Số điện thoại không được vượt quá 20 ký tự")
+    .optional()
+    .or(z.literal("")),
+});
+
+// ─── Change Password Schema (PATCH /api/v1/me/password) ────────────────────────────
+export const changePasswordSchema = z
+  .object({
+    oldPassword: z.string().min(1, "Vui lòng nhập mật khẩu hiện tại"),
+    newPassword: passwordSchema,
+    confirmPassword: z.string().min(1, "Vui lòng xác nhận mật khẩu mới"),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: "Mật khẩu xác nhận không khớp",
+    path: ["confirmPassword"],
+  })
+  .refine((data) => data.oldPassword !== data.newPassword, {
+    message: "Mật khẩu mới không được trùng với mật khẩu hiện tại",
+    path: ["newPassword"],
+  });
+
 // ─── Inferred Types ───────────────────────────────────────────────────────────
 export type LoginFormValues = z.infer<typeof loginSchema>;
 export type RegisterFormValues = z.infer<typeof registerSchema>;
+export type UpdateProfileFormValues = z.infer<typeof updateProfileSchema>;
+export type ChangePasswordFormValues = z.infer<typeof changePasswordSchema>;

@@ -11,6 +11,7 @@
   "dependencies": {
     "@base-ui/react": "^1.8.0",
     "@hookform/resolvers": "^5.9.1",
+    "@payos/payos-checkout": "^1.0.8",
     "@react-router/node": "^8",
     "@react-router/serve": "^8",
     "class-variance-authority": "^0.7.1",

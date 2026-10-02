@@ -4,7 +4,7 @@
 > **Content-Type:** `application/json`
 > **Ngôn ngữ lỗi:** Tiếng Việt (tất cả thông báo lỗi trả về bằng Tiếng Việt)
 > **Phiên bản:** v1.0.0
-> **Cập nhật lần cuối:** 2026-09-07
+> **Cập nhật lần cuối:** 2026-10-01
 
 ---
 
@@ -23,6 +23,7 @@
 - [11. Module Audit (Nhật ký hệ thống)](#11-module-audit-nhật-ký-hệ-thống)
 - [12. Bảng Enum tham chiếu](#12-bảng-enum-tham-chiếu)
 - [13. State Machines (Luồng trạng thái)](#13-state-machines-luồng-trạng-thái)
+- [14. WebSocket Real-time Events](#14-websocket-real-time-events)
 
 ---
 
@@ -271,12 +272,18 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 | Field | Kiểu | Mô tả |
 |---|---|---|
-| `access_token` | `string` | JWT access token (24h) |
+| `access_token` | `string` | JWT access token (24h). Payload chứa `user_id` và `user_role` |
 | `refresh_token` | `string` | JWT refresh token (7 ngày) |
 | `expires_in` | `integer` | Thời gian sống của access token (giây) |
 | `must_change_password` | `boolean` | `true` nếu là nhân viên lần đầu đăng nhập cần đổi mật khẩu tạm |
 
 > **⚠️ Khi `must_change_password = true`:** Front-end phải redirect sang trang đổi mật khẩu bắt buộc (gọi API [2.4](#24-đổi-mật-khẩu-bắt-buộc-nhân-viên)).
+> 
+> **🧭 Xử lý phân quyền (RBAC) trên Frontend:**
+> Token JWT `access_token` chứa trường `user_role` (`admin`, `candidate`, `proctor`, `reviewer`). Frontend có thể dùng thư viện `jwt-decode` để giải mã token ngay phía client để lấy role, từ đó **điều hướng (redirect) user về đúng giao diện tương ứng**:
+> - `admin`: Chuyển sang layout Dashboard Quản trị (quản lý ca thi, thí sinh, tài chính...).
+> - `candidate`: Chuyển sang layout Thí sinh (xem thông tin cá nhân, đăng ký thi...).
+> - `proctor` / `reviewer`: Chuyển sang layout Giám thị / Giám khảo.
 
 **Lỗi có thể xảy ra:**
 
@@ -481,12 +488,13 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 |---|---|
 | **Endpoint** | `PUT /api/v1/me` |
 | **Auth** | 🔐 JWT |
-| **Use-case** | Cập nhật email, số điện thoại của tài khoản đang đăng nhập |
+| **Use-case** | Cập nhật họ tên, email, số điện thoại của tài khoản đang đăng nhập |
 
-**Request Body:**
+**Request Body (các trường đều tùy chọn, chỉ gửi các trường cần cập nhật):**
 
 ```json
 {
+  "full_name": "Nguyen Van A",
   "email": "newemail@example.com",
   "phone": "0987654321"
 }
@@ -494,8 +502,9 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 | Field | Kiểu | Bắt buộc | Validate | Mô tả |
 |---|---|---|---|---|
-| `email` | `string` | ❌ | Email hợp lệ, tối đa 150 ký tự | Email mới (bỏ qua nếu không đổi) |
-| `phone` | `string` | ❌ | Tối đa 20 ký tự | SĐT mới (bỏ qua nếu không đổi) |
+| `full_name` | `string` | ❌ | Tối đa 100 ký tự | Họ tên mới |
+| `email` | `string` | ❌ | Email hợp lệ, tối đa 150 ký tự | Email mới |
+| `phone` | `string` | ❌ | Tối đa 20 ký tự | SĐT mới |
 
 **Response (200 OK):** Trả về `AccountResponseDTO` (xem [2.7](#27-lấy-thông-tin-tài-khoản-me)).
 
@@ -1785,13 +1794,17 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 ```json
 {
-  "exam_registration_id": 42
+  "exam_registration_id": 42,
+  "return_url": "http://localhost:5173/dang-ky-thi?payment=success",
+  "cancel_url": "http://localhost:5173/dang-ky-thi?payment=cancel"
 }
 ```
 
 | Field | Kiểu | Bắt buộc | Validate | Mô tả |
 |---|---|---|---|---|
-| `exam_registration_id` | `integer` | ✅ | Min 1 | ID phiếu đăng ký thi (lấy từ `POST /me/registrations`) |
+| `exam_registration_id` | `integer` | ✅ | Min 1 | ID phiếu đăng ký thi |
+| `return_url` | `string` | ✅ | URL hợp lệ | Link quay về khi thanh toán xong |
+| `cancel_url` | `string` | ✅ | URL hợp lệ | Link quay về khi hủy thanh toán |
 
 > **Lưu ý bảo mật:** Số tiền thanh toán (`amount`) được server tự động lấy từ `exam_session_fee` trong database — FE **KHÔNG** được truyền số tiền lên. Điều này ngăn chặn hoàn toàn việc hack giá.
 
@@ -3100,3 +3113,133 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 ---
 
 *Tài liệu này được tạo tự động từ mã nguồn backend. Mọi thắc mắc liên hệ team Backend.*
+
+---
+
+## 14. WebSocket Real-time Events
+
+Hệ thống hỗ trợ kết nối WebSocket để nhận các sự kiện real-time (cập nhật ghế, đăng ký, thanh toán…) mà **không cần reload trang**.
+
+### 14.1. Kết nối WebSocket
+
+| Thuộc tính | Giá trị |
+|---|---|
+| **URL** | `ws://<host>:<port>/ws?token=<jwt_access_token>` |
+| **Protocol** | WebSocket (RFC 6455) |
+| **Authentication** | JWT Access Token truyền qua **query parameter** `token` |
+| **Heartbeat** | Server gửi `ping` mỗi 54 giây, client cần trả `pong` |
+
+#### Ví dụ kết nối (JavaScript):
+
+```javascript
+// Kết nối WebSocket
+const token = localStorage.getItem("access_token");
+const ws = new WebSocket(`ws://localhost:8080/ws?token=${token}`);
+
+ws.onopen = () => {
+  console.log("[WS] Connected");
+};
+
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  console.log("[WS] Event:", data);
+  
+  switch (data.type) {
+    case "seats_released":
+      // Reload danh sách ca thi để cập nhật số ghế
+      refetchSessions();
+      break;
+    case "registration_created":
+      // Cập nhật số ghế còn lại của session tương ứng
+      updateSlotCount(data.payload.session_id, -1);
+      break;
+    case "registration_cancelled":
+      // Cập nhật ghế được nhả
+      updateSlotCount(data.payload.session_id, +1);
+      break;
+    case "payment_confirmed":
+      // Cập nhật trạng thái đăng ký
+      updateRegistrationStatus(data.payload.registration_id, "confirmed");
+      break;
+  }
+};
+
+ws.onclose = (event) => {
+  console.log("[WS] Disconnected, reconnecting...");
+  // Implement reconnect logic (e.g. exponential backoff)
+};
+```
+
+### 14.2. Event Types (Loại sự kiện)
+
+Mỗi message nhận được qua WebSocket có cấu trúc JSON:
+
+```json
+{
+  "type": "<event_type>",
+  "payload": { ... },
+  "timestamp": "2026-10-01T08:30:00Z"
+}
+```
+
+| Event Type | Mô tả | Payload |
+|---|---|---|
+| `registration_created` | Có thí sinh vừa đăng ký (giữ) 1 ghế | `{ registration_id, session_id, seat_id, status }` |
+| `registration_cancelled` | Đơn đăng ký bị hủy (thí sinh hủy tay hoặc hết hạn 15 phút) | `{ registration_id, seat_id, status }` |
+| `payment_confirmed` | Thanh toán thành công → ghế được chốt (booked) | `{ registration_id, seat_id, status }` |
+| `seats_released` | CronJob vừa giải phóng ghế quá hạn 15 phút | `{ released_count, message }` |
+| `seat_updated` | Ghế thay đổi trạng thái (reserved) | `{ session_id, seat_id, new_status }` |
+| `account_updated` | Thông tin tài khoản (profile/password) vừa được cập nhật | `{ account_id }` |
+
+### 14.3. Cơ chế CronJob tự động giải phóng ghế
+
+- **Tần suất:** Mỗi **60 giây**, hệ thống tự động quét database.
+- **Logic:** Tất cả ghế có trạng thái `held` mà `exam_seat_held_until < NOW()` sẽ được:
+  1. Đặt lại thành `available` (ghế trống)
+  2. Đơn đăng ký tương ứng chuyển thành `cancelled`
+  3. Phát sự kiện WebSocket `seats_released` để FE cập nhật UI ngay lập tức
+- **Kết quả:** Thí sinh không thanh toán trong 15 phút → ghế tự động được nhả cho người khác đăng ký.
+
+### 14.4. Xử lý reconnect phía Frontend
+
+WebSocket có thể bị ngắt do mạng không ổn định. Frontend cần implement **auto-reconnect** với exponential backoff:
+
+```javascript
+function connectWS(token, onMessage) {
+  let retryCount = 0;
+  const maxRetries = 10;
+
+  function connect() {
+    const ws = new WebSocket(`ws://localhost:8080/ws?token=${token}`);
+
+    ws.onopen = () => {
+      console.log("[WS] Connected");
+      retryCount = 0; // Reset retry counter on success
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      onMessage(data);
+    };
+
+    ws.onclose = () => {
+      if (retryCount < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
+        console.log(`[WS] Reconnecting in ${delay}ms...`);
+        setTimeout(connect, delay);
+        retryCount++;
+      }
+    };
+
+    return ws;
+  }
+
+  return connect();
+}
+```
+
+### 14.5. Lưu ý quan trọng
+
+- **Không gửi dữ liệu lên WS:** Đây là kênh **broadcast một chiều** (server → client). Client chỉ nhận, không gửi.
+- **Dùng `make db-build` thay vì `make db-rs`:** Để tránh mất dữ liệu khi build lại code, luôn dùng `make db-build` (chỉ rebuild API image, giữ nguyên DB volume).
+- **Token hết hạn:** Nếu JWT token hết hạn, server sẽ từ chối kết nối WS. Frontend cần refresh token trước khi reconnect.

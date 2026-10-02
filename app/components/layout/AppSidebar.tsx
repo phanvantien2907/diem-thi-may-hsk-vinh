@@ -23,6 +23,7 @@ import {
   LogOutIcon,
 } from "lucide-react";
 import { LogoutDialog } from "~/components/layout/logout-dialog";
+import { AppCommandMenu } from "~/components/layout/AppCommandMenu";
 import { cn } from "~/lib/utils";
 
 import {
@@ -104,6 +105,15 @@ interface AppSidebarProps {
 export function AppSidebar({ user }: AppSidebarProps) {
   const location = useLocation();
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = React.useState(false);
+  const [isCommandOpen, setIsCommandOpen] = React.useState(false);
+  const [isMac, setIsMac] = React.useState(true);
+
+  React.useEffect(() => {
+    if (typeof window !== "undefined") {
+      const userAgent = navigator.userAgent || navigator.platform || "";
+      setIsMac(/(Mac|iPhone|iPod|iPad)/i.test(userAgent));
+    }
+  }, []);
 
   return (
     <Sidebar collapsible="icon">
@@ -143,6 +153,35 @@ export function AppSidebar({ user }: AppSidebarProps) {
 
       {/* ── Navigation ─────────────────────────────────────────────────────── */}
       <SidebarContent>
+        {/* ── Search / Command Trigger ── */}
+        <SidebarGroup className="py-1 pb-0">
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  onClick={() => setIsCommandOpen(true)}
+                  tooltip={`Tìm kiếm nhanh (${isMac ? "⌘K" : "Ctrl+K"})`}
+                  className={cn(
+                    "w-full cursor-pointer justify-between rounded-full border border-sidebar-border bg-sidebar-accent/30 hover:bg-sidebar-accent text-sidebar-foreground/75 hover:text-sidebar-foreground transition-all shadow-2xs",
+                    "group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-2"
+                  )}
+                  aria-label="Mở tìm kiếm nhanh"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <SearchIcon className="size-4 shrink-0 text-muted-foreground group-hover/menu-button:text-foreground transition-colors" aria-hidden="true" />
+                    <span className="truncate text-xs text-muted-foreground group-hover/menu-button:text-foreground transition-colors group-data-[collapsible=icon]:hidden">
+                      Tìm kiếm...
+                    </span>
+                  </div>
+                  <kbd className="hidden sm:inline-flex h-4.5 select-none items-center rounded border border-border/70 bg-background/90 px-1.5 font-mono text-[9px] font-semibold text-muted-foreground shadow-2xs group-data-[collapsible=icon]:hidden">
+                    {isMac ? "⌘K" : "Ctrl K"}
+                  </kbd>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
@@ -276,6 +315,12 @@ export function AppSidebar({ user }: AppSidebarProps) {
       <LogoutDialog
         open={isLogoutDialogOpen}
         onOpenChange={setIsLogoutDialogOpen}
+      />
+
+      <AppCommandMenu
+        open={isCommandOpen}
+        onOpenChange={setIsCommandOpen}
+        onLogout={() => setIsLogoutDialogOpen(true)}
       />
     </Sidebar>
   );

@@ -14,6 +14,9 @@ importers:
       '@hookform/resolvers':
         specifier: ^5.9.1
         version: 5.9.1(ajv-formats@2.1.1(ajv@8.20.0))(ajv@8.20.0)(react-hook-form@7.87.0(react@19.2.8))(valibot@1.4.2(typescript@5.9.3))(zod@4.5.4)
+      '@payos/payos-checkout':
+        specifier: ^1.0.8
+        version: 1.0.8
       '@react-router/node':
         specifier: ^8
         version: 8.3.1(react-router@8.3.1(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(typescript@5.9.3)
@@ -390,6 +393,9 @@ packages:
 
   '@oxc-project/types@0.148.0':
     resolution: {integrity: sha512-Nm4s/jB+4FpFsPhWGEC4h7rzksesmtnMXomo6rCMcg/b8zLQuOziRgkCS1fxDCXOlJB/6Q8oABOZ/OP6RIPj9A==}
+
+  '@payos/payos-checkout@1.0.8':
+    resolution: {integrity: sha512-9h2sZ/QeOIsOR3+6LDswDMYPfRGQ9kXiWJC4yrWFbpAzUYoI3gH84oFRHlAmx4CRFh2SCBKE1Q2pdzJ1atPRCA==}
 
   '@radix-ui/primitive@1.1.7':
     resolution: {integrity: sha512-rqWnm76nYT8HoNNqEjpgJ7Pw/DrBj5iBTrmEPo6HTX5+VJyBNOqTdv4g89G63HuR5g0AaENoAcH7Is5fF2kZ8Q==}
@@ -2673,6 +2679,8 @@ snapshots:
       fastq: 1.20.3
 
   '@oxc-project/types@0.148.0': {}
+
+  '@payos/payos-checkout@1.0.8': {}
 
   '@radix-ui/primitive@1.1.7': {}
 

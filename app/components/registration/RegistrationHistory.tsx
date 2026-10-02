@@ -1,9 +1,3 @@
-/**
- * RegistrationHistory — Bảng lịch sử đăng ký thi
- *
- * Hiển thị danh sách đăng ký thi của thí sinh dưới dạng Table (shadcn).
- * Tích hợp DropdownMenu hành động thanh toán / xem thẻ dự thi / hủy đơn.
- */
 import * as React from "react";
 import {
   Table,
@@ -40,12 +34,39 @@ import {
   MoreHorizontalIcon,
   CreditCardIcon,
   XCircleIcon,
-  FileTextIcon,
-  ClockIcon,
   Loader2Icon,
+  ReceiptTextIcon,
 } from "lucide-react";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationButton,
+  PaginationNext,
+  PaginationPrevious,
+} from "~/components/ui/pagination";
 import type { ExamRegistration } from "~/types/exam";
 import { formatCurrency } from "./ExamSessionSelector";
+
+const PAGE_SIZE = 5;
+
+/** Tạo danh sách trang hiển thị kèm dấu ellipsis thông minh */
+function getPageNumbers(currentPage: number, totalPages: number): (number | "ellipsis")[] {
+  if (totalPages <= 5) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+  }
+
+  if (currentPage <= 3) {
+    return [1, 2, 3, 4, "ellipsis", totalPages];
+  }
+
+  if (currentPage >= totalPages - 2) {
+    return [1, "ellipsis", totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+  }
+
+  return [1, "ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis", totalPages];
+}
 
 
 function statusConfig(status: string) {
@@ -60,7 +81,7 @@ function statusConfig(status: string) {
       };
     case "confirmed":
       return {
-        label: "Đã xác nhận",
+        label: "Đã thanh toán",
         variant: "outline" as const,
         badgeClass:
           "border-emerald-400/50 bg-emerald-500/10 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-950/40 dark:text-emerald-300 font-semibold shadow-xs",
@@ -114,7 +135,9 @@ interface RegistrationHistoryProps {
   onPayment?: (reg: ExamRegistration) => void;
   /** Xử lý hủy phiếu đăng ký */
   onCancel?: (reg: ExamRegistration) => void;
-  /** Xem thẻ dự thi */
+  /** Xem chi tiết thanh toán */
+  onViewPaymentDetails?: (reg: ExamRegistration) => void;
+  /** @deprecated Xem thẻ dự thi */
   onViewAdmissionSlip?: (reg: ExamRegistration) => void;
 }
 
@@ -127,10 +150,25 @@ export const RegistrationHistory = React.memo(function RegistrationHistory({
   payingId,
   onPayment,
   onCancel,
+  onViewPaymentDetails,
   onViewAdmissionSlip,
 }: RegistrationHistoryProps) {
+  const [currentPage, setCurrentPage] = React.useState(1);
   const [cancellingReg, setCancellingReg] = React.useState<ExamRegistration | null>(null);
   const [payingReg, setPayingReg] = React.useState<ExamRegistration | null>(null);
+
+  const totalPages = Math.max(1, Math.ceil(registrations.length / PAGE_SIZE));
+
+  // Tự động căn chỉnh trang hiện tại nếu dữ liệu thay đổi
+  React.useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const startIndex = (currentPage - 1) * PAGE_SIZE;
+  const endIndex = Math.min(startIndex + PAGE_SIZE, registrations.length);
+  const currentRegistrations = registrations.slice(startIndex, endIndex);
 
   // Empty State
   if (registrations.length === 0) {
@@ -164,16 +202,17 @@ export const RegistrationHistory = React.memo(function RegistrationHistory({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {registrations.map((reg, idx) => {
+            {currentRegistrations.map((reg, idx) => {
               const config = statusConfig(reg.status);
               const sessionLabel =
                 sessionLabels?.[reg.exam_session_id] || `HSK #${reg.exam_session_id}`;
               const isPayingThis = payingId === reg.id;
+              const rowNumber = startIndex + idx + 1;
 
               return (
                 <TableRow key={reg.id}>
                   <TableCell className="text-center text-muted-foreground font-medium">
-                    {idx + 1}
+                    {rowNumber}
                   </TableCell>
                   <TableCell className="font-semibold text-foreground">
                     {sessionLabel}
@@ -232,8 +271,16 @@ export const RegistrationHistory = React.memo(function RegistrationHistory({
                                   <CreditCardIcon className="size-4 text-primary" />
                                 )}
                                 <span>
-                                  {isPayingThis ? "Đang kết nối..." : "Thanh toán"}
+                                  {isPayingThis ? "Đang kết nối..." : "Thanh toán ngay"}
                                 </span>
+                              </DropdownMenuItem>
+
+                              <DropdownMenuItem
+                                className="cursor-pointer gap-2"
+                                onClick={() => (onViewPaymentDetails || onViewAdmissionSlip)?.(reg)}
+                              >
+                                <ReceiptTextIcon className="size-4 text-muted-foreground" />
+                                <span>Xem chi tiết thanh toán</span>
                               </DropdownMenuItem>
 
                               <DropdownMenuSeparator />
@@ -252,17 +299,20 @@ export const RegistrationHistory = React.memo(function RegistrationHistory({
                           {reg.status === "confirmed" && (
                             <DropdownMenuItem
                               className="cursor-pointer gap-2 font-medium"
-                              onClick={() => onViewAdmissionSlip?.(reg)}
+                              onClick={() => (onViewPaymentDetails || onViewAdmissionSlip)?.(reg)}
                             >
-                              <FileTextIcon className="size-4 text-primary" />
-                              <span>Xem thẻ dự thi</span>
+                              <ReceiptTextIcon className="size-4 text-primary" />
+                              <span>Xem chi tiết thanh toán</span>
                             </DropdownMenuItem>
                           )}
 
                           {reg.status === "cancelled" && (
-                            <DropdownMenuItem disabled className="text-muted-foreground gap-2">
-                              <ClockIcon className="size-4" />
-                              <span>Đã hủy phiếu</span>
+                            <DropdownMenuItem
+                              className="cursor-pointer gap-2 text-muted-foreground"
+                              onClick={() => (onViewPaymentDetails || onViewAdmissionSlip)?.(reg)}
+                            >
+                              <ReceiptTextIcon className="size-4" />
+                              <span>Chi tiết thanh toán</span>
                             </DropdownMenuItem>
                           )}
                         </DropdownMenuGroup>
@@ -274,6 +324,72 @@ export const RegistrationHistory = React.memo(function RegistrationHistory({
             })}
           </TableBody>
         </Table>
+      </div>
+
+      {/* ── Thanh điều khiển phân trang (Pagination) ── */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3.5 px-0.5">
+        {/* Thông tin số lượng bản ghi */}
+        <div className="text-xs text-muted-foreground font-medium order-2 sm:order-1 text-center sm:text-left">
+          Hiển thị{" "}
+          <span className="text-foreground font-semibold">
+            {startIndex + 1}–{endIndex}
+          </span>{" "}
+          trong tổng số{" "}
+          <span className="text-foreground font-semibold">
+            {registrations.length}
+          </span>{" "}
+          lượt đăng ký
+        </div>
+
+        {/* Nút phân trang */}
+        {totalPages > 1 && (
+          <Pagination className="order-1 sm:order-2 justify-center sm:justify-end mx-0 w-auto">
+            <PaginationContent className="gap-1">
+              {/* Nút Trang trước */}
+              <PaginationItem>
+                <PaginationPrevious
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+                />
+              </PaginationItem>
+
+              {/* Các nút số trang kèm dấu ... */}
+              {getPageNumbers(currentPage, totalPages).map((item, idx) => {
+                if (item === "ellipsis") {
+                  return (
+                    <PaginationItem key={`ellipsis-${idx}`}>
+                      <PaginationEllipsis />
+                    </PaginationItem>
+                  );
+                }
+
+                const pageNum = item as number;
+                const isActive = pageNum === currentPage;
+
+                return (
+                  <PaginationItem key={pageNum}>
+                    <PaginationButton
+                      size="icon"
+                      isActive={isActive}
+                      onClick={() => setCurrentPage(pageNum)}
+                      aria-label={`Trang ${pageNum}`}
+                    >
+                      {pageNum}
+                    </PaginationButton>
+                  </PaginationItem>
+                );
+              })}
+
+              {/* Nút Trang sau */}
+              <PaginationItem>
+                <PaginationNext
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
+                />
+              </PaginationItem>
+            </PaginationContent>
+          </Pagination>
+        )}
       </div>
 
       {/* Dialog xác nhận hủy đơn đăng ký */}

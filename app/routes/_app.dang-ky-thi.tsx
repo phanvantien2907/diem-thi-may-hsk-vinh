@@ -1,6 +1,7 @@
 import * as React from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useNavigate, useRevalidator, useSearchParams } from "react-router";
 import { cn } from "~/lib/utils";
+import { useWebSocket, type WSEvent } from "~/hooks/use-websocket";
 import type { Route } from "./+types/_app.dang-ky-thi";
 import { requireAuth } from "~/lib/auth.server";
 import { API_BASE_URL } from "~/lib/env.server";
@@ -12,6 +13,8 @@ import type {
   ExamRegistration,
   ExamSessionWithSlots,
   AdmissionSlip,
+  PaymentDetailData,
+  PaymentRecord,
   ApiResponse,
 } from "~/types/exam";
 import type { CandidateResponseDTO } from "~/types/candidate";
@@ -23,6 +26,7 @@ import {
   CardContent,
 } from "~/components/ui/card";
 import { Button, buttonVariants } from "~/components/ui/button";
+import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
 import { toast } from "~/components/ui/toast";
 import {
@@ -37,12 +41,15 @@ import {
 import { ExamSessionSelector, formatCurrency } from "~/components/registration/ExamSessionSelector";
 import { ConfirmRegistrationDialog } from "~/components/registration/ConfirmRegistrationDialog";
 import { RegistrationHistory } from "~/components/registration/RegistrationHistory";
+import { PaymentDetailsDialog } from "~/components/registration/PaymentDetailsDialog";
+import { usePayOS, type PayOSConfig } from "@payos/payos-checkout";
 
 import {
   BookOpenCheckIcon,
   AlertTriangleIcon,
   InfoIcon,
   FileTextIcon,
+  CheckCircle2Icon,
 } from "lucide-react";
 
 // ─── SEO Meta ─────────────────────────────────────────────────────────────────
@@ -252,6 +259,109 @@ function PricingInfo({ sessions }: { sessions: ExamSessionWithSlots[] }) {
   );
 }
 
+// ─── PayOS Checkout Wrapper ──────────────────────────────────────────────────
+function PayOSCheckoutWrapper({
+  checkoutUrl,
+  amount,
+  orderCode,
+  onExit,
+}: {
+  checkoutUrl: string;
+  amount?: number;
+  orderCode?: string;
+  onExit: () => void;
+}) {
+  const origin =
+    typeof window !== "undefined" ? window.location.origin : "http://localhost:5173";
+
+  const onExitRef = React.useRef(onExit);
+  React.useEffect(() => {
+    onExitRef.current = onExit;
+  }, [onExit]);
+
+  const config = React.useMemo<PayOSConfig>(
+    () => ({
+      RETURN_URL: `${origin}/dang-ky-thi?payment=success`,
+      ELEMENT_ID: "payos-checkout-iframe",
+      CHECKOUT_URL: checkoutUrl,
+      embedded: true,
+      onSuccess: () => onExitRef.current(),
+      onExit: () => onExitRef.current(),
+      onCancel: () => onExitRef.current(),
+    }),
+    [checkoutUrl, origin]
+  );
+
+  const { open, exit } = usePayOS(config);
+
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      open();
+    }, 50);
+    return () => {
+      clearTimeout(timer);
+      exit();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkoutUrl]);
+
+  return (
+    <Dialog open={true} onOpenChange={(isOpen) => { if (!isOpen) onExit(); }}>
+      <DialogContent className="sm:max-w-4xl max-w-[95vw] p-0 overflow-hidden bg-white border-none shadow-2xl rounded-2xl">
+        <DialogTitle className="sr-only">Thanh toán PayOS</DialogTitle>
+        <div className="grid grid-cols-1 md:grid-cols-5 h-[85vh] sm:h-[650px]">
+          {/* Cột trái: Hướng dẫn / Thông tin */}
+          <div className="md:col-span-2 bg-slate-50 p-6 md:p-8 border-r border-slate-100 flex flex-col justify-center overflow-y-auto">
+            <div className="mb-6">
+              <h3 className="text-xl font-bold text-slate-800 mb-2">Thanh toán lệ phí thi</h3>
+              <p className="text-slate-500 text-sm">Quét mã QR để thanh toán nhanh hoặc chuyển khoản theo thông tin bên dưới.</p>
+            </div>
+
+            <div className="space-y-4">
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
+                <div className="flex flex-col text-sm">
+                  <span className="text-slate-500 mb-1">Ngân hàng thụ hưởng</span>
+                  <span className="font-semibold text-slate-700">Ngân Hàng TMCP Quân Đội (MB Bank)</span>
+                </div>
+                <div className="flex flex-col text-sm">
+                  <span className="text-slate-500 mb-1">Chủ tài khoản</span>
+                  <span className="font-semibold text-slate-700 uppercase">Trường Đại Học Vinh</span>
+                </div>
+                {amount && (
+                  <div className="flex flex-col text-sm">
+                    <span className="text-slate-500 mb-1">Số tiền</span>
+                    <span className="font-bold text-blue-600 text-base">{formatCurrency(amount)}</span>
+                  </div>
+                )}
+                {orderCode && (
+                  <div className="flex flex-col text-sm">
+                    <span className="text-slate-500 mb-1">Nội dung chuyển khoản (Bắt buộc)</span>
+                    <span className="font-bold text-orange-600 text-base tracking-wider bg-orange-50 px-2 py-1 rounded inline-block w-fit">{orderCode}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 text-sm">
+                <p className="text-blue-800 font-medium mb-1">💡 Lưu ý quan trọng:</p>
+                <ul className="text-blue-700/90 space-y-1.5 list-disc pl-4 text-xs">
+                  <li>Vui lòng chuyển <strong>chính xác số tiền</strong> và <strong>nội dung</strong>.</li>
+                  <li>Nếu chuyển sai nội dung, hệ thống sẽ không thể tự động xác nhận.</li>
+                  <li>Nếu muốn lấy <strong>Số tài khoản</strong> chính xác, hãy bấm qua tab <strong className="text-blue-800">Chuyển khoản</strong> trên màn hình bên cạnh.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          {/* Cột phải: PayOS iframe */}
+          <div className="md:col-span-3 relative h-full flex flex-col bg-white overflow-hidden">
+            <div id="payos-checkout-iframe" className="w-full h-full" />
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Main Content (Memoized) ─────────────────────────────────────────────────
 const RegistrationContent = React.memo(function RegistrationContent({
   sessions,
@@ -269,6 +379,8 @@ const RegistrationContent = React.memo(function RegistrationContent({
   apiBaseUrl: string;
 }) {
   const navigate = useNavigate();
+  const revalidator = useRevalidator();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // Kiểm tra tài khoản đã cập nhật thông tin cá nhân chưa
   const hasProfile = Boolean(profile && profile.id && profile.full_name && profile.dob);
@@ -280,7 +392,73 @@ const RegistrationContent = React.memo(function RegistrationContent({
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [registrations, setRegistrations] = React.useState(initialRegistrations);
   const [payingId, setPayingId] = React.useState<number | null>(null);
-  const [admissionSlip, setAdmissionSlip] = React.useState<AdmissionSlip | null>(null);
+  const [payosCheckoutData, setPayosCheckoutData] = React.useState<{ url: string; amount?: number; orderCode?: string } | null>(null);
+  const [paymentDetailData, setPaymentDetailData] = React.useState<PaymentDetailData | null>(null);
+  const [isLoadingPaymentDetail, setIsLoadingPaymentDetail] = React.useState(false);
+  const [isPaymentSuccessOpen, setIsPaymentSuccessOpen] = React.useState(false);
+
+  // Cập nhật danh sách đăng ký khi prop thay đổi
+  React.useEffect(() => {
+    setRegistrations(initialRegistrations);
+  }, [initialRegistrations]);
+
+  // Kiểm tra callback sau khi thanh toán từ cổng PayOS quay về (Return URL)
+  React.useEffect(() => {
+    const paymentParam = searchParams.get("payment");
+    const statusParam = searchParams.get("status");
+
+    if (paymentParam === "success" || statusParam === "PAID") {
+      setIsPaymentSuccessOpen(true);
+      // Tải lại dữ liệu phiếu đăng ký mới nhất từ server
+      if (revalidator.state === "idle") {
+        revalidator.revalidate();
+      }
+      // Dọn sạch query params trên URL mà không reload trang
+      const newParams = new URLSearchParams(searchParams);
+      newParams.delete("payment");
+      newParams.delete("status");
+      newParams.delete("code");
+      newParams.delete("id");
+      newParams.delete("orderCode");
+      newParams.delete("cancel");
+      setSearchParams(newParams, { replace: true });
+    } else if (paymentParam === "cancel" || statusParam === "CANCELLED") {
+      toast.add({
+        type: "info",
+        title: "Giao dịch thanh toán đã hủy",
+        description: "Bạn có thể tiến hành thanh toán lại bất kỳ lúc nào trước khi hết thời gian giữ chỗ.",
+      });
+      const newParams = new URLSearchParams(searchParams);
+      newParams.delete("payment");
+      newParams.delete("status");
+      newParams.delete("code");
+      newParams.delete("id");
+      newParams.delete("orderCode");
+      newParams.delete("cancel");
+      setSearchParams(newParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams, revalidator]);
+
+  // Thiết lập WebSocket
+  useWebSocket({
+    url: apiBaseUrl,
+    token,
+    onMessage: (event: WSEvent) => {
+      console.log("[WS] Received event:", event.type, event.payload);
+      switch (event.type) {
+        case "registration_created":
+        case "registration_cancelled":
+        case "payment_confirmed":
+        case "seat_updated":
+        case "seats_released":
+          // Gọi revalidator để tải lại toàn bộ data mới từ server
+          if (revalidator.state === "idle") {
+            revalidator.revalidate();
+          }
+          break;
+      }
+    },
+  });
 
   // Map lệ phí theo session_id
   const sessionFees = React.useMemo(() => {
@@ -302,13 +480,22 @@ const RegistrationContent = React.memo(function RegistrationContent({
           description: "Vui lòng chờ trong giây lát.",
         });
 
+        const origin =
+          typeof window !== "undefined" ? window.location.origin : "http://localhost:5173";
+        const returnUrl = `${origin}/dang-ky-thi?payment=success`;
+        const cancelUrl = `${origin}/dang-ky-thi?payment=cancel`;
+
         const res = await fetch(`${apiBaseUrl}/api/v1/payments/payos/create`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({ exam_registration_id: reg.id }),
+          body: JSON.stringify({
+            exam_registration_id: reg.id,
+            return_url: returnUrl,
+            cancel_url: cancelUrl,
+          }),
         });
 
         if (!res.ok) {
@@ -321,17 +508,20 @@ const RegistrationContent = React.memo(function RegistrationContent({
         }
 
         const result = await res.json();
-        const checkoutUrl = result?.data?.checkout_url;
+        const checkoutUrl = result?.data?.checkout_url || result?.data?.checkoutUrl;
 
         if (checkoutUrl) {
           toast.add({
             type: "success",
             title: "Khởi tạo thành công!",
-            description: "Đang chuyển hướng sang cổng thanh toán PayOS...",
+            description: "Đang mở mã QR thanh toán PayOS...",
           });
-          setTimeout(() => {
-            window.location.href = checkoutUrl;
-          }, 1200);
+          // Hiển thị dialog/modal QR của PayOS thay vì redirect
+          setPayosCheckoutData({
+            url: checkoutUrl,
+            amount: result?.data?.amount,
+            orderCode: result?.data?.transaction_ref || result?.data?.transactionRef,
+          });
         } else {
           toast.add({
             type: "error",
@@ -381,10 +571,7 @@ const RegistrationContent = React.memo(function RegistrationContent({
           title: "Hủy đăng ký thành công",
         });
 
-        // Delay rồi reload để đồng bộ số lượng ghế trống
-        setTimeout(() => {
-          navigate("/dang-ky-thi", { replace: true });
-        }, 2500);
+
       } catch (err) {
         console.error("[Cancel Registration] Error:", err);
         toast.add({
@@ -396,17 +583,30 @@ const RegistrationContent = React.memo(function RegistrationContent({
     [apiBaseUrl, token, navigate]
   );
 
-  // Xử lý lấy và xem thông tin Thẻ dự thi
-  const handleViewAdmissionSlip = React.useCallback(
+  // Xử lý lấy và xem chi tiết giao dịch thanh toán
+  const handleViewPaymentDetails = React.useCallback(
     async (reg: ExamRegistration) => {
-      try {
-        toast.add({
-          type: "info",
-          title: "Đang tải thẻ dự thi...",
-        });
+      // Tìm session tương ứng
+      const session = sessions.find((s) => s.id === reg.exam_session_id);
+      const typeName = session?.exam_type_name || sessionLabels[reg.exam_session_id];
 
+      // Set dữ liệu ban đầu để mở Dialog lập tức (trải nghiệm mượt)
+      const initialData: PaymentDetailData = {
+        registration: reg,
+        session: session,
+        examTypeName: typeName,
+        candidateName: profile?.full_name,
+        roomName: session?.exam_room_name,
+        roomLocation: session?.exam_room_location,
+      };
+
+      setPaymentDetailData(initialData);
+      setIsLoadingPaymentDetail(true);
+
+      try {
+        const candidateId = profile?.id || reg.candidate_id;
         const res = await fetch(
-          `${apiBaseUrl}/api/v1/me/registrations/${reg.id}/admission-slip`,
+          `${apiBaseUrl}/api/v1/payments?candidate_id=${candidateId}`,
           {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -414,28 +614,26 @@ const RegistrationContent = React.memo(function RegistrationContent({
           }
         );
 
-        if (!res.ok) {
-          const errorData = await res.json().catch(() => null);
-          const errorMsg =
-            errorData?.msg || errorData?.error || "Không thể tải thẻ dự thi lúc này.";
-          toast.add({ type: "error", title: errorMsg });
-          return;
-        }
-
-        const result = await res.json();
-        if (result?.data) {
-          setAdmissionSlip(result.data as AdmissionSlip);
+        if (res.ok) {
+          const result = await res.json();
+          const payments: PaymentRecord[] = result?.data || [];
+          // Tìm giao dịch khớp với phiếu đăng ký này
+          const matchedPayment = payments.find(
+            (p) => p.exam_registration_id === reg.id
+          );
+          if (matchedPayment) {
+            setPaymentDetailData((prev) =>
+              prev ? { ...prev, payment: matchedPayment } : prev
+            );
+          }
         }
       } catch (err) {
-        console.error("[Admission Slip] Error:", err);
-        toast.add({
-          type: "error",
-          title: "Lỗi kết nối",
-          description: "Không thể lấy thông tin thẻ dự thi.",
-        });
+        console.error("[Payment Details] Error fetching payments:", err);
+      } finally {
+        setIsLoadingPaymentDetail(false);
       }
     },
-    [apiBaseUrl, token]
+    [apiBaseUrl, token, sessions, sessionLabels, profile]
   );
 
   // Nhóm ca thi theo đợt (ngày thi)
@@ -532,10 +730,7 @@ const RegistrationContent = React.memo(function RegistrationContent({
       // Hiện toast thành công
       toast.add({ type: "success", title: "Đăng ký thi thành công!", description: "Ghế đã được giữ trong 15 phút." });
 
-      // Delay rồi reload để đồng bộ dữ liệu (theo project rules)
-      setTimeout(() => {
-        navigate("/dang-ky-thi", { replace: true });
-      }, 3000);
+
     } catch (error) {
       console.error("[Registration] Submit error:", error);
       toast.add({ type: "error", title: "Không thể kết nối đến máy chủ. Vui lòng thử lại." });
@@ -631,6 +826,7 @@ const RegistrationContent = React.memo(function RegistrationContent({
             sessions={currentBatchSessions}
             selectedSessionId={selectedSession?.id ?? null}
             onSelect={handleSelectSession}
+            highlightLevel={searchParams.get("level")}
           />
 
           {/* Nút đăng ký — chỉ hiện khi đã chọn ca thi */}
@@ -718,7 +914,7 @@ const RegistrationContent = React.memo(function RegistrationContent({
             payingId={payingId}
             onPayment={handlePayment}
             onCancel={handleCancelRegistration}
-            onViewAdmissionSlip={handleViewAdmissionSlip}
+            onViewPaymentDetails={handleViewPaymentDetails}
           />
         </CardContent>
       </Card>
@@ -732,75 +928,76 @@ const RegistrationContent = React.memo(function RegistrationContent({
         onConfirm={handleConfirmRegistration}
       />
 
-      {/* ── Dialog Thẻ dự thi chính thức ──────────────────────────────────────── */}
+      {/* ── Dialog Chi tiết thanh toán ────────────────────────────────────────── */}
+      <PaymentDetailsDialog
+        open={Boolean(paymentDetailData)}
+        onOpenChange={(open) => !open && setPaymentDetailData(null)}
+        data={paymentDetailData}
+        isLoading={isLoadingPaymentDetail}
+      />
+
+      {/* ── Dialog Thanh toán thành công ──────────────── */}
       <Dialog
-        open={Boolean(admissionSlip)}
-        onOpenChange={(open) => !open && setAdmissionSlip(null)}
+        open={isPaymentSuccessOpen}
+        onOpenChange={setIsPaymentSuccessOpen}
       >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-primary">
-              <FileTextIcon className="size-5" />
-              Thẻ dự thi HSK máy tính
+        <DialogContent className="sm:max-w-md p-6">
+          <div className="mx-auto mb-2 flex size-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400 ring-8 ring-emerald-500/5">
+            <CheckCircle2Icon className="size-7" />
+          </div>
+
+          <DialogHeader className="text-center sm:text-center">
+            <DialogTitle className="text-lg font-bold text-foreground">
+              Thanh toán thành công!
             </DialogTitle>
-            <DialogDescription>
-              Thông tin dự thi chính thức tại Trường Đại học Vinh
+            <DialogDescription className="text-sm text-muted-foreground mt-1">
+              Giao dịch qua cổng PayOS đã hoàn tất. Phiếu đăng ký và ghế thi của bạn đã được xác nhận chính thức.
             </DialogDescription>
           </DialogHeader>
-          {admissionSlip && (
-            <div className="space-y-3 py-2 text-sm">
-              <div className="grid grid-cols-2 gap-2.5 rounded-xl border border-border/60 bg-muted/20 p-3.5">
-                <div>
-                  <span className="text-xs text-muted-foreground">Thí sinh:</span>
-                  <p className="font-semibold text-foreground">{admissionSlip.candidate_name}</p>
-                </div>
-                <div>
-                  <span className="text-xs text-muted-foreground">CCCD / Hộ chiếu:</span>
-                  <p className="font-semibold text-foreground">{admissionSlip.id_number}</p>
-                </div>
-                <div>
-                  <span className="text-xs text-muted-foreground">Cấp độ thi:</span>
-                  <p className="font-semibold text-primary">{admissionSlip.exam_type_name}</p>
-                </div>
-                <div>
-                  <span className="text-xs text-muted-foreground">Số ghế / SBD:</span>
-                  <p className="font-semibold text-foreground">Số #{admissionSlip.seat_number}</p>
-                </div>
-                <div>
-                  <span className="text-xs text-muted-foreground">Ngày thi:</span>
-                  <p className="font-semibold text-foreground">
-                    {new Date(admissionSlip.exam_date).toLocaleDateString("vi-VN", {
-                      day: "2-digit",
-                      month: "2-digit",
-                      year: "numeric",
-                    })}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-xs text-muted-foreground">Ca thi:</span>
-                  <p className="font-semibold text-foreground">
-                    {admissionSlip.shift === "morning" ? "Ca sáng" : "Ca chiều"}
-                  </p>
-                </div>
-                <div className="col-span-2 border-t border-border/40 pt-2">
-                  <span className="text-xs text-muted-foreground">Phòng thi & Địa điểm:</span>
-                  <p className="font-semibold text-foreground">
-                    {admissionSlip.room_name} ({admissionSlip.room_location})
-                  </p>
-                </div>
-              </div>
+
+          <div className="my-2 space-y-2.5 rounded-xl border border-border/60 bg-muted/30 p-3.5 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Cổng thanh toán:</span>
+              <span className="font-semibold text-foreground">VietQR / PayOS</span>
             </div>
-          )}
-          <DialogFooter>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Trạng thái phiếu:</span>
+              <Badge
+                variant="outline"
+                className="rounded-full border-emerald-400/50 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-950/40 dark:text-emerald-300"
+              >
+                <span className="mr-1.5 inline-block size-1.5 rounded-full bg-emerald-500" />
+                Đã xác nhận
+              </Badge>
+            </div>
+            <div className="border-t border-border/40 pt-2 text-muted-foreground leading-relaxed">
+              💡 Thí sinh có thể xem lại biên lai và chi tiết giao dịch tại mục <strong>Hành động → Xem chi tiết thanh toán</strong> trong bảng lịch sử đăng ký bên dưới.
+            </div>
+          </div>
+
+          <DialogFooter className="sm:justify-center mt-2">
             <Button
-              className="rounded-full cursor-pointer w-full sm:w-auto"
-              onClick={() => setAdmissionSlip(null)}
+              className="rounded-full cursor-pointer w-full font-medium"
+              onClick={() => setIsPaymentSuccessOpen(false)}
             >
-              Đóng
+              Hoàn tất
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── PayOS Checkout Modal ──────────────────────────────────────────────── */}
+      {payosCheckoutData && (
+        <PayOSCheckoutWrapper
+          checkoutUrl={payosCheckoutData.url}
+          amount={payosCheckoutData.amount}
+          orderCode={payosCheckoutData.orderCode}
+          onExit={() => {
+            setPayosCheckoutData(null);
+            setPayingId(null);
+          }}
+        />
+      )}
     </div>
   );
 });
