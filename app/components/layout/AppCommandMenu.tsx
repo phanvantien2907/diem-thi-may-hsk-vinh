@@ -9,7 +9,7 @@
  * và thực hiện các hành động trực tiếp.
  */
 import * as React from "react";
-import { useNavigate } from "react-router";
+import { useNavigate, useLocation } from "react-router";
 import {
   CommandDialog,
   CommandInput,
@@ -33,20 +33,36 @@ import {
   LogOutIcon,
   ExternalLinkIcon,
   SparklesIcon,
+  LayoutDashboardIcon,
+  CalendarDaysIcon,
+  UsersRoundIcon,
+  ShieldCheckIcon,
+  AlertTriangleIcon,
+  ArrowRightLeftIcon,
+  ActivityIcon,
+  FileCodeIcon,
 } from "lucide-react";
 
 interface AppCommandMenuProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onLogout?: () => void;
+  isAdmin?: boolean;
 }
 
 export function AppCommandMenu({
   open,
   onOpenChange,
   onLogout,
+  isAdmin = false,
 }: AppCommandMenuProps) {
   const navigate = useNavigate();
+  const location = useLocation();
+
+  const isCurrentAdmin =
+    isAdmin ||
+    location.pathname.startsWith("/trang-quan-tri") ||
+    location.pathname.startsWith("/quan-ly-");
 
   // Nhận diện hệ điều hành (macOS vs Windows / Linux)
   const [isMac, setIsMac] = React.useState(true);
@@ -80,16 +96,100 @@ export function AppCommandMenu({
     <CommandDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="Tìm kiếm lệnh và trang"
-      description="Tìm kiếm nhanh trang, cấp độ thi HSK hoặc hành động"
+      title={isCurrentAdmin ? "Tìm kiếm quản trị & điều hướng nhanh" : "Tìm kiếm lệnh và trang"}
+      description={
+        isCurrentAdmin
+          ? "Tìm kiếm nhanh các phân hệ quản lý, ca thi, hồ sơ thí sinh, cảnh báo PayOS..."
+          : "Tìm kiếm nhanh trang, cấp độ thi HSK hoặc hành động"
+      }
     >
-      <CommandInput placeholder="Tìm kiếm trang, ca thi HSK, hành động..." />
+      <CommandInput
+        placeholder={
+          isCurrentAdmin
+            ? "Tìm kiếm ca thi, hồ sơ, giao dịch PayOS, lệnh quản trị..."
+            : "Tìm kiếm trang, ca thi HSK, hành động..."
+        }
+      />
 
       <CommandList>
         <CommandEmpty>Không tìm thấy kết quả phù hợp.</CommandEmpty>
 
-        {/* ── Nhóm: Trang chính hệ thống ── */}
-        <CommandGroup heading="Trang hệ thống">
+        {/* ── Nhóm: Quản trị Hệ thống (Admin) ── */}
+        {isCurrentAdmin && (
+          <>
+            <CommandGroup heading="Cổng Quản Trị Hệ Thống">
+              <CommandItem
+                value="Bảng điều khiển quản trị dashboard thong ke doanh thu dot thi realtime trang quan tri"
+                onSelect={() => handleSelect(() => navigate("/trang-quan-tri"))}
+              >
+                <LayoutDashboardIcon className="size-4 text-primary" />
+                <span>Bảng điều khiển quản trị</span>
+                <CommandShortcut>G B</CommandShortcut>
+              </CommandItem>
+
+              <CommandItem
+                value="Quản lý kỳ thi ca thi phong may lich thi tao ca batch quan ly ky thi ca thi"
+                onSelect={() => handleSelect(() => navigate("/quan-ly-ky-thi-ca-thi"))}
+              >
+                <CalendarDaysIcon className="size-4 text-primary" />
+                <span>Quản lý Kỳ thi & Ca thi</span>
+                <CommandShortcut>G K</CommandShortcut>
+              </CommandItem>
+
+              <CommandItem
+                value="Quản lý hồ sơ đăng ký thi sinh cccd phe duyet trung lap quan ly ho so dang ky"
+                onSelect={() => handleSelect(() => navigate("/quan-ly-ho-so-dang-ky"))}
+              >
+                <UsersRoundIcon className="size-4 text-primary" />
+                <span>Quản lý Hồ sơ Đăng ký</span>
+                <CommandShortcut>G H</CommandShortcut>
+              </CommandItem>
+
+              <CommandItem
+                value="Quản lý giao dịch thanh toán payos ngoai le doi soat hoan tien quan ly giao dich thanh toan"
+                onSelect={() => handleSelect(() => navigate("/quan-ly-giao-dich-thanh-toan"))}
+              >
+                <CreditCardIcon className="size-4 text-primary" />
+                <span>Quản lý Giao dịch & Thanh toán</span>
+                <CommandShortcut>G G</CommandShortcut>
+              </CommandItem>
+            </CommandGroup>
+
+            <CommandSeparator />
+
+            <CommandGroup heading="Nghiệp vụ Quản trị Trọng tâm">
+              <CommandItem
+                value="Cảnh báo giao dịch ngoại lệ PayOS thieu tien thua tien webhook timeout exception"
+                onSelect={() => handleSelect(() => navigate("/trang-quan-tri"))}
+              >
+                <AlertTriangleIcon className="size-4 text-amber-500" />
+                <span>Cảnh báo Giao dịch Ngoại lệ PayOS</span>
+              </CommandItem>
+
+              <CommandItem
+                value="Nhật ký hoạt động thời gian thực real time live logs recent activities"
+                onSelect={() => handleSelect(() => navigate("/trang-quan-tri"))}
+              >
+                <ActivityIcon className="size-4 text-emerald-500" />
+                <span>Nhật ký Hoạt động Thời gian thực</span>
+              </CommandItem>
+
+              <CommandItem
+                value="Chuyển sang giao diện góc nhìn thí sinh candidate switch view"
+                onSelect={() => handleSelect(() => navigate("/thong-tin-thi-sinh"))}
+              >
+                <ArrowRightLeftIcon className="size-4 text-blue-500" />
+                <span>Chuyển sang góc nhìn Thí sinh</span>
+                <CommandShortcut>G S</CommandShortcut>
+              </CommandItem>
+            </CommandGroup>
+
+            <CommandSeparator />
+          </>
+        )}
+
+        {/* ── Nhóm: Trang hệ thống chung ── */}
+        <CommandGroup heading={isCurrentAdmin ? "Giao diện Thí sinh & Dịch vụ" : "Trang hệ thống"}>
           <CommandItem
             value="Thông tin thí sinh thong tin thi sinh ho so profile cccd"
             onSelect={() => handleSelect(() => navigate("/thong-tin-thi-sinh"))}

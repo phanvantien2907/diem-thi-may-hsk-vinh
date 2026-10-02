@@ -95,22 +95,68 @@ Tên đầy đủ: **Vinh University HSK Computer-based Test Registration System
 app/
 ├── components/
 │   ├── ui/           # shadcn/ui components (auto-generated, KHÔNG tự sửa)
-│   ├── layout/       # Header, Sidebar, Footer, layout wrappers
+│   ├── layout/       # Header, Sidebar, Footer, layout wrappers (AdminSidebar, AppSidebar,...)
 │   ├── shared/       # Các component dùng chung nhiều nơi
-│   └── [feature]/    # Components theo feature (e.g., exam/, registration/)
+│   ├── candidate/    # Components hồ sơ thí sinh (ProfileForm, DocumentForm,...)
+│   ├── registration/ # Components đăng ký thi (ExamSessionSelector, RegistrationHistory,...)
+│   ├── dashboard/    # Components dashboard quản trị (biểu đồ, bảng ngoại lệ giao dịch,...)
+│   └── [feature]/    # Components theo feature khác
 ├── routes/           # React Router route modules
-├── lib/              # Utils, helpers, API clients
+│   ├── (auth)/       # Routes xác thực công khai (dang-nhap, dang-ky,...)
+│   ├── admin/        # [BẮT BUỘC] TẤT CẢ routes & layout quản trị viên (layout.tsx, trang-quan-tri.tsx,...)
+│   └── _app.*        # Routes thí sinh thuộc layout _app.tsx (dang-ky-thi, thong-tin-thi-sinh,...)
+├── lib/              # Utils, helpers, API clients, schemas
 ├── hooks/            # Custom React hooks
-├── types/            # TypeScript types/interfaces
+├── types/            # TypeScript types/interfaces (auth.ts, exam.ts, candidate.ts, admin.ts)
 └── styles/           # Global CSS
 ```
 
 ### Naming Conventions
-- Components: `PascalCase` — `ExamCard.tsx`, `RegistrationForm.tsx`
+- Components: `PascalCase` — `ExamCard.tsx`, `RegistrationForm.tsx`, `AdminSidebar.tsx`
 - Hooks: `camelCase` với prefix `use` — `useExamList.ts`
 - Utils/helpers: `camelCase` — `formatDate.ts`
-- Route files: theo convention React Router v7 — `app/routes/dashboard.tsx`
-- Types: `PascalCase` với suffix rõ ràng — `ExamSession`, `StudentProfile`
+- Route files: theo convention React Router v7 — `app/routes/admin/trang-quan-tri.tsx`, `app/routes/_app.dang-ky-thi.tsx`
+- Types: `PascalCase` với suffix rõ ràng — `ExamSession`, `StudentProfile`, `AdminMetric`
+
+---
+
+## Quy tắc Phân chia Router & File: Admin vs Thí sinh (BẮT BUỘC)
+
+### 1. Phân chia Route Modules
+- **Với Admin (Quản trị viên):**
+  - **TẤT CẢ** các route dành cho quản trị viên **BẮT BUỘC PHẢI NẰM TRONG THƯ MỤC `app/routes/admin/`**.
+  - **TUYỆT ĐỐI KHÔNG** tạo file `_admin.*.tsx` ở root `app/routes/` nữa.
+  - Layout chung của trang quản trị: `app/routes/admin/layout.tsx`.
+  - Các route con: `app/routes/admin/trang-quan-tri.tsx`, `app/routes/admin/quan-ly-ky-thi-ca-thi.tsx`, `app/routes/admin/quan-ly-ho-so-dang-ky.tsx`, `app/routes/admin/quan-ly-giao-dich-thanh-toan.tsx`,...
+  - Khai báo trong `app/routes.ts`:
+    ```ts
+    layout("routes/admin/layout.tsx", [
+      route("trang-quan-tri", "routes/admin/trang-quan-tri.tsx"),
+      route("quan-ly-ky-thi-ca-thi", "routes/admin/quan-ly-ky-thi-ca-thi.tsx"),
+      route("quan-ly-ho-so-dang-ky", "routes/admin/quan-ly-ho-so-dang-ky.tsx"),
+      route("quan-ly-giao-dich-thanh-toan", "routes/admin/quan-ly-giao-dich-thanh-toan.tsx"),
+    ])
+    ```
+  - Type imports trong các route admin: luôn import từ `./+types/<route-filename>` (ví dụ: `import type { Route } from "./+types/trang-quan-tri"`).
+
+- **Với Thí sinh (Candidate / User thông thường):**
+  - Các route đăng ký, tra cứu, xem hồ sơ của thí sinh nằm trực tiếp dưới `app/routes/` với tiền tố `_app.` (thuộc layout `app/routes/_app.tsx`).
+  - Ví dụ: `_app.thong-tin-thi-sinh.tsx`, `_app.dang-ky-thi.tsx`, `_app.ket-qua-thi.tsx`, `_app.van-chuyen-chung-chi.tsx`.
+  - Routes xác thực (Auth): nằm trong thư mục `app/routes/(auth)/` (ví dụ: `(auth)/dang-nhap.tsx`, `(auth)/dang-ky.tsx`).
+
+### 2. Phân chia Components & Types
+- **Admin components**:
+  - Đặt trong `app/components/dashboard/` hoặc các file chuyên trách quản trị tại `app/components/layout/` có tiền tố `Admin*` (ví dụ: `AdminSidebar.tsx`, `AdminAuditLogDialog.tsx`, `ExceptionTransactionsTable.tsx`).
+  - Types dữ liệu quản trị: đặt tại `app/types/admin.ts`.
+- **Thí sinh components**:
+  - Đặt trong `app/components/candidate/`, `app/components/registration/`, `app/components/exam/`.
+  - Sidebar thí sinh: `app/components/layout/AppSidebar.tsx`.
+
+### 3. Nguyên tắc Góc nhìn Thí sinh cho Admin (Admin Preview Mode)
+- Khi tài khoản có role `admin` chuyển sang góc nhìn thí sinh (các route `_app.*`):
+  - **Bắt buộc hoạt động ở chế độ Preview (Chỉ đọc / Read-only)**.
+  - Layout `_app.tsx` hiển thị banner cảnh báo Admin Preview với nút quay lại Trang quản trị.
+  - Vô hiệu hóa (`disabled`) toàn bộ thao tác nộp đơn đăng ký ca thi, gọi cổng thanh toán PayOS, tạo đơn vận chuyển hoặc chỉnh sửa/lưu thông tin thí sinh để tránh làm sai lệch dữ liệu thực của hệ thống.
 
 ### Import Aliases
 - Luôn dùng `@/` alias (đã config trong `tsconfig.json`).

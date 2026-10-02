@@ -11,6 +11,14 @@ export default [
     route("tai-khoan-cua-toi", "routes/_app.tai-khoan-cua-toi.tsx"),
   ]),
 
+  // ── Protected admin routes — bọc bởi routes/admin/layout.tsx (AdminAuthGuard) ───
+  layout("routes/admin/layout.tsx", [
+    route("trang-quan-tri", "routes/admin/trang-quan-tri.tsx"),
+    route("quan-ly-ky-thi-ca-thi", "routes/admin/quan-ly-ky-thi-ca-thi.tsx"),
+    route("quan-ly-ho-so-dang-ky", "routes/admin/quan-ly-ho-so-dang-ky.tsx"),
+    route("quan-ly-giao-dich-thanh-toan", "routes/admin/quan-ly-giao-dich-thanh-toan.tsx"),
+  ]),
+
   layout("routes/(auth)/layout.tsx", [
     route("dang-nhap", "routes/(auth)/dang-nhap.tsx"),
     route("dang-ky", "routes/(auth)/dang-ky.tsx"),

@@ -139,6 +139,8 @@ interface RegistrationHistoryProps {
   onViewPaymentDetails?: (reg: ExamRegistration) => void;
   /** @deprecated Xem thẻ dự thi */
   onViewAdmissionSlip?: (reg: ExamRegistration) => void;
+  /** Chế độ xem trước của Quản trị viên (chỉ đọc) */
+  isAdminPreview?: boolean;
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────────
@@ -152,6 +154,7 @@ export const RegistrationHistory = React.memo(function RegistrationHistory({
   onCancel,
   onViewPaymentDetails,
   onViewAdmissionSlip,
+  isAdminPreview = false,
 }: RegistrationHistoryProps) {
   const [currentPage, setCurrentPage] = React.useState(1);
   const [cancellingReg, setCancellingReg] = React.useState<ExamRegistration | null>(null);
@@ -261,9 +264,12 @@ export const RegistrationHistory = React.memo(function RegistrationHistory({
                           {reg.status === "pending_payment" && (
                             <>
                               <DropdownMenuItem
-                                className="cursor-pointer font-medium text-primary focus:text-primary gap-2"
-                                disabled={Boolean(payingId)}
-                                onClick={() => setPayingReg(reg)}
+                                className={cn(
+                                  "cursor-pointer font-medium text-primary focus:text-primary gap-2",
+                                  isAdminPreview && "opacity-60 cursor-not-allowed"
+                                )}
+                                disabled={Boolean(payingId) || isAdminPreview}
+                                onClick={() => !isAdminPreview && setPayingReg(reg)}
                               >
                                 {isPayingThis ? (
                                   <Loader2Icon className="size-4 animate-spin text-primary" />
@@ -271,7 +277,11 @@ export const RegistrationHistory = React.memo(function RegistrationHistory({
                                   <CreditCardIcon className="size-4 text-primary" />
                                 )}
                                 <span>
-                                  {isPayingThis ? "Đang kết nối..." : "Thanh toán ngay"}
+                                  {isPayingThis
+                                    ? "Đang kết nối..."
+                                    : isAdminPreview
+                                    ? "Thanh toán (Xem trước)"
+                                    : "Thanh toán ngay"}
                                 </span>
                               </DropdownMenuItem>
 
@@ -287,11 +297,17 @@ export const RegistrationHistory = React.memo(function RegistrationHistory({
 
                               <DropdownMenuItem
                                 variant="destructive"
-                                className="cursor-pointer gap-2"
-                                onClick={() => setCancellingReg(reg)}
+                                className={cn(
+                                  "cursor-pointer gap-2",
+                                  isAdminPreview && "opacity-60 cursor-not-allowed"
+                                )}
+                                disabled={isAdminPreview}
+                                onClick={() => !isAdminPreview && setCancellingReg(reg)}
                               >
                                 <XCircleIcon className="size-4" />
-                                <span>Hủy đăng ký</span>
+                                <span>
+                                  {isAdminPreview ? "Hủy đăng ký (Đã khóa)" : "Hủy đăng ký"}
+                                </span>
                               </DropdownMenuItem>
                             </>
                           )}

@@ -18,6 +18,7 @@ import type { Route } from "./+types/dang-nhap";
 
 import { loginSchema, type LoginFormValues } from "~/lib/schemas/auth";
 import type { LoginResponseData, ApiErrorResponse } from "~/types/auth";
+import { decodeJwtPayload, getTokenFromRequest } from "~/lib/auth.server";
 import { toast } from "~/components/ui/toast";
 
 import { Button } from "~/components/ui/button";
@@ -37,8 +38,12 @@ export const meta: Route.MetaFunction = () => [
 
 // ─── Loader — Chuyển hướng nếu đã đăng nhập ──────────────────────────────────
 export async function loader({ request }: Route.LoaderArgs) {
-  const cookieHeader = request.headers.get("Cookie") ?? "";
-  if (cookieHeader.includes("session=")) {
+  const token = getTokenFromRequest(request);
+  if (token) {
+    const payload = decodeJwtPayload(token);
+    const isAdmin = payload?.user_role === "admin";
+    const defaultHome = isAdmin ? "/trang-quan-tri" : "/thong-tin-thi-sinh";
+
     const url = new URL(request.url);
     const returnTo = url.searchParams.get("returnTo");
     const isSafeReturnTo =
@@ -48,7 +53,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       !returnTo.includes(".data") &&
       !returnTo.startsWith("/_");
 
-    return redirect(isSafeReturnTo ? returnTo : "/thong-tin-thi-sinh");
+    return redirect(isSafeReturnTo ? returnTo : defaultHome);
   }
   return null;
 }
@@ -125,16 +130,24 @@ export async function action({ request }: Route.ActionArgs) {
       );
     }
 
+    // Giải mã JWT để xác định vai trò
+    const payload = decodeJwtPayload(result.data.access_token);
+    const isAdmin = payload?.user_role === "admin";
+    const defaultRedirect = isAdmin ? "/trang-quan-tri" : "/thong-tin-thi-sinh";
+
     // Lưu thông tin người dùng ban đầu vào cookie
     const isEmail = parsed.data.identifier.includes("@");
     const basicUser = {
       username: parsed.data.identifier,
-      name: isEmail
-        ? parsed.data.identifier.split("@")[0]
-        : `Thí sinh (${parsed.data.identifier.slice(-4)})`,
+      name: isAdmin
+        ? (payload?.full_name as string || "Quản trị viên")
+        : (isEmail
+          ? parsed.data.identifier.split("@")[0]
+          : `Thí sinh (${parsed.data.identifier.slice(-4)})`),
       email: isEmail ? parsed.data.identifier : "",
       cccd: !isEmail ? parsed.data.identifier : "",
-      role: "Thí sinh",
+      role: isAdmin ? "Quản trị viên" : "Thí sinh",
+      rawRole: isAdmin ? "admin" : "candidate",
     };
     headers.append(
       "Set-Cookie",
@@ -144,6 +157,7 @@ export async function action({ request }: Route.ActionArgs) {
     return data(
       {
         success: true as const,
+        redirectTo: defaultRedirect,
         error: undefined,
         fieldErrors: undefined,
       },
@@ -188,7 +202,7 @@ export default function LoginPage() {
     }
   }, [actionData?.error]);
 
-  // Toast khi đăng nhập thành công & chuyển hướng ngay lập tức (không trễ)
+  // Toast khi đăng nhập thành công & chuyển hướng ngay lập tức
   React.useEffect(() => {
     if (actionData?.success) {
       toast.add({
@@ -207,7 +221,8 @@ export default function LoginPage() {
         !returnTo.includes(".data") &&
         !returnTo.startsWith("/_");
 
-      navigate(isSafeReturnTo ? returnTo : "/thong-tin-thi-sinh", { replace: true });
+      const target = isSafeReturnTo ? returnTo : (actionData.redirectTo || "/thong-tin-thi-sinh");
+      navigate(target, { replace: true });
     }
   }, [actionData?.success, navigate]);
 

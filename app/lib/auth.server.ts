@@ -94,7 +94,8 @@ export async function requireAuth(request: Request): Promise<{ user: UserProfile
       user.username = String(payload.user_id);
     }
     if (payload.user_role) {
-      user.role = payload.user_role === "candidate" ? "Thí sinh" : String(payload.user_role);
+      user.rawRole = String(payload.user_role);
+      user.role = payload.user_role === "admin" ? "Quản trị viên" : (payload.user_role === "candidate" ? "Thí sinh" : String(payload.user_role));
     }
     if (payload.full_name && typeof payload.full_name === "string") {
       user.full_name = payload.full_name;
@@ -114,27 +115,52 @@ export async function requireAuth(request: Request): Promise<{ user: UserProfile
       const result = (await response.json()) as { data?: Record<string, unknown> };
       const data = result.data;
       if (data) {
-        const apiDob =
-          (typeof data.dob === "string" && data.dob) ||
-          (typeof data.birth_date === "string" && data.birth_date) ||
-          (typeof data.date_of_birth === "string" && data.date_of_birth) ||
-          (typeof data.birthday === "string" && data.birthday) ||
-          undefined;
-
+        const isAdmin = data.role_id === 1 || user.rawRole === "admin" || (typeof data.role_code === "string" && data.role_code === "admin");
         user = {
-          name: typeof data.full_name === "string" ? data.full_name : user.name,
+          name: typeof data.full_name === "string" ? data.full_name : (isAdmin ? "Quản trị viên" : user.name),
           full_name: typeof data.full_name === "string" ? data.full_name : user.full_name,
           email: typeof data.email === "string" ? data.email : user.email,
           username: typeof data.username === "string" ? data.username : user.username,
-          cccd: typeof data.username === "string" ? data.username : user.cccd, // Theo logic cũ
+          cccd: typeof data.username === "string" ? data.username : user.cccd,
           phone: typeof data.phone === "string" ? data.phone : user.phone,
-          role: data.role_id === 1 ? "Quản trị viên" : "Thí sinh",
+          role: isAdmin ? "Quản trị viên" : "Thí sinh",
+          rawRole: isAdmin ? "admin" : (user.rawRole || "candidate"),
         };
       }
     }
   } catch (error) {
     // Không ném lỗi để tránh làm hỏng trải nghiệm người dùng khi API gián đoạn
     console.error("[Auth] Sync with /me API failed:", error);
+  }
+
+  return { user, token };
+}
+
+/**
+ * Kiểm tra xem người dùng có phải là Quản trị viên (Admin) không.
+ */
+export function isUserAdmin(user: UserProfile, token?: string | null): boolean {
+  if (user.rawRole === "admin") return true;
+  if (user.role === "Quản trị viên" || user.role === "admin") return true;
+  if (token) {
+    const payload = decodeJwtPayload(token);
+    if (payload?.user_role === "admin") return true;
+  }
+  return false;
+}
+
+/**
+ * AuthGuard dành riêng cho các Route Quản trị (Admin).
+ * - Yêu cầu đăng nhập, nếu chưa đăng nhập -> redirect sang /dang-nhap?returnTo=...
+ * - Kiểm tra quyền Admin, nếu là thí sinh (candidate) -> redirect sang /thong-tin-thi-sinh
+ * - Trả về session admin hợp lệ { user, token }
+ */
+export async function requireAdminAuth(request: Request): Promise<{ user: UserProfile; token: string }> {
+  const { user, token } = await requireAuth(request);
+
+  if (!isUserAdmin(user, token)) {
+    // Thí sinh cố gắng truy cập trang quản trị -> chuyển hướng về giao diện thí sinh
+    throw redirect("/thong-tin-thi-sinh");
   }
 
   return { user, token };

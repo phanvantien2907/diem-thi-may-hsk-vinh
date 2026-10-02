@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link, useNavigate, useRevalidator, useSearchParams } from "react-router";
+import { Link, useNavigate, useRevalidator, useSearchParams, useOutletContext } from "react-router";
 import { cn } from "~/lib/utils";
 import { useWebSocket, type WSEvent } from "~/hooks/use-websocket";
 import type { Route } from "./+types/_app.dang-ky-thi";
@@ -50,6 +50,7 @@ import {
   InfoIcon,
   FileTextIcon,
   CheckCircle2Icon,
+  EyeIcon,
 } from "lucide-react";
 
 // ─── SEO Meta ─────────────────────────────────────────────────────────────────
@@ -382,6 +383,9 @@ const RegistrationContent = React.memo(function RegistrationContent({
   const revalidator = useRevalidator();
   const [searchParams, setSearchParams] = useSearchParams();
 
+  const outletContext = useOutletContext<{ isAdminPreview?: boolean }>() || {};
+  const isAdminPreview = Boolean(outletContext?.isAdminPreview);
+
   // Kiểm tra tài khoản đã cập nhật thông tin cá nhân chưa
   const hasProfile = Boolean(profile && profile.id && profile.full_name && profile.dob);
 
@@ -472,6 +476,14 @@ const RegistrationContent = React.memo(function RegistrationContent({
   // Xử lý tạo link thanh toán PayOS
   const handlePayment = React.useCallback(
     async (reg: ExamRegistration) => {
+      if (isAdminPreview) {
+        toast.add({
+          type: "warning",
+          title: "Chế độ xem trước dành cho Quản trị viên",
+          description: "Thao tác kết nối thanh toán PayOS bị vô hiệu hóa để bảo vệ dữ liệu thực.",
+        });
+        return;
+      }
       try {
         setPayingId(reg.id);
         toast.add({
@@ -545,6 +557,14 @@ const RegistrationContent = React.memo(function RegistrationContent({
   // Xử lý hủy phiếu đăng ký
   const handleCancelRegistration = React.useCallback(
     async (reg: ExamRegistration) => {
+      if (isAdminPreview) {
+        toast.add({
+          type: "warning",
+          title: "Chế độ xem trước dành cho Quản trị viên",
+          description: "Thao tác hủy phiếu đăng ký bị khóa đối với tài khoản quản trị.",
+        });
+        return;
+      }
       try {
         const res = await fetch(`${apiBaseUrl}/api/v1/me/registrations/${reg.id}/cancel`, {
           method: "POST",
@@ -677,6 +697,14 @@ const RegistrationContent = React.memo(function RegistrationContent({
 
   // Mở dialog xác nhận (hoặc toast thông báo nếu chưa cập nhật thông tin thí sinh)
   const handleOpenConfirm = React.useCallback(() => {
+    if (isAdminPreview) {
+      toast.add({
+        type: "warning",
+        title: "Chế độ xem trước dành cho Quản trị viên",
+        description: "Bạn đang ở chế độ xem trước (Chỉ đọc), không thể thực hiện đăng ký thi.",
+      });
+      return;
+    }
     if (!hasProfile) {
       toast.add({
         type: "error",
@@ -694,6 +722,14 @@ const RegistrationContent = React.memo(function RegistrationContent({
 
   // Submit đăng ký thi
   const handleConfirmRegistration = React.useCallback(async () => {
+    if (isAdminPreview) {
+      toast.add({
+        type: "warning",
+        title: "Chế độ xem trước",
+        description: "Thao tác gửi đăng ký bị chặn trong chế độ xem trước.",
+      });
+      return;
+    }
     if (!selectedSession) return;
 
     setIsSubmitting(true);
@@ -832,7 +868,13 @@ const RegistrationContent = React.memo(function RegistrationContent({
           {/* Nút đăng ký — chỉ hiện khi đã chọn ca thi */}
           {selectedSession && (
             <div className="mt-5 flex flex-col sm:flex-row items-center justify-end gap-3">
-              {!hasProfile && (
+              {isAdminPreview && (
+                <Badge variant="outline" className="rounded-full text-xs bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-300">
+                  <EyeIcon className="size-3.5 mr-1" />
+                  Xem trước (Chỉ đọc)
+                </Badge>
+              )}
+              {!hasProfile && !isAdminPreview && (
                 <div className="flex items-center gap-1.5 text-xs text-destructive font-medium">
                   <AlertTriangleIcon className="size-4 shrink-0" aria-hidden="true" />
                   <span>Chưa cập nhật thông tin cá nhân</span>
@@ -840,13 +882,14 @@ const RegistrationContent = React.memo(function RegistrationContent({
               )}
               <Button
                 size="lg"
+                disabled={isAdminPreview || !hasProfile}
                 className={cn(
                   "rounded-full cursor-pointer hover:bg-primary/90",
-                  !hasProfile && "opacity-80"
+                  (!hasProfile || isAdminPreview) && "opacity-75 cursor-not-allowed"
                 )}
                 onClick={handleOpenConfirm}
               >
-                Đăng ký thi
+                {isAdminPreview ? "Đăng ký thi (Xem trước)" : "Đăng ký thi"}
               </Button>
             </div>
           )}
@@ -915,6 +958,7 @@ const RegistrationContent = React.memo(function RegistrationContent({
             onPayment={handlePayment}
             onCancel={handleCancelRegistration}
             onViewPaymentDetails={handleViewPaymentDetails}
+            isAdminPreview={isAdminPreview}
           />
         </CardContent>
       </Card>

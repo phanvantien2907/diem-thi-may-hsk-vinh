@@ -1,14 +1,3 @@
-/**
- * AppSidebar — Sidebar chính của Dashboard
- *
- * Bao gồm:
- * - Header: Logo + tên trường
- * - Nav: 4 mục điều hướng chính
- * - Footer: User profile dropdown (Avatar + tên + email + menu actions)
- *
- * Base UI pattern: dùng `render` prop thay vì `asChild`
- * Logout: dùng LogoutDialog (AlertDialog) thay vì redirect trực tiếp
- */
 import * as React from "react";
 import { Link, useLocation } from "react-router";
 import {
@@ -21,6 +10,7 @@ import {
   ChevronsUpDownIcon,
   GraduationCapIcon,
   LogOutIcon,
+  ShieldCheckIcon,
 } from "lucide-react";
 import { LogoutDialog } from "~/components/layout/logout-dialog";
 import { AppCommandMenu } from "~/components/layout/AppCommandMenu";
@@ -95,6 +85,7 @@ export interface SidebarUser {
   cccd?: string;
   phone?: string;
   role?: string;
+  rawRole?: string;
 }
 
 interface AppSidebarProps {
@@ -275,6 +266,16 @@ export function AppSidebar({ user }: AppSidebarProps) {
                 <DropdownMenuSeparator />
 
                 <DropdownMenuGroup>
+                  {/* Cổng Quản trị cho Admin */}
+                  {(user.rawRole === "admin" || user.role === "Quản trị viên" || user.role === "admin") && (
+                    <DropdownMenuItem className="cursor-pointer rounded-lg text-primary font-semibold">
+                      <ShieldCheckIcon data-icon="inline-start" aria-hidden="true" />
+                      <Link to="/trang-quan-tri" className="flex-1">
+                        Cổng Quản trị hệ thống
+                      </Link>
+                    </DropdownMenuItem>
+                  )}
+
                   {/* Hồ sơ */}
                   <DropdownMenuItem className="cursor-pointer rounded-lg">
                     <UserIcon data-icon="inline-start" aria-hidden="true" />
@@ -289,8 +290,8 @@ export function AppSidebar({ user }: AppSidebarProps) {
                       data-icon="inline-start"
                       aria-hidden="true"
                     />
-                    <Link to="/payment" className="flex-1">
-                      Thanh toán
+                    <Link to="/dang-ky-thi" className="flex-1">
+                      Đăng ký & Thanh toán
                     </Link>
                   </DropdownMenuItem>
                 </DropdownMenuGroup>

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useOutletContext } from "react-router";
 import type { Route } from "./+types/_app.thong-tin-thi-sinh";
 import { requireAuth } from "~/lib/auth.server";
 import { API_BASE_URL } from "~/lib/env.server";
@@ -181,11 +182,20 @@ function CandidateFormsWrapper({
 
   const [profile, setProfile] = React.useState(resolvedProfile);
   const [document, setDocument] = React.useState(resolvedDocument);
+  const { isAdminPreview } = useOutletContext<{ isAdminPreview?: boolean }>() || {};
 
   async function handleProfileSubmit(
     data: CandidateProfileFormValues,
     isNew: boolean
   ) {
+    if (isAdminPreview) {
+      toast.add({
+        type: "warning",
+        title: "Chế độ xem trước dành cho Quản trị viên",
+        description: "Thao tác lưu hồ sơ bị khóa để bảo vệ dữ liệu thí sinh.",
+      });
+      return;
+    }
     const method = isNew ? "POST" : "PATCH";
     const url = `${apiBaseUrl}/api/v1/me/candidate-profile`;
 
@@ -222,6 +232,14 @@ function CandidateFormsWrapper({
   }
 
   async function handleDocumentSubmit(data: CandidateDocumentFormValues) {
+    if (isAdminPreview) {
+      toast.add({
+        type: "warning",
+        title: "Chế độ xem trước dành cho Quản trị viên",
+        description: "Thao tác tải lên/lưu giấy tờ bị khóa ở chế độ xem trước.",
+      });
+      return;
+    }
     const url = `${apiBaseUrl}/api/v1/me/candidate-profile/documents`;
 
     const body: Record<string, unknown> = {};
@@ -267,6 +285,7 @@ function CandidateFormsWrapper({
         profile={profile}
         defaultFullName={userFullName}
         onSubmit={handleProfileSubmit}
+        disabled={isAdminPreview}
       />
       <DocumentForm
         document={document}
@@ -275,7 +294,7 @@ function CandidateFormsWrapper({
         token={token}
         apiBaseUrl={apiBaseUrl}
         onSubmit={handleDocumentSubmit}
-        disabled={profile === null}
+        disabled={profile === null || isAdminPreview}
         userCccd={userCccd}
       />
       {profile === null && (

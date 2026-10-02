@@ -110,6 +110,7 @@ export interface UserProfile {
   cccd?: string;
   phone?: string;
   role?: string;
+  rawRole?: "admin" | "candidate" | "proctor" | "reviewer" | string;
 }
 
 /**

@@ -23,7 +23,7 @@ function PaginationContent({
   return (
     <ul
       data-slot="pagination-content"
-      className={cn("flex items-center gap-1", className)}
+      className={cn("flex items-center gap-1.5 flex-nowrap", className)}
       {...props}
     />
   )
@@ -78,8 +78,10 @@ function PaginationButton({
       variant={variant || (isActive ? "default" : "ghost")}
       size={size}
       className={cn(
-        "rounded-full cursor-pointer transition-all select-none",
-        isActive && "shadow-xs font-semibold",
+        "size-8 rounded-full cursor-pointer transition-all select-none text-xs font-medium shrink-0 flex items-center justify-center",
+        isActive
+          ? "bg-primary text-primary-foreground font-bold shadow-xs hover:bg-primary/90"
+          : "hover:bg-muted text-foreground",
         className
       )}
       aria-current={isActive ? "page" : undefined}
@@ -91,18 +93,22 @@ function PaginationButton({
 function PaginationPrevious({
   className,
   text = "Trước",
+  showText = true,
   ...props
-}: React.ComponentProps<typeof PaginationButton> & { text?: string }) {
+}: React.ComponentProps<typeof PaginationButton> & { text?: string; showText?: boolean }) {
   return (
     <PaginationButton
       aria-label="Trang trước"
       variant="outline"
       size="sm"
-      className={cn("gap-1 pl-2.5 pr-3 text-xs rounded-full cursor-pointer", className)}
+      className={cn(
+        "h-8 px-3 text-xs rounded-full cursor-pointer w-auto shrink-0 flex items-center gap-1.5 font-medium transition-all select-none hover:bg-muted border-border/80",
+        className
+      )}
       {...props}
     >
-      <ChevronLeftIcon className="size-3.5" />
-      <span className="hidden sm:inline">{text}</span>
+      <ChevronLeftIcon className="size-3.5 shrink-0" />
+      {showText && <span>{text}</span>}
     </PaginationButton>
   )
 }
@@ -110,18 +116,22 @@ function PaginationPrevious({
 function PaginationNext({
   className,
   text = "Sau",
+  showText = true,
   ...props
-}: React.ComponentProps<typeof PaginationButton> & { text?: string }) {
+}: React.ComponentProps<typeof PaginationButton> & { text?: string; showText?: boolean }) {
   return (
     <PaginationButton
       aria-label="Trang sau"
       variant="outline"
       size="sm"
-      className={cn("gap-1 pl-3 pr-2.5 text-xs rounded-full cursor-pointer", className)}
+      className={cn(
+        "h-8 px-3 text-xs rounded-full cursor-pointer w-auto shrink-0 flex items-center gap-1.5 font-medium transition-all select-none hover:bg-muted border-border/80",
+        className
+      )}
       {...props}
     >
-      <span className="hidden sm:inline">{text}</span>
-      <ChevronRightIcon className="size-3.5" />
+      {showText && <span>{text}</span>}
+      <ChevronRightIcon className="size-3.5 shrink-0" />
     </PaginationButton>
   )
 }

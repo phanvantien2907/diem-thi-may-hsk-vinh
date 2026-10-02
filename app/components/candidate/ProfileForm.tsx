@@ -41,6 +41,8 @@ interface ProfileFormProps {
   defaultGender?: "male" | "female";
   /** Callback khi submit form thành công */
   onSubmit: (data: CandidateProfileFormValues, isNew: boolean) => Promise<void>;
+  /** Vô hiệu hóa submit (chế độ xem trước admin) */
+  disabled?: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -69,6 +71,7 @@ export const ProfileForm = React.memo(function ProfileForm({
   defaultDob = "",
   defaultGender,
   onSubmit,
+  disabled = false,
 }: ProfileFormProps) {
   const isNew = profile === null;
 
@@ -309,7 +312,7 @@ export const ProfileForm = React.memo(function ProfileForm({
             <Button
               type="submit"
               size="lg"
-              disabled={isSubmitting}
+              disabled={isSubmitting || disabled}
               className="rounded-full cursor-pointer"
             >
               {isSubmitting ? (
@@ -321,7 +324,7 @@ export const ProfileForm = React.memo(function ProfileForm({
               ) : (
                 <Save data-icon="inline-start" aria-hidden="true" />
               )}
-              {isNew ? "Tạo hồ sơ" : "Lưu thông tin"}
+              {disabled ? "Lưu thông tin (Chỉ xem)" : isNew ? "Tạo hồ sơ" : "Lưu thông tin"}
             </Button>
           </div>
         </form>
