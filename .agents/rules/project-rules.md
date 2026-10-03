@@ -86,6 +86,20 @@ Tên đầy đủ: **Vinh University HSK Computer-based Test Registration System
   - Dùng `flex-col sm:flex-row`, `grid-cols-1 md:grid-cols-2 lg:grid-cols-3`.
   - Tránh gán cứng chiều rộng pixel (e.g. `w-[500px]`), thay bằng `w-full max-w-lg`.
 
+### 6. Quy chuẩn Định dạng Thời gian (Date & Time Formatting — BẮT BUỘC)
+- **Định dạng chuẩn bắt buộc**: `dd/MM/yyyy HH:mm:ss` (ví dụ: `03/10/2026 09:02:02`).
+- **Nguyên tắc**: Luôn hiển thị Ngày (2 số) / Tháng (2 số) / Năm (4 số) trước, Giờ:Phút:Giây (2 số mỗi phần tử) sau.
+- **TUYỆT ĐỐI KHÔNG**:
+  - Không đảo ngược thành `HH:mm:ss dd/MM/yyyy` hay `HH:mm:ss DD/MM/YYYY`.
+  - Không dùng định dạng chuẩn Mỹ `MM/dd/yyyy`.
+  - Không bỏ padding số 0 (ví dụ viết `3/10/2026 9:2:2` là SAI, bắt buộc phải là `03/10/2026 09:02:02`).
+- Trường hợp rút gọn không có giây: dùng `dd/MM/yyyy HH:mm` (vẫn luôn tuân thủ ngày/tháng/năm trước, giờ:phút sau).
+
+### 7. Phân trang & Danh sách dữ liệu (Pagination — BẮT BUỘC)
+- **Modal / Dialog lịch sử thao tác**: Mặc định phân trang **10 bản ghi / trang** (`pageSize = 10`), có thanh phân trang hiển thị số trang và các nút điều hướng Trước/Sau.
+- **Tương tác**: Reset trang về trang 1 khi người dùng thực hiện tìm kiếm hoặc chuyển đổi tab danh mục lọc.
+- **Component**: Sử dụng component `<Pagination>` chuẩn của shadcn/ui (`@/components/ui/pagination`), các nút bấm tròn `rounded-full` kèm `cursor-pointer`, vô hiệu hóa (`disabled`) khi ở trang đầu hoặc trang cuối.
+
 ---
 
 ## Component Conventions

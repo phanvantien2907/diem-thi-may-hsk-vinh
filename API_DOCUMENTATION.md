@@ -3,8 +3,8 @@
 > **Base URL:** `http://<host>:<port>/api/v1`
 > **Content-Type:** `application/json`
 > **Ngôn ngữ lỗi:** Tiếng Việt (tất cả thông báo lỗi trả về bằng Tiếng Việt)
-> **Phiên bản:** v1.0.0
-> **Cập nhật lần cuối:** 2026-10-01
+> **Phiên bản:** v1.1.0
+> **Cập nhật lần cuối:** 2026-10-03
 
 ---
 
@@ -24,6 +24,7 @@
 - [12. Bảng Enum tham chiếu](#12-bảng-enum-tham-chiếu)
 - [13. State Machines (Luồng trạng thái)](#13-state-machines-luồng-trạng-thái)
 - [14. WebSocket Real-time Events](#14-websocket-real-time-events)
+- [15. Module Dashboard Admin (Bảng điều khiển quản trị)](#15-module-dashboard-admin-bảng-điều-khiển-quản-trị)
 
 ---
 
@@ -3243,3 +3244,591 @@ function connectWS(token, onMessage) {
 - **Không gửi dữ liệu lên WS:** Đây là kênh **broadcast một chiều** (server → client). Client chỉ nhận, không gửi.
 - **Dùng `make db-build` thay vì `make db-rs`:** Để tránh mất dữ liệu khi build lại code, luôn dùng `make db-build` (chỉ rebuild API image, giữ nguyên DB volume).
 - **Token hết hạn:** Nếu JWT token hết hạn, server sẽ từ chối kết nối WS. Frontend cần refresh token trước khi reconnect.
+
+---
+
+## 15. Module Dashboard Admin (Bảng điều khiển quản trị)
+
+> **Toàn bộ API trong module này yêu cầu:** 🔐 JWT + Admin (`role = admin`)
+>
+> **Prefix chung:** `/api/v1/admin/...`
+
+### 15.1. Lấy chỉ số tổng quan (Top Metrics)
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/metrics/overview` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Hiển thị 4 KPI chính ở phần trên cùng của Dashboard |
+| **Chế độ** | ⚡ **Real-time 100%** (Không cache, query trực tiếp PostgreSQL tối ưu index) |
+
+**Request:** Không cần body/query.
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "total_revenue": 15000000,
+    "total_registrations": 150,
+    "fill_rate": 85.5,
+    "payment_success_rate": 92.3
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+| Field | Kiểu | Mô tả |
+|---|---|---|
+| `total_revenue` | `integer` | Tổng doanh thu (VNĐ) từ các giao dịch thành công của đợt thi đang mở |
+| `total_registrations` | `integer` | Tổng số hồ sơ đăng ký dự thi (mọi trạng thái) |
+| `fill_rate` | `float` | Tỷ lệ lấp đầy ghế (%) = ghế đã booked / tổng ghế |
+| `payment_success_rate` | `float` | Tỷ lệ thanh toán thành công (%) = success / tổng payment |
+
+---
+
+### 15.2. Biểu đồ doanh thu theo ngày (Revenue Chart)
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/metrics/revenue-chart` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Vẽ biểu đồ đường doanh thu & lượng đăng ký theo ngày |
+
+**Query Params:**
+
+| Param | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `range` | `string` | ✅ | `7days` hoặc `30days` | Khoảng thời gian hiển thị |
+
+**Request ví dụ:** `GET /api/v1/admin/metrics/revenue-chart?range=7days`
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "date": "2026-09-27",
+      "revenue": 2500000,
+      "registrations": 25
+    },
+    {
+      "date": "2026-09-28",
+      "revenue": 3200000,
+      "registrations": 32
+    }
+  ],
+  "error": null,
+  "meta": null
+}
+```
+
+| Field | Kiểu | Mô tả |
+|---|---|---|
+| `date` | `string` | Ngày (format `YYYY-MM-DD`) |
+| `revenue` | `integer` | Doanh thu trong ngày (VNĐ) |
+| `registrations` | `integer` | Số đơn đăng ký mới trong ngày |
+
+**Lỗi có thể xảy ra:**
+
+| Code | Thông báo | Nguyên nhân |
+|---|---|---|
+| `400` | `"Tham số range là bắt buộc (7days hoặc 30days)"` | Thiếu query param `range` |
+| `400` | `"Tham số range không hợp lệ, chỉ chấp nhận 7days hoặc 30days"` | `range` không phải `7days` hoặc `30days` |
+
+---
+
+### 15.3. Phân bố cấp độ HSK (Pie Chart)
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/metrics/hsk-distribution` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Vẽ biểu đồ tròn tỷ lệ thí sinh theo từng cấp độ HSK |
+
+**Request:** Không cần body/query.
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": [
+    { "level": "HSK 1", "count": 45 },
+    { "level": "HSK 2", "count": 38 },
+    { "level": "HSK 3", "count": 30 },
+    { "level": "HSK 4", "count": 22 },
+    { "level": "HSK 5", "count": 10 },
+    { "level": "HSK 6", "count": 5 }
+  ],
+  "error": null,
+  "meta": null
+}
+```
+
+| Field | Kiểu | Mô tả |
+|---|---|---|
+| `level` | `string` | Tên cấp độ HSK (lấy từ `exam_type_name`) |
+| `count` | `integer` | Số thí sinh đã confirmed ở cấp độ này |
+
+> **Lưu ý:** Chỉ đếm các đơn đăng ký có trạng thái `confirmed`.
+
+---
+
+### 15.4. Phễu thanh toán trong ngày (Payment Funnel)
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/metrics/payment-funnel` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Phân tích lưu lượng giao dịch theo giờ trong ngày hôm nay (dùng cho biểu đồ cột/thanh) |
+
+**Request:** Không cần body/query.
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": [
+    { "hour": 8,  "success": 12, "holding": 3, "cancelled": 1 },
+    { "hour": 9,  "success": 18, "holding": 5, "cancelled": 2 },
+    { "hour": 10, "success": 25, "holding": 8, "cancelled": 3 }
+  ],
+  "error": null,
+  "meta": null
+}
+```
+
+| Field | Kiểu | Mô tả |
+|---|---|---|
+| `hour` | `integer` | Khung giờ trong ngày (0–23) |
+| `success` | `integer` | Số giao dịch thành công |
+| `holding` | `integer` | Số giao dịch đang chờ |
+| `cancelled` | `integer` | Số giao dịch thất bại / hết hạn |
+
+---
+
+### 15.5. Giám sát ca thi trực tiếp (Live Session Status)
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/sessions/live-status` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Bảng real-time hiển thị trạng thái ghế của từng ca thi đang mở |
+
+**Request:** Không cần body/query.
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "session_id": 1,
+      "exam_type_name": "HSK 3",
+      "exam_type_code": "hsk3",
+      "room_name": "Phòng A101",
+      "session_date": "2026-10-15",
+      "shift": "morning",
+      "total_seats": 30,
+      "locked_seats": 22,
+      "holding_seats": 3,
+      "available_seats": 5
+    }
+  ],
+  "error": null,
+  "meta": null
+}
+```
+
+| Field | Kiểu | Mô tả |
+|---|---|---|
+| `session_id` | `integer` | ID ca thi |
+| `exam_type_name` | `string` | Tên loại đề thi (ví dụ: "HSK 3") |
+| `exam_type_code` | `string` | Mã loại đề thi (ví dụ: "hsk3") |
+| `room_name` | `string` | Tên phòng thi |
+| `session_date` | `string` | Ngày thi (format `YYYY-MM-DD`) |
+| `shift` | `string` | Ca thi: `morning`, `afternoon`, `evening` |
+| `total_seats` | `integer` | Tổng số ghế |
+| `locked_seats` | `integer` | Số ghế đã chốt (booked) |
+| `holding_seats` | `integer` | Số ghế đang bị giữ tạm (held, chờ thanh toán) |
+| `available_seats` | `integer` | Số ghế còn trống |
+
+> **Lưu ý:** Chỉ trả về các ca thi có trạng thái `open` (đang mở đăng ký).
+
+---
+
+### 15.6. Danh sách giao dịch ngoại lệ (Transaction Exceptions)
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/transactions/exceptions` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Xem các giao dịch có vấn đề cần Admin xử lý thủ công |
+
+**Query Params:**
+
+| Param | Kiểu | Bắt buộc | Default | Validate | Mô tả |
+|---|---|---|---|---|---|
+| `page` | `integer` | ❌ | `1` | Min 1 | Trang hiện tại |
+| `limit` | `integer` | ❌ | `20` | Min 1, Max 100 | Số bản ghi mỗi trang |
+
+**Request ví dụ:** `GET /api/v1/admin/transactions/exceptions?page=1&limit=10`
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "payment_id": 42,
+      "registration_id": 100,
+      "candidate_name": "Nguyễn Văn A",
+      "exam_type_name": "HSK 4",
+      "expected_amount": 500000,
+      "actual_amount": null,
+      "status": "pending",
+      "exception_type": "expired_payment",
+      "transaction_ref": "PAY-1696309200-100",
+      "created_at": "2026-10-02T14:00:00+07:00"
+    }
+  ],
+  "error": null,
+  "meta": {
+    "page": 1,
+    "per_page": 10,
+    "total_items": 5,
+    "total_pages": 1
+  }
+}
+```
+
+| Field | Kiểu | Nullable | Mô tả |
+|---|---|---|---|
+| `payment_id` | `integer` | ❌ | ID giao dịch thanh toán |
+| `registration_id` | `integer` | ❌ | ID đơn đăng ký liên kết |
+| `candidate_name` | `string` | ❌ | Tên thí sinh |
+| `exam_type_name` | `string` | ❌ | Tên loại kỳ thi (ví dụ: `"HSK 1"`, `"HSK 4"`, `"HSKK Sơ cấp"`) |
+| `expected_amount` | `integer` | ❌ | Số tiền phải thanh toán (VNĐ) |
+| `actual_amount` | `integer` | ✅ | Số tiền thực nhận (null nếu chưa thanh toán) |
+| `status` | `string` | ❌ | Trạng thái: `pending`, `failed`, `expired` |
+| `exception_type` | `string` | ❌ | Loại ngoại lệ: `webhook_failed`, `expired_payment`, `amount_mismatch` |
+| `transaction_ref` | `string` | ✅ | Mã giao dịch tham chiếu |
+| `created_at` | `datetime` | ❌ | Thời gian tạo giao dịch |
+
+---
+
+### 15.7. Duyệt giao dịch thủ công (Manual Approve)
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/transactions/:id/manual-approve` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Admin force-approve một giao dịch bị lỗi, hệ thống sẽ chốt đơn đăng ký và giữ ghế |
+
+**Path Params:**
+
+| Param | Kiểu | Mô tả |
+|---|---|---|
+| `id` | `integer` | ID giao dịch (Payment ID) |
+
+**Request Body:**
+
+```json
+{
+  "reason": "Đã nhận chuyển khoản qua Vietcombank, xác nhận thủ công"
+}
+```
+
+| Field | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `reason` | `string` | ✅ | Min 5, Max 500 ký tự | Lý do duyệt thủ công (ghi nhận vào Audit Log) |
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "payment_id": 42,
+    "registration_id": 100,
+    "new_status": "success",
+    "message": "Đã duyệt thủ công thành công"
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+| Field | Kiểu | Mô tả |
+|---|---|---|
+| `payment_id` | `integer` | ID giao dịch đã duyệt |
+| `registration_id` | `integer` | ID đơn đăng ký được chốt |
+| `new_status` | `string` | Trạng thái mới: `success` |
+| `message` | `string` | Thông báo kết quả |
+
+**Lỗi có thể xảy ra:**
+
+| Code | Thông báo | Nguyên nhân |
+|---|---|---|
+| `400` | `"Tham số id không hợp lệ"` | ID không phải số nguyên |
+| `400` | `"Dữ liệu yêu cầu không hợp lệ"` | Body JSON sai format |
+| `400` | Chi tiết lỗi validation | `reason` quá ngắn (< 5 ký tự) |
+| `404` | `"Không tìm thấy giao dịch"` | Payment ID không tồn tại |
+| `409` | `"Giao dịch đã được xác nhận"` | Payment đã ở trạng thái `success` |
+| `409` | `"Giao dịch đã hoàn tiền, không thể duyệt"` | Payment đã ở trạng thái `refunded` |
+
+> **⚠️ Lưu ý quan trọng:** Thao tác này sẽ đồng thời:
+> 1. Cập nhật `payment_status` → `success`
+> 2. Cập nhật `exam_registration_status` → `confirmed`
+> 3. Cập nhật `exam_seat_status` → `booked`
+> 4. Ghi Audit Log với lý do Admin cung cấp
+
+---
+
+### 15.8. Đánh dấu hoàn tiền (Refund Mark)
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/transactions/:id/refund-mark` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Admin đánh dấu một giao dịch là đã hoàn tiền cho thí sinh |
+
+**Path Params:**
+
+| Param | Kiểu | Mô tả |
+|---|---|---|
+| `id` | `integer` | ID giao dịch (Payment ID) |
+
+**Request Body:**
+
+```json
+{
+  "reason": "Thí sinh yêu cầu hoàn tiền, đã chuyển khoản lại qua ngân hàng"
+}
+```
+
+| Field | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `reason` | `string` | ✅ | Min 5, Max 500 ký tự | Lý do hoàn tiền (ghi nhận vào Audit Log) |
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "payment_id": 42,
+    "new_status": "refunded",
+    "message": "Đã đánh dấu hoàn tiền thành công"
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+| Field | Kiểu | Mô tả |
+|---|---|---|
+| `payment_id` | `integer` | ID giao dịch đã đánh dấu hoàn tiền |
+| `new_status` | `string` | Trạng thái mới: `refunded` |
+| `message` | `string` | Thông báo kết quả |
+
+**Lỗi có thể xảy ra:**
+
+| Code | Thông báo | Nguyên nhân |
+|---|---|---|
+| `400` | `"Tham số id không hợp lệ"` | ID không phải số nguyên |
+| `404` | `"Không tìm thấy giao dịch"` | Payment ID không tồn tại |
+| `409` | `"Giao dịch chưa thanh toán, không thể hoàn tiền"` | Payment chưa ở trạng thái `success` |
+| `409` | `"Giao dịch đã được hoàn tiền trước đó"` | Payment đã ở trạng thái `refunded` |
+
+> **⚠️ Lưu ý quan trọng:** Thao tác này sẽ đồng thời:
+> 1. Cập nhật `payment_status` → `refunded`
+> 2. Cập nhật `exam_registration_status` → `cancelled`
+> 3. Cập nhật `exam_seat_status` → `available` (trả ghế)
+> 4. Ghi Audit Log với lý do Admin cung cấp
+
+---
+
+### 15.9. Lịch sử hoạt động gần đây (Recent Logs)
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/logs/recent` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Xem nhật ký hành động mới nhất trên hệ thống (tất cả Admin) |
+
+**Query Params:**
+
+| Param | Kiểu | Bắt buộc | Default | Validate | Mô tả |
+|---|---|---|---|---|---|
+| `page` | `integer` | ❌ | `1` | Min 1 | Trang hiện tại |
+| `limit` | `integer` | ❌ | `20` | Min 1, Max 100 | Số bản ghi mỗi trang |
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 501,
+      "action": "manual_approve",
+      "entity_table": "payments",
+      "entity_id": 42,
+      "actor_id": 1,
+      "created_at": "2026-10-03T08:30:00+07:00"
+    }
+  ],
+  "error": null,
+  "meta": {
+    "page": 1,
+    "per_page": 20,
+    "total_items": 150,
+    "total_pages": 8
+  }
+}
+```
+
+| Field | Kiểu | Nullable | Mô tả |
+|---|---|---|---|
+| `id` | `integer` | ❌ | ID bản ghi audit |
+| `action` | `string` | ❌ | Hành động (ví dụ: `manual_approve`, `refund_mark`, `clear_cache`) |
+| `entity_table` | `string` | ❌ | Tên bảng bị ảnh hưởng (ví dụ: `payments`, `exam_registrations`) |
+| `entity_id` | `integer` | ❌ | ID bản ghi bị ảnh hưởng |
+| `actor_id` | `integer` | ✅ | ID tài khoản Admin thực hiện (null nếu là hệ thống) |
+| `created_at` | `datetime` | ❌ | Thời điểm thực hiện |
+
+---
+
+### 15.10. Xóa bộ nhớ đệm (Clear Cache)
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/system/clear-cache` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Xác nhận trạng thái Real-time và ghi nhận audit log hệ thống |
+
+**Request Body:** Không cần body.
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Hệ thống đang hoạt động ở chế độ thời gian thực (Real-time), dữ liệu luôn được cập nhật mới nhất"
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+> **Lưu ý:** Hệ thống Dashboard hiện query trực tiếp theo thời gian thực (Real-time) và tự động nhận tín hiệu WebSocket khi có thay đổi. API này được giữ để tương thích giao diện và ghi nhận audit log.
+
+---
+
+### 15.11. Lịch sử thao tác cá nhân (My Audit Log)
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/users/me/audit-log` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Admin xem lịch sử các hành động do chính mình thực hiện |
+
+**Query Params:**
+
+| Param | Kiểu | Bắt buộc | Default | Validate | Mô tả |
+|---|---|---|---|---|---|
+| `page` | `integer` | ❌ | `1` | Min 1 | Trang hiện tại |
+| `limit` | `integer` | ❌ | `20` | Min 1, Max 100 | Số bản ghi mỗi trang |
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 501,
+      "action": "manual_approve",
+      "entity_table": "payments",
+      "entity_id": 42,
+      "old_value": { "payment_status": "pending" },
+      "new_value": { "payment_status": "success" },
+      "created_at": "2026-10-03T08:30:00+07:00"
+    }
+  ],
+  "error": null,
+  "meta": {
+    "page": 1,
+    "per_page": 20,
+    "total_items": 35,
+    "total_pages": 2
+  }
+}
+```
+
+| Field | Kiểu | Nullable | Mô tả |
+|---|---|---|---|
+| `id` | `integer` | ❌ | ID bản ghi audit |
+| `action` | `string` | ❌ | Hành động đã thực hiện |
+| `entity_table` | `string` | ❌ | Tên bảng bị ảnh hưởng |
+| `entity_id` | `integer` | ❌ | ID bản ghi bị ảnh hưởng |
+| `old_value` | `object` | ✅ | Giá trị cũ trước khi thay đổi (JSON, có thể `null`) |
+| `new_value` | `object` | ✅ | Giá trị mới sau khi thay đổi (JSON, có thể `null`) |
+| `created_at` | `datetime` | ❌ | Thời điểm thực hiện |
+
+---
+
+### 15.12. Tổng quan kiến trúc Dashboard cho Frontend
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    ADMIN DASHBOARD LAYOUT                       │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐   │
+│  │ Doanh thu│ │ Hồ sơ DT │ │ Lấp đầy %│ │ Thanh toán TC %  │   │
+│  │ 15.000 K │ │    150   │ │  85.5%   │ │     92.3%        │   │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────────────┘   │
+│  ← API: GET /admin/metrics/overview (Real-time, không cache)   │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────┐ ┌─────────────────────────────┐   │
+│  │  Biểu đồ doanh thu      │ │  Phân bố HSK (Pie Chart)   │   │
+│  │  (Line Chart 7d/30d)    │ │  HSK1: 45, HSK2: 38...     │   │
+│  └─────────────────────────┘ └─────────────────────────────┘   │
+│  ← API: revenue-chart            ← API: hsk-distribution      │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────┐ ┌─────────────────────────────┐   │
+│  │  Phễu thanh toán        │ │  Trạng thái ca thi live     │   │
+│  │  (Bar Chart theo giờ)   │ │  (Bảng real-time)          │   │
+│  └─────────────────────────┘ └─────────────────────────────┘   │
+│  ← API: payment-funnel          ← API: sessions/live-status   │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │  Giao dịch ngoại lệ (Table + Hành động)                  │ │
+│  │  [Duyệt thủ công]  [Đánh dấu hoàn tiền]                 │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│  ← API: transactions/exceptions + manual-approve + refund-mark│
+├─────────────────────────────────────────────────────────────────┤
+│  Nhật ký hệ thống  │  Lịch sử cá nhân  │  [Xóa Cache]        │
+│  ← logs/recent     │  ← me/audit-log   │  ← system/clear-cache│
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 15.13. Gợi ý tích hợp cho Frontend
+
+- **Auto-refresh:** Nên gọi lại `GET /admin/metrics/overview` mỗi 3-5 phút (hoặc dùng WebSocket event `dashboard_metrics_updated` để trigger refresh).
+- **Biểu đồ:** Dùng thư viện như **Chart.js**, **Recharts** (React), hoặc **ECharts** để render.
+- **Bảng giao dịch ngoại lệ:** Mỗi dòng có 2 nút hành động:
+  - **"Duyệt"** → gọi `POST /admin/transactions/:id/manual-approve`
+  - **"Hoàn tiền"** → gọi `POST /admin/transactions/:id/refund-mark`
+- **Xóa Cache:** Đặt nút nhỏ ở góc Dashboard, sau khi bấm → gọi `POST /admin/system/clear-cache` rồi reload lại `overview`.
+- **Pagination:** Các API có phân trang (`exceptions`, `logs/recent`, `me/audit-log`) đều trả về `meta` object, dùng để render thanh phân trang.

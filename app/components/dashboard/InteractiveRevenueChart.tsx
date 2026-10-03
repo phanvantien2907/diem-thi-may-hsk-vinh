@@ -1,11 +1,3 @@
-/**
- * InteractiveRevenueChart — Biểu đồ Doanh thu & Thí sinh Đa kỳ hạn
- * 
- * - Siêu nhẹ (Zero library overhead, < 10KB, không tốn MB tải trang)
- * - Tải ngay lập tức (0ms SSR/CSR, không bao giờ bị trắng hoặc lỗi ResponsiveContainer)
- * - Đa kỳ hạn: Hôm nay (theo giờ), 7 ngày, 30 ngày, 3 tháng (Quý), 6 tháng, 1 năm
- * - Hover chuột / Chạm tay xem chỉ số thời gian thực (Real-time Crosshair + Rich Tooltip)
- */
 import * as React from "react";
 import {
   generateSmoothLinePath,
@@ -121,15 +113,34 @@ export const TIMEFRAME_DATA: Record<TimeframeKey, { title: string; subtitle: str
 
 interface InteractiveRevenueChartProps {
   onPointHover?: (point: DataPoint | null) => void;
+  initial7DaysData?: any[];
 }
 
-export function InteractiveRevenueChart({ onPointHover }: InteractiveRevenueChartProps) {
+export function InteractiveRevenueChart({ onPointHover, initial7DaysData }: InteractiveRevenueChartProps) {
   const [timeframe, setTimeframe] = React.useState<TimeframeKey>("7days");
   const [metric, setMetric] = React.useState<MetricType>("revenue");
   const [hoveredIndex, setHoveredIndex] = React.useState<number | null>(null);
 
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const currentDataset = TIMEFRAME_DATA[timeframe];
+  const currentDataset = React.useMemo(() => {
+    if (timeframe === "7days" && initial7DaysData && initial7DaysData.length > 0) {
+      return {
+        title: "7 ngày qua (Dữ liệu thực)",
+        subtitle: "Doanh số và lượng thí sinh 7 ngày gần nhất",
+        points: initial7DaysData.map((d, i) => ({
+          id: `live-d${i}`,
+          label: d.display_date,
+          subLabel: "",
+          revenue: d.revenue,
+          orders: d.orders,
+          topLevel: "Tổng hợp",
+          growth: 0
+        }))
+      };
+    }
+    return TIMEFRAME_DATA[timeframe];
+  }, [timeframe, initial7DaysData]);
+
   const points = currentDataset.points;
 
   // Lấy chỉ số min/max để scale SVG
@@ -233,11 +244,10 @@ export function InteractiveRevenueChart({ onPointHover }: InteractiveRevenueChar
                 setTimeframe(t.key);
                 setHoveredIndex(null);
               }}
-              className={`px-3 py-1.5 text-xs rounded-full cursor-pointer transition-all shrink-0 font-medium ${
-                timeframe === t.key
+              className={`px-3 py-1.5 text-xs rounded-full cursor-pointer transition-all shrink-0 font-medium ${timeframe === t.key
                   ? "bg-primary text-primary-foreground font-semibold shadow-2xs"
                   : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-              }`}
+                }`}
             >
               {t.label}
             </button>
@@ -249,33 +259,30 @@ export function InteractiveRevenueChart({ onPointHover }: InteractiveRevenueChar
           <button
             type="button"
             onClick={() => setMetric("revenue")}
-            className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium ${
-              metric === "revenue"
+            className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium ${metric === "revenue"
                 ? "bg-background text-foreground shadow-2xs font-semibold"
                 : "text-muted-foreground hover:text-foreground"
-            }`}
+              }`}
           >
             Doanh thu
           </button>
           <button
             type="button"
             onClick={() => setMetric("orders")}
-            className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium ${
-              metric === "orders"
+            className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium ${metric === "orders"
                 ? "bg-background text-foreground shadow-2xs font-semibold"
                 : "text-muted-foreground hover:text-foreground"
-            }`}
+              }`}
           >
             Số thí sinh
           </button>
           <button
             type="button"
             onClick={() => setMetric("both")}
-            className={`px-2.5 py-1 text-xs rounded-full cursor-pointer transition-all font-medium ${
-              metric === "both"
+            className={`px-2.5 py-1 text-xs rounded-full cursor-pointer transition-all font-medium ${metric === "both"
                 ? "bg-background text-foreground shadow-2xs font-semibold"
                 : "text-muted-foreground hover:text-foreground"
-            }`}
+              }`}
           >
             Song song
           </button>
@@ -381,9 +388,8 @@ export function InteractiveRevenueChart({ onPointHover }: InteractiveRevenueChar
               x={cp.x}
               y={svgHeight - 12}
               textAnchor="middle"
-              className={`text-[11px] font-mono transition-colors ${
-                hoveredIndex === idx ? "fill-foreground font-bold text-xs" : "fill-muted-foreground"
-              }`}
+              className={`text-[11px] font-mono transition-colors ${hoveredIndex === idx ? "fill-foreground font-bold text-xs" : "fill-muted-foreground"
+                }`}
             >
               {cp.point.label}
             </text>

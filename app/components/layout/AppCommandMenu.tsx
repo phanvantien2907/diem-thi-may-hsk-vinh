@@ -163,7 +163,7 @@ export function AppCommandMenu({
                 onSelect={() => handleSelect(() => navigate("/trang-quan-tri"))}
               >
                 <AlertTriangleIcon className="size-4 text-amber-500" />
-                <span>Cảnh báo Giao dịch Ngoại lệ PayOS</span>
+                <span>Cảnh báo giao dịch ngoại lệ PayOS</span>
               </CommandItem>
 
               <CommandItem

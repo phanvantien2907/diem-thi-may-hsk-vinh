@@ -12,12 +12,10 @@ import {
   LogOutIcon,
   SearchIcon,
   HistoryIcon,
-  SparklesIcon,
   SettingsIcon,
 } from "lucide-react";
 import { LogoutDialog } from "~/components/layout/logout-dialog";
 import { AdminAuditLogDialog } from "~/components/layout/AdminAuditLogDialog";
-import { toast } from "~/components/ui/toast";
 import { Badge } from "~/components/ui/badge";
 import { cn } from "~/lib/utils";
 
@@ -92,25 +90,7 @@ export function AdminSidebar({ user, onOpenCommand }: AdminSidebarProps) {
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = React.useState(false);
   const [isAuditLogOpen, setIsAuditLogOpen] = React.useState(false);
 
-  const handleClearCache = React.useCallback(() => {
-    try {
-      sessionStorage.clear();
-      const keysToKeep = ["session", "theme", "user_info"];
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const key = localStorage.key(i);
-        if (key && !keysToKeep.includes(key)) {
-          localStorage.removeItem(key);
-        }
-      }
-    } catch (err) {
-      console.error("Lỗi khi xóa bộ nhớ đệm:", err);
-    }
-    toast.add({
-      type: "success",
-      title: "Đã làm sạch bộ nhớ đệm!",
-      description: "Dữ liệu đệm trình duyệt, phiên tạm và cache truy vấn đã được giải phóng.",
-    });
-  }, []);
+
 
   return (
     <Sidebar collapsible="icon" className="border-r">
@@ -353,13 +333,7 @@ export function AdminSidebar({ user, onOpenCommand }: AdminSidebarProps) {
                     <span>Lịch sử thao tác của tôi</span>
                   </DropdownMenuItem>
 
-                  <DropdownMenuItem
-                    onClick={handleClearCache}
-                    className="cursor-pointer rounded-xl gap-2 text-xs"
-                  >
-                    <SparklesIcon className="size-4 text-amber-500" aria-hidden="true" />
-                    <span>Xóa bộ nhớ đệm</span>
-                  </DropdownMenuItem>
+
                 </DropdownMenuGroup>
 
                 <DropdownMenuSeparator />

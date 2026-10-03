@@ -20,18 +20,38 @@ export interface LevelItem {
 }
 
 export const HSK_LEVELS_DATA: LevelItem[] = [
-  { id: "hsk4", name: "HSK 4 & HSKK Trung cấp", shortName: "HSK 4", candidates: 420, revenue: 357000000, totalSeats: 450, color: "#10b981" },
-  { id: "hsk5", name: "HSK 5 & HSKK Cao cấp", shortName: "HSK 5", candidates: 350, revenue: 367500000, totalSeats: 400, color: "#3b82f6" },
-  { id: "hsk3", name: "HSK 3 & HSKK Sơ cấp", shortName: "HSK 3", candidates: 280, revenue: 182000000, totalSeats: 300, color: "#f59e0b" },
-  { id: "hsk6", name: "HSK 6 & HSKK Cao cấp", shortName: "HSK 6", candidates: 154, revenue: 192500000, totalSeats: 200, color: "#8b5cf6" },
-  { id: "hskk", name: "HSKK Khẩu ngữ độc lập", shortName: "HSKK", candidates: 80, revenue: 60000000, totalSeats: 120, color: "#ec4899" },
+  { id: "hsk4", name: "HSK 4", shortName: "HSK 4", candidates: 420, revenue: 357000000, totalSeats: 450, color: "#10b981" },
+  { id: "hsk5", name: "HSK 5", shortName: "HSK 5", candidates: 350, revenue: 367500000, totalSeats: 400, color: "#3b82f6" },
+  { id: "hsk3", name: "HSK 3", shortName: "HSK 3", candidates: 280, revenue: 182000000, totalSeats: 300, color: "#f59e0b" },
+  { id: "hsk6", name: "HSK 6", shortName: "HSK 6", candidates: 154, revenue: 192500000, totalSeats: 200, color: "#8b5cf6" },
+  { id: "hskk", name: "HSKK", shortName: "HSKK", candidates: 80, revenue: 60000000, totalSeats: 120, color: "#ec4899" },
 ];
 
-export function HskLevelDonutChart() {
+export interface HskLevelDonutChartProps {
+  initialData?: any[];
+}
+
+export function HskLevelDonutChart({ initialData }: HskLevelDonutChartProps) {
   const [activeId, setActiveId] = React.useState<string>("hsk4");
 
-  const totalCandidates = HSK_LEVELS_DATA.reduce((sum, item) => sum + item.candidates, 0);
-  const activeLevel = HSK_LEVELS_DATA.find((item) => item.id === activeId) || HSK_LEVELS_DATA[0];
+  const displayData = React.useMemo(() => {
+    if (initialData && initialData.length > 0) {
+      const colors = ["#10b981", "#3b82f6", "#f59e0b", "#8b5cf6", "#ec4899", "#6366f1", "#14b8a6"];
+      return initialData.map((d, i) => ({
+        id: `hsk_${i}`,
+        name: d.level,
+        shortName: d.level,
+        candidates: d.candidates,
+        revenue: d.revenue || 0,
+        totalSeats: d.candidates + 20, // Tạm tính capacity dựa trên số candidates
+        color: colors[i % colors.length]
+      }));
+    }
+    return HSK_LEVELS_DATA;
+  }, [initialData]);
+
+  const totalCandidates = displayData.reduce((sum, item) => sum + item.candidates, 0);
+  const activeLevel = displayData.find((item) => item.id === activeId) || displayData[0];
 
   // Tính toán chu vi vòng tròn Donut
   const radius = 68;
@@ -40,7 +60,7 @@ export function HskLevelDonutChart() {
 
   // Tính dasharray và offset cho từng lát cắt
   let cumulativePercent = 0;
-  const slices = HSK_LEVELS_DATA.map((item) => {
+  const slices = displayData.map((item) => {
     const percent = item.candidates / totalCandidates;
     const strokeDasharray = `${percent * circumference} ${circumference}`;
     const strokeDashoffset = -cumulativePercent * circumference;
@@ -110,7 +130,7 @@ export function HskLevelDonutChart() {
 
         {/* Level List Selector */}
         <div className="flex flex-col gap-2 w-full max-w-xs">
-          {HSK_LEVELS_DATA.map((item) => {
+          {displayData.map((item) => {
             const isSelected = item.id === activeId;
             const pct = Math.round((item.candidates / item.totalSeats) * 100);
 

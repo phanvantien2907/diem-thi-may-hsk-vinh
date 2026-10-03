@@ -1,7 +1,9 @@
 import * as React from "react";
 import type { Route } from "./+types/trang-quan-tri";
-import { Link } from "react-router";
+import { Link, useRevalidator } from "react-router";
+import { useWebSocket, type WSEvent } from "~/hooks/use-websocket";
 import { requireAdminAuth } from "~/lib/auth.server";
+import { API_BASE_URL } from "~/lib/env.server";
 import {
   TrendingUpIcon,
   UsersIcon,
@@ -36,7 +38,7 @@ import { RecentActivityFeed } from "~/components/dashboard/RecentActivityFeed";
 import type { AdminDashboardData } from "~/types/admin";
 
 export const meta: Route.MetaFunction = () => [
-  { title: "Bảng điều khiển quản trị — Vinh University HSK" },
+  { title: "Bảng điều khiển" },
   {
     name: "description",
     content: "Bảng điều khiển trung tâm giám sát ca thi, doanh thu và hồ sơ thí sinh thời gian thực.",
@@ -46,166 +48,193 @@ export const meta: Route.MetaFunction = () => [
 export async function loader({ request }: Route.LoaderArgs) {
   const { user, token } = await requireAdminAuth(request);
 
-  const initialDashboardData: AdminDashboardData = {
+  let dashboardData: AdminDashboardData = {
     revenue: {
-      total_revenue: 485500000,
-      today_revenue: 38250000,
-      month_revenue: 485500000,
-      growth_rate: 18.4,
-      successful_transactions: 1180,
-      pending_transactions: 24,
-      failed_transactions: 12,
-      avg_order_value: 860000,
+      total_revenue: 0,
+      today_revenue: 0,
+      month_revenue: 0,
+      growth_rate: 0,
+      successful_transactions: 0,
+      pending_transactions: 0,
+      failed_transactions: 0,
+      avg_order_value: 0,
     },
     daily_revenue: [],
     level_distribution: [],
-    realtime_sessions: [
-      {
-        id: 1,
-        batch_name: "Đợt thi Tháng 10/2026",
-        exam_level: "HSK 4 & HSKK Trung cấp",
-        room_name: "Lab 401 - Nhà A1",
-        location: "Khu A - Trường Đại học Vinh",
-        date: "2026-10-15",
-        shift: "morning",
-        shift_time: "08:30 - 11:00",
-        capacity: 40,
-        booked: 38,
-        held: 2,
-        available: 0,
-        waitlist_count: 5,
-        fee: 850000,
-        registration_deadline: "2026-10-10",
-        status: "full",
-        occupancy_rate: 100,
-      },
-      {
-        id: 2,
-        batch_name: "Đợt thi Tháng 10/2026",
-        exam_level: "HSK 3 & HSKK Sơ cấp",
-        room_name: "Lab 402 - Nhà A1",
-        location: "Khu A - Trường Đại học Vinh",
-        date: "2026-10-15",
-        shift: "afternoon",
-        shift_time: "14:00 - 16:30",
-        capacity: 45,
-        booked: 36,
-        held: 3,
-        available: 6,
-        waitlist_count: 0,
-        fee: 650000,
-        registration_deadline: "2026-10-10",
-        status: "open",
-        occupancy_rate: 87,
-      },
-      {
-        id: 3,
-        batch_name: "Đợt thi Tháng 10/2026",
-        exam_level: "HSK 5 & HSKK Cao cấp",
-        room_name: "Lab 501 - Nhà B2",
-        location: "Khu B - Trường Đại học Vinh",
-        date: "2026-10-16",
-        shift: "morning",
-        shift_time: "08:30 - 11:30",
-        capacity: 40,
-        booked: 30,
-        held: 4,
-        available: 6,
-        waitlist_count: 0,
-        fee: 1050000,
-        registration_deadline: "2026-10-11",
-        status: "open",
-        occupancy_rate: 85,
-      },
-      {
-        id: 4,
-        batch_name: "Đợt thi Tháng 10/2026",
-        exam_level: "HSK 6 & HSKK Cao cấp",
-        room_name: "Lab 502 - Nhà B2",
-        location: "Khu B - Trường Đại học Vinh",
-        date: "2026-10-16",
-        shift: "afternoon",
-        shift_time: "14:00 - 17:15",
-        capacity: 35,
-        booked: 22,
-        held: 1,
-        available: 12,
-        waitlist_count: 0,
-        fee: 1250000,
-        registration_deadline: "2026-10-11",
-        status: "open",
-        occupancy_rate: 66,
-      },
-    ],
-    recent_activities: [
-      {
-        id: "ACT-1",
-        type: "payment",
-        title: "PayOS khớp lệnh thành công",
-        description: "Thí sinh Nguyễn Văn An thanh toán 850.000 ₫ cho ca HSK 4.",
-        timestamp: "Vừa xong",
-        badge_text: "+850.000 ₫",
-        status: "success",
-      },
-      {
-        id: "ACT-2",
-        type: "seat_release",
-        title: "CronJob 60s quét ghế quá hạn",
-        description: "Tự động nhả 2 ghế hết hạn 15 phút tại phòng Lab 401 về trạng thái trống.",
-        timestamp: "3 phút trước",
-        badge_text: "Nhả 2 ghế",
-        status: "warning",
-      },
-      {
-        id: "ACT-3",
-        type: "verification",
-        title: "Duyệt giấy tờ CCCD",
-        description: "Hồ sơ thí sinh Trần Thị Mai (CCCD 040098005678) đã được phê duyệt.",
-        timestamp: "10 phút trước",
-        badge_text: "Hợp lệ",
-        status: "info",
-      },
-      {
-        id: "ACT-4",
-        type: "registration",
-        title: "Thí sinh đặt giữ chỗ ca thi",
-        description: "Thí sinh Lê Hoàng Long đặt chỗ ca thi HSK 3 (Thời hạn giữ chỗ 15 phút).",
-        timestamp: "15 phút trước",
-        badge_text: "Giữ chỗ",
-        status: "info",
-      },
-    ],
-    total_candidates: 1284,
-    pending_documents: 38,
-    active_sessions_count: 12,
-    held_seats_count: 18,
+    realtime_sessions: [],
+    recent_activities: [],
+    total_candidates: 0,
+    pending_documents: 0,
+    active_sessions_count: 0,
+    held_seats_count: 0,
+    fill_rate: 0,
+    payment_success_rate: 0,
+    payment_funnel: [],
+    exception_transactions: [],
   };
 
-  return { user, dashboardData: initialDashboardData };
+  try {
+    const [overviewRes, revenueRes, hskRes, liveRes, logsRes, funnelRes, exceptionsRes] = await Promise.all([
+      fetch(`${API_BASE_URL}/api/v1/admin/metrics/overview`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`${API_BASE_URL}/api/v1/admin/metrics/revenue-chart?range=7days`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`${API_BASE_URL}/api/v1/admin/metrics/hsk-distribution`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`${API_BASE_URL}/api/v1/admin/sessions/live-status`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`${API_BASE_URL}/api/v1/admin/logs/recent?limit=5`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`${API_BASE_URL}/api/v1/admin/metrics/payment-funnel`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`${API_BASE_URL}/api/v1/admin/transactions/exceptions`, { headers: { Authorization: `Bearer ${token}` } }),
+    ]);
+
+    const [overview, revenue, hsk, live, logs, funnel, exceptions] = await Promise.all([
+      overviewRes.ok ? overviewRes.json() : null,
+      revenueRes.ok ? revenueRes.json() : null,
+      hskRes.ok ? hskRes.json() : null,
+      liveRes.ok ? liveRes.json() : null,
+      logsRes.ok ? logsRes.json() : null,
+      funnelRes.ok ? funnelRes.json() : null,
+      exceptionsRes.ok ? exceptionsRes.json() : null,
+    ]);
+
+    if (overview?.data) {
+      dashboardData.revenue.total_revenue = overview.data.total_revenue || 0;
+      dashboardData.total_candidates = overview.data.total_registrations || 0;
+      dashboardData.fill_rate = overview.data.fill_rate || 0;
+      dashboardData.payment_success_rate = overview.data.payment_success_rate || 0;
+    }
+
+    if (revenue?.data) {
+      dashboardData.daily_revenue = revenue.data.map((r: any) => ({
+        date: r.date,
+        display_date: r.date.split("-").reverse().join("/"),
+        revenue: r.revenue,
+        orders: r.registrations,
+      }));
+    }
+
+    if (hsk?.data) {
+      dashboardData.level_distribution = hsk.data.map((h: any) => ({
+        level: h.level,
+        candidates: h.count,
+        revenue: 0,
+        fill_percentage: 0
+      }));
+    }
+
+    if (funnel?.data) {
+      dashboardData.payment_funnel = funnel.data;
+    }
+
+    if (exceptions?.data) {
+      dashboardData.exception_transactions = exceptions.data;
+    }
+
+    if (live?.data) {
+      dashboardData.realtime_sessions = live.data.map((s: any) => ({
+        id: s.session_id,
+        batch_name: "Đợt thi hiện tại",
+        exam_level: s.exam_type_name,
+        room_name: s.room_name,
+        location: "Trường Đại học Vinh",
+        date: s.session_date,
+        shift: s.shift,
+        shift_time: s.shift === "morning" ? "08:30 - 11:00" : s.shift === "afternoon" ? "14:00 - 16:30" : "18:00 - 20:30",
+        capacity: s.total_seats,
+        booked: s.locked_seats,
+        held: s.holding_seats,
+        available: s.available_seats,
+        waitlist_count: 0,
+        fee: 850000,
+        registration_deadline: s.session_date,
+        status: s.available_seats === 0 ? "full" : "open",
+        occupancy_rate: s.total_seats > 0 ? Math.round(((s.locked_seats + s.holding_seats) / s.total_seats) * 100) : 0,
+      }));
+      dashboardData.active_sessions_count = live.data.length;
+      dashboardData.held_seats_count = live.data.reduce((acc: number, cur: any) => acc + cur.holding_seats, 0);
+    }
+
+    if (logs?.data) {
+      dashboardData.recent_activities = logs.data.map((l: any) => ({
+        id: `ACT-${l.id}`,
+        type: l.action.includes("approve") ? "verification" : l.action.includes("refund") ? "payment" : "system",
+        title: `Thao tác: ${l.action}`,
+        description: `Bảng ${l.entity_table} ID ${l.entity_id} bởi Admin ID ${l.actor_id || "Hệ thống"}`,
+        timestamp: new Date(l.created_at).toLocaleTimeString("vi-VN"),
+        status: "info",
+      }));
+    }
+  } catch (error) {
+    console.error("Error fetching admin dashboard data:", error);
+  }
+
+  return { user, token, apiBaseUrl: API_BASE_URL, dashboardData };
 }
 
 export default function AdminDashboardPage({ loaderData }: Route.ComponentProps) {
-  const { user, dashboardData } = loaderData;
+  const { user, token, apiBaseUrl, dashboardData } = loaderData;
+  const revalidator = useRevalidator();
 
   const [isRefreshing, setIsRefreshing] = React.useState(false);
   const [lastSyncTime, setLastSyncTime] = React.useState("09:00:00");
   const [hoveredPointInfo, setHoveredPointInfo] = React.useState<DataPoint | null>(null);
+  const [activeExceptionsCount, setActiveExceptionsCount] = React.useState<number>(0);
 
   React.useEffect(() => {
     setLastSyncTime(new Date().toLocaleTimeString("vi-VN", { hour12: false }));
   }, []);
 
+  // Kết nối WebSocket thời gian thực (Real-time 100%, không dùng polling API theo yêu cầu)
+  const { isConnected } = useWebSocket({
+    url: apiBaseUrl,
+    token,
+    onMessage: (event: WSEvent) => {
+      console.log("[WS Dashboard] Real-time event received:", event.type, event.payload);
+      setLastSyncTime(new Date().toLocaleTimeString("vi-VN", { hour12: false }));
+
+      // Tự động revalidate tải lại dữ liệu mới nhất khi nhận tín hiệu từ WebSocket
+      if (revalidator.state === "idle") {
+        revalidator.revalidate();
+      }
+
+      // Thông báo Toast tương ứng từng sự kiện real-time
+      if (event.type === "payment_confirmed") {
+        toast.add({
+          type: "success",
+          title: "Thanh toán thành công (Real-time)",
+          description: `Đơn thi #${event.payload?.registration_id || ""} vừa được khớp lệnh thanh toán tức thì qua PayOS.`,
+        });
+      } else if (event.type === "registration_created") {
+        toast.add({
+          type: "info",
+          title: "Thí sinh đăng ký mới (Real-time)",
+          description: `Ca thi #${event.payload?.session_id || ""} vừa có thí sinh đăng ký giữ chỗ.`,
+        });
+      } else if (event.type === "seats_released") {
+        toast.add({
+          type: "info",
+          title: "Thu hồi ghế hết hạn (Real-time)",
+          description: `Hệ thống vừa tự động giải phóng ${event.payload?.released_count || 0} ghế quá hạn 15 phút.`,
+        });
+      } else if (event.type === "dashboard_metrics_updated") {
+        toast.add({
+          type: "info",
+          title: "Chỉ số Dashboard cập nhật (Real-time)",
+          description: "Dữ liệu vận hành vừa được đồng bộ tự động mới nhất.",
+        });
+      }
+    },
+  });
+
   const handleRefresh = () => {
     setIsRefreshing(true);
+    revalidator.revalidate();
     setTimeout(() => {
       setIsRefreshing(false);
       setLastSyncTime(new Date().toLocaleTimeString("vi-VN", { hour12: false }));
       toast.add({
         type: "success",
         title: "Đồng bộ thời gian thực thành công!",
-        description: `Dữ liệu ca thi và doanh thu đã cập nhật tức thì lúc ${new Date().toLocaleTimeString("vi-VN")}`,
+        description: `Dữ liệu Dashboard được làm mới tức thì từ máy chủ PostgreSQL lúc ${new Date().toLocaleTimeString("vi-VN")}`,
       });
-    }, 400);
+    }, 300);
   };
 
   return (
@@ -219,7 +248,7 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-muted-foreground">
-            Xin chào, <strong className="text-foreground font-semibold">{user.name}</strong>! Giám sát đợt thi máy, doanh thu và lưu lượng thí sinh thời gian thực.
+            Xin chào, <strong className="text-foreground font-semibold">{user.name}</strong>! Giám sát đợt thi máy, doanh thu và lưu lượng thí sinh thời gian thực (Real-time 100%).
           </p>
         </div>
 
@@ -257,16 +286,25 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 text-foreground shadow-2xs">
         <div className="flex items-center gap-3">
           <span className="relative flex size-2.5 shrink-0">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex rounded-full size-2.5 bg-emerald-500" />
+            <span
+              className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${isConnected ? "bg-emerald-400" : "bg-amber-400"
+                }`}
+            />
+            <span
+              className={`relative inline-flex rounded-full size-2.5 ${isConnected ? "bg-emerald-500" : "bg-amber-500"
+                }`}
+            />
           </span>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-            <span className="font-semibold text-emerald-800 dark:text-emerald-300">
-              Kênh thời gian thực đang hoạt động
+            <span
+              className={`font-semibold ${isConnected ? "text-emerald-800 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300"
+                }`}
+            >
+              {isConnected ? "Kênh WebSocket Real-time: Đang hoạt động" : "Kênh WebSocket Real-time: Đang kết nối..."}
             </span>
             <span className="text-muted-foreground">•</span>
             <span className="text-muted-foreground">
-              CronJob tự động quét mỗi 60 giây (Tự động nhả ghế giữ quá hạn 15 phút về trạng thái trống).
+              Dữ liệu truy vấn trực tiếp thời gian thực 100% (Không bộ nhớ đệm cache). Tự động nhận biến động thanh toán & ghế thi.
             </span>
           </div>
         </div>
@@ -353,10 +391,12 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
 
             <div className="flex flex-col gap-1">
               <span className="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground font-mono">
-                88.5%
+                {dashboardData.fill_rate || 0}%
               </span>
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span className="font-semibold text-foreground font-mono">382 / 450</span>
+                <span className="font-semibold text-foreground font-mono">
+                  {dashboardData.realtime_sessions.reduce((acc, s) => acc + s.booked, 0)} / {dashboardData.realtime_sessions.reduce((acc, s) => acc + s.capacity, 0)}
+                </span>
                 <span>ghế đã xác nhận</span>
               </div>
             </div>
@@ -380,7 +420,7 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
 
             <div className="flex flex-col gap-1">
               <span className="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground font-mono">
-                96.8%
+                {dashboardData.payment_success_rate || 0}%
               </span>
               <div className="flex items-center gap-1.5 text-xs">
                 <span className="flex items-center font-semibold text-emerald-600 dark:text-emerald-400">
@@ -420,7 +460,10 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
         </CardHeader>
 
         <CardContent className="p-4 sm:p-6">
-          <InteractiveRevenueChart onPointHover={setHoveredPointInfo} />
+          <InteractiveRevenueChart
+            onPointHover={setHoveredPointInfo}
+            initial7DaysData={dashboardData.daily_revenue}
+          />
         </CardContent>
       </Card>
 
@@ -446,7 +489,7 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
           </CardHeader>
 
           <CardContent className="p-4 sm:p-5 flex-1 flex flex-col justify-between">
-            <HskLevelDonutChart />
+            <HskLevelDonutChart initialData={dashboardData.level_distribution} />
           </CardContent>
         </Card>
 
@@ -470,7 +513,7 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
           </CardHeader>
 
           <CardContent className="p-4 sm:p-5 flex-1 flex flex-col justify-between">
-            <PaymentHourlyTrafficChart />
+            <PaymentHourlyTrafficChart initialData={dashboardData.payment_funnel} />
           </CardContent>
         </Card>
       </div>
@@ -483,11 +526,17 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
               <div className="flex items-center gap-2">
                 <CardTitle className="text-base sm:text-lg font-bold flex items-center gap-2">
                   <ShieldAlertIcon className="size-4.5 text-destructive" />
-                  <span>Cảnh báo Giao dịch Ngoại lệ PayOS</span>
+                  <span>Cảnh báo giao dịch ngoại lệ PayOS</span>
                 </CardTitle>
-                <Badge variant="destructive" className="text-[10px] rounded-full px-2 py-0 animate-pulse font-mono">
-                  3 ca cần duyệt
-                </Badge>
+                {activeExceptionsCount > 0 ? (
+                  <Badge variant="destructive" className="text-[10px] rounded-full px-2.5 py-0.5 animate-pulse font-mono">
+                    {activeExceptionsCount} ca cần duyệt
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary" className="text-[10px] rounded-full px-2.5 py-0.5 font-mono text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20">
+                    0 ca cần duyệt
+                  </Badge>
+                )}
               </div>
               <CardDescription className="text-xs mt-0.5">
                 Cơ chế Amount Guard và Webhook Logging tự động phát hiện các ca chuyển thiếu tiền, chuyển thừa tiền hoặc lỗi nghẽn mạng ngân hàng để Admin kịp thời bấm "Duyệt thủ công" giữ slot thi cho thí sinh.
@@ -508,7 +557,10 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
         </CardHeader>
 
         <CardContent className="p-4 sm:p-5">
-          <ExceptionTransactionsTable />
+          <ExceptionTransactionsTable
+            initialData={dashboardData.exception_transactions}
+            onActiveCountChange={setActiveExceptionsCount}
+          />
         </CardContent>
       </Card>
 

@@ -1,8 +1,3 @@
-/**
- * Types and DTOs for Admin Management & Dashboard
- * Based on API_DOCUMENTATION.md (v1.0.0)
- */
-
 export interface ExamSessionDashboardDTO {
   session_id: number;
   capacity: number;
@@ -79,4 +74,8 @@ export interface AdminDashboardData {
   pending_documents: number;
   active_sessions_count: number;
   held_seats_count: number;
+  fill_rate: number;
+  payment_success_rate: number;
+  payment_funnel: any[];
+  exception_transactions: any[];
 }

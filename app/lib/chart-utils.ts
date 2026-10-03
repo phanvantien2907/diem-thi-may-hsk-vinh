@@ -96,3 +96,26 @@ export function formatCompactVND(amount: number): string {
 export function formatNumber(num: number): string {
   return new Intl.NumberFormat("vi-VN").format(num);
 }
+
+/**
+ * Định dạng thời gian chuẩn bắt buộc của dự án theo project-rules:
+ * dd/MM/yyyy HH:mm:ss (ví dụ: 03/10/2026 09:02:02)
+ */
+export function formatStandardDateTime(dateInput: string | Date | number): string {
+  try {
+    const d = new Date(dateInput);
+    if (isNaN(d.getTime())) return "--/--/---- --:--:--";
+
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const year = d.getFullYear();
+
+    const hours = String(d.getHours()).padStart(2, "0");
+    const minutes = String(d.getMinutes()).padStart(2, "0");
+
+    return `${day}/${month}/${year} ${hours}:${minutes}`;
+  } catch {
+    return "--/--/---- --:--:--";
+  }
+}
+

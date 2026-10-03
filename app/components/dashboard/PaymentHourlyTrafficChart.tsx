@@ -29,10 +29,27 @@ const HOURLY_TRAFFIC: HourlyPoint[] = [
   { hour: "20h", timeSlot: "20:00 - 21:00", successful: 35, expired: 2, revenue: 30800000 },
 ];
 
-export function PaymentHourlyTrafficChart() {
-  const [activeSlot, setActiveSlot] = React.useState<HourlyPoint>(HOURLY_TRAFFIC[4]); // 14h default
+export interface PaymentHourlyTrafficChartProps {
+  initialData?: any[];
+}
 
-  const maxSuccess = Math.max(...HOURLY_TRAFFIC.map((h) => h.successful));
+export function PaymentHourlyTrafficChart({ initialData }: PaymentHourlyTrafficChartProps) {
+  const displayData = React.useMemo(() => {
+    if (initialData && initialData.length > 0) {
+      return initialData.map((d: any) => ({
+        hour: `${String(d.hour).padStart(2, "0")}h`,
+        timeSlot: `${String(d.hour).padStart(2, "0")}:00 - ${String(d.hour + 1).padStart(2, "0")}:00`,
+        successful: d.success,
+        expired: d.cancelled,
+        revenue: d.success * 850000 // Tạm tính revenue = success * lệ phí trung bình
+      }));
+    }
+    return HOURLY_TRAFFIC;
+  }, [initialData]);
+
+  const [activeSlot, setActiveSlot] = React.useState<HourlyPoint>(displayData.length > 4 ? displayData[4] : displayData[0]);
+
+  const maxSuccess = Math.max(...displayData.map((h) => h.successful));
 
   return (
     <div className="flex flex-col gap-4 w-full h-full justify-between">
@@ -44,13 +61,13 @@ export function PaymentHourlyTrafficChart() {
             Lưu lượng thanh toán theo khung giờ trong ngày
           </span>
           <span className="text-[11px] text-muted-foreground font-mono">
-            Đỉnh: {HOURLY_TRAFFIC[4].timeSlot}
+            Đỉnh: {displayData.length > 4 ? displayData[4].timeSlot : (displayData[0]?.timeSlot || "")}
           </span>
         </div>
 
         {/* Bars Container */}
         <div className="flex items-end gap-2 h-36 pt-4 pb-1 border-b">
-          {HOURLY_TRAFFIC.map((slot) => {
+          {displayData.map((slot) => {
             const heightPercent = Math.round((slot.successful / maxSuccess) * 100);
             const isSelected = activeSlot.hour === slot.hour;
 

@@ -26,6 +26,10 @@ export default [
 
   route("dang-xuat", "routes/dang-xuat.tsx"),
 
+  // ── API routes ────────────────────────────────────────────────────────────
+  route("internal/admin/system/clear-cache", "routes/internal.admin.system.clear-cache.ts"),
+  route("internal/admin/users/me/audit-log", "routes/internal.admin.users.me.audit-log.ts"),
+
   // ── Catch-all 404 route ───────────────────────────────────────────────────
   route("*", "routes/$.tsx"),
 ] satisfies RouteConfig;

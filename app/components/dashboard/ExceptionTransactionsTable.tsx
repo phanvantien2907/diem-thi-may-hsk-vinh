@@ -1,5 +1,5 @@
 import * as React from "react";
-import { formatVND } from "~/lib/chart-utils";
+import { formatVND, formatStandardDateTime } from "~/lib/chart-utils";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -58,7 +58,7 @@ export interface ExceptionTransaction {
   candidatePhone: string;
   candidateCccd: string;
   examLevel: string;
-  roomName: string;
+  sessionName: string;
   expectedAmount: number;
   actualAmount: number;
   diffAmount: number;
@@ -78,13 +78,13 @@ const INITIAL_EXCEPTIONS: ExceptionTransaction[] = [
     candidatePhone: "0912 345 678",
     candidateCccd: "038099001234",
     examLevel: "HSK 4 & HSKK Trung cấp",
-    roomName: "Lab 401 - Nhà A1",
+    sessionName: "Ca thi sáng 03/10/2026",
     expectedAmount: 850000,
     actualAmount: 85000,
     diffAmount: -765000,
     type: "underpaid",
     bankName: "MBBank (VietQR)",
-    timestamp: "8 phút trước",
+    timestamp: "03/10/2026 09:30:15",
     rawWebhookPayload: {
       orderCode: 100258,
       amount: 85000,
@@ -105,13 +105,13 @@ const INITIAL_EXCEPTIONS: ExceptionTransaction[] = [
     candidatePhone: "0987 654 321",
     candidateCccd: "040098005678",
     examLevel: "HSK 3 & HSKK Sơ cấp",
-    roomName: "Lab 402 - Nhà A1",
+    sessionName: "Ca thi sáng 03/10/2026",
     expectedAmount: 650000,
     actualAmount: 1300000,
     diffAmount: 650000,
     type: "overpaid",
     bankName: "Vietcombank",
-    timestamp: "15 phút trước",
+    timestamp: "03/10/2026 09:15:20",
     rawWebhookPayload: {
       orderCode: 100256,
       amount: 1300000,
@@ -132,13 +132,13 @@ const INITIAL_EXCEPTIONS: ExceptionTransaction[] = [
     candidatePhone: "0934 567 890",
     candidateCccd: "038097009876",
     examLevel: "HSK 5 & HSKK Cao cấp",
-    roomName: "Lab 501 - Nhà B2",
+    sessionName: "Ca thi chiều 03/10/2026",
     expectedAmount: 1050000,
-    actualAmount: 1050000,
-    diffAmount: 0,
+    actualAmount: 0,
+    diffAmount: -1050000,
     type: "webhook_timeout",
     bankName: "VietinBank",
-    timestamp: "22 phút trước (Sắp hết 15p giữ slot)",
+    timestamp: "03/10/2026 08:55:00",
     rawWebhookPayload: {
       orderCode: 100252,
       amount: 1050000,
@@ -149,7 +149,7 @@ const INITIAL_EXCEPTIONS: ExceptionTransaction[] = [
       errorCode: 504,
       errorMsg: "Gateway timeout. Ngân hàng đã trừ tiền nhưng Webhook IPN bị rớt gói tin",
     },
-    note: "Ngân hàng đã trừ 1.050.000 đ, thí sinh đã có biên lai nhưng hệ thống chưa kích hoạt ghế",
+    note: "Thí sinh đã có biên lai nhưng PayOS chưa đẩy webhook xác nhận (Quá 15p giữ slot)",
   },
   {
     id: "EX-104",
@@ -159,13 +159,13 @@ const INITIAL_EXCEPTIONS: ExceptionTransaction[] = [
     candidatePhone: "0961 234 567",
     candidateCccd: "038099003322",
     examLevel: "HSK 6 & HSKK Cao cấp",
-    roomName: "Lab 502 - Nhà B2",
+    sessionName: "Ca thi chiều 03/10/2026",
     expectedAmount: 1250000,
     actualAmount: 1200000,
     diffAmount: -50000,
     type: "underpaid",
     bankName: "BIDV",
-    timestamp: "32 phút trước",
+    timestamp: "03/10/2026 08:45:10",
     rawWebhookPayload: {
       orderCode: 100249,
       amount: 1200000,
@@ -174,7 +174,7 @@ const INITIAL_EXCEPTIONS: ExceptionTransaction[] = [
       errorCode: -2,
       errorMsg: "Thiếu 50.000 đ so với biểu phí chuẩn HSK 6 (1.250.000 đ)",
     },
-    note: "Thí sinh nhớ nhầm biểu phí năm ngoái",
+    note: "Thí sinh chuyển thiếu 50.000 đ so với quy định",
   },
   {
     id: "EX-105",
@@ -184,22 +184,21 @@ const INITIAL_EXCEPTIONS: ExceptionTransaction[] = [
     candidatePhone: "0977 889 900",
     candidateCccd: "042098004567",
     examLevel: "HSK 4 & HSKK Trung cấp",
-    roomName: "Lab 401 - Nhà A1",
+    sessionName: "Ca thi sáng 03/10/2026",
     expectedAmount: 850000,
     actualAmount: 850000,
     diffAmount: 0,
-    type: "webhook_timeout",
+    type: "resolved",
     bankName: "Techcombank",
-    timestamp: "45 phút trước",
+    timestamp: "03/10/2026 08:20:45",
     rawWebhookPayload: {
       orderCode: 100246,
       amount: 850000,
       description: "Thanh toan HSK4 Hoang Duc Thang",
       bank: "TCB",
-      errorCode: 500,
-      errorMsg: "Internal Server Error khi xử lý callback từ ngân hàng",
+      status: "success",
     },
-    note: "Đã trừ tiền ngân hàng Techcombank nhưng Webhook callback bị lỗi 500",
+    note: "Đã khớp 100% lệ phí ca thi",
   },
   {
     id: "EX-106",
@@ -209,13 +208,13 @@ const INITIAL_EXCEPTIONS: ExceptionTransaction[] = [
     candidatePhone: "0915 678 123",
     candidateCccd: "038096007788",
     examLevel: "HSK 3 & HSKK Sơ cấp",
-    roomName: "Lab 402 - Nhà A1",
+    sessionName: "Ca thi sáng 03/10/2026",
     expectedAmount: 650000,
     actualAmount: 1050000,
     diffAmount: 400000,
     type: "overpaid",
     bankName: "Agribank",
-    timestamp: "1 giờ trước",
+    timestamp: "03/10/2026 07:50:30",
     rawWebhookPayload: {
       orderCode: 100244,
       amount: 1050000,
@@ -234,24 +233,120 @@ const INITIAL_EXCEPTIONS: ExceptionTransaction[] = [
     candidatePhone: "0982 112 233",
     candidateCccd: "040099002233",
     examLevel: "HSK 4 & HSKK Trung cấp",
-    roomName: "Lab 401 - Nhà A1",
+    sessionName: "Ca thi sáng 03/10/2026",
     expectedAmount: 850000,
     actualAmount: 850000,
     diffAmount: 0,
     type: "resolved",
     bankName: "MBBank",
-    timestamp: "1 giờ 15 phút trước",
+    timestamp: "03/10/2026 07:15:00",
     rawWebhookPayload: {
       orderCode: 100240,
       amount: 850000,
       status: "manually_resolved",
     },
-    note: "Đã duyệt thủ công bởi Admin (Biên lai ngân hàng hợp lệ)",
+    note: "Đã duyệt thủ công bởi quản trị viên",
   },
 ];
 
-export function ExceptionTransactionsTable() {
-  const [exceptions, setExceptions] = React.useState<ExceptionTransaction[]>(INITIAL_EXCEPTIONS);
+export interface ExceptionTransactionsTableProps {
+  initialData?: any[];
+  onActiveCountChange?: (count: number) => void;
+}
+
+export function ExceptionTransactionsTable({ initialData, onActiveCountChange }: ExceptionTransactionsTableProps) {
+  const displayData = React.useMemo(() => {
+    if (initialData && initialData.length > 0) {
+      return initialData.map((d: any) => {
+        const expected = Number(d.expected_amount) || 0;
+        const actual = Number(d.actual_amount !== null && d.actual_amount !== undefined ? d.actual_amount : 0);
+        const diff = actual - expected;
+        const status = (d.status || "").toLowerCase();
+        const excType = (d.exception_type || "").toLowerCase();
+
+        // Chuẩn đoán logic: Chỉ cảnh báo với các ngoại lệ thật sự cần thiết
+        let type: ExceptionType = "resolved";
+        let note = "Đã khớp 100% lệ phí ca thi";
+
+        if (status === "success" || status === "completed" || status === "paid" || (actual > 0 && diff === 0)) {
+          // Giao dịch đã thành công hoặc khớp số tiền 100%
+          type = "resolved";
+          note = "Đã khớp 100% lệ phí ca thi";
+        } else if (actual > 0 && diff < 0) {
+          type = "underpaid";
+          note = `Thiếu ${formatVND(Math.abs(diff))} (Amount Guard)`;
+        } else if (actual > 0 && diff > 0) {
+          type = "overpaid";
+          note = `Chuyển thừa ${formatVND(diff)} (Cần hoàn dư)`;
+        } else if (excType === "quá hạn thanh toán" || excType.includes("timeout") || excType.includes("quá hạn") || status === "pending") {
+          type = "webhook_timeout";
+          note = "Chờ Webhook PayOS (Quá 15p giữ slot)";
+        } else if (status === "failed" || excType === "webhook_failed") {
+          // Giao dịch thất bại / lỗi cổng PayOS
+          if (actual === 0) {
+            type = "webhook_timeout";
+            note = "Lỗi Webhook / Chưa nhận tiền PayOS";
+          } else {
+            type = "resolved";
+            note = "Đã khớp 100% lệ phí ca thi";
+          }
+        } else {
+          type = "resolved";
+          note = "Đã xử lý";
+        }
+
+        // Phân giải tên cổng / ngân hàng cụ thể thay vì ghi "Ngân hàng" chung chung
+        let resolvedBankName = "PayOS";
+        if (d.bank_name && d.bank_name !== "Ngân hàng") {
+          resolvedBankName = d.bank_name;
+        } else if (d.rawWebhookPayload) {
+          const raw = d.rawWebhookPayload;
+          resolvedBankName = raw.counterAccountBankName || raw.bankName || raw.bank || (raw.gateway === "payos" ? "PayOS (VietQR)" : raw.gateway) || "PayOS (VietQR)";
+        } else if (d.bank && d.bank !== "Ngân hàng") {
+          resolvedBankName = d.bank;
+        } else if (d.payment_gateway || d.gateway) {
+          resolvedBankName = (d.payment_gateway || d.gateway).toLowerCase() === "payos" ? "PayOS (VietQR)" : (d.payment_gateway || d.gateway);
+        }
+
+        const formattedTimestamp = d.created_at ? formatStandardDateTime(d.created_at) : "--/--/---- --:--:--";
+
+        return {
+          id: `EX-${d.payment_id}`,
+          orderCode: d.transaction_ref || `PAY-${d.payment_id}`,
+          refCode: d.transaction_ref || `REF_${d.payment_id}`,
+          candidateName: d.candidate_name,
+          candidatePhone: d.candidate_phone || "",
+          candidateCccd: d.candidate_cccd || "",
+          examLevel: d.exam_type_name || d.exam_name || d.exam_session_name || d.session_name || d.exam_level || "Chưa có thông tin kỳ thi",
+          sessionName: d.exam_session_name || d.session_name || "Chưa xếp ca thi",
+          expectedAmount: expected,
+          actualAmount: actual,
+          diffAmount: diff,
+          type,
+          bankName: resolvedBankName,
+          timestamp: formattedTimestamp,
+          rawWebhookPayload: d,
+          note,
+        };
+      });
+    }
+    return INITIAL_EXCEPTIONS;
+  }, [initialData]);
+
+  const [exceptions, setExceptions] = React.useState<ExceptionTransaction[]>(displayData);
+
+  React.useEffect(() => {
+    setExceptions(displayData);
+  }, [displayData]);
+
+  // Cập nhật số ca chưa duyệt lên component cha (Real-time)
+  const unresolvedCount = React.useMemo(() => {
+    return exceptions.filter((e) => e.type !== "resolved").length;
+  }, [exceptions]);
+
+  React.useEffect(() => {
+    onActiveCountChange?.(unresolvedCount);
+  }, [unresolvedCount, onActiveCountChange]);
   const [filterType, setFilterType] = React.useState<"all" | ExceptionType>("all");
   const [searchQuery, setSearchQuery] = React.useState("");
   const [currentPage, setCurrentPage] = React.useState(1);
@@ -275,7 +370,7 @@ export function ExceptionTransactionsTable() {
     toast.add({
       type: "success",
       title: "Duyệt thủ công thành công!",
-      description: `Đã kích hoạt ghế thi cho ${tx.candidateName} (${tx.examLevel}) tại ${tx.roomName}. Tránh bị hủy sau 15p!`,
+      description: `Đã kích hoạt ghế thi cho ${tx.candidateName} (${tx.examLevel}) tại ${tx.sessionName}. Tránh bị hủy sau 15p!`,
       timeout: 5000,
     });
   };
@@ -285,7 +380,7 @@ export function ExceptionTransactionsTable() {
     toast.add({
       type: "info",
       title: "Đã gửi thông báo nộp bù!",
-      description: `Hệ thống đã gửi SMS & Email tới ${tx.candidatePhone} yêu cầu nộp bù phần thiếu ${formatVND(Math.abs(tx.diffAmount))}.`,
+      description: `Hệ thống đã gửi thông báo yêu cầu nộp bù phần thiếu ${formatVND(Math.abs(tx.diffAmount))} cho thí sinh ${tx.candidateName}.`,
       timeout: 4000,
     });
   };
@@ -328,8 +423,8 @@ export function ExceptionTransactionsTable() {
       return (
         tx.candidateName.toLowerCase().includes(q) ||
         tx.orderCode.toLowerCase().includes(q) ||
-        tx.candidatePhone.includes(q) ||
-        tx.refCode.toLowerCase().includes(q)
+        tx.examLevel.toLowerCase().includes(q) ||
+        tx.bankName.toLowerCase().includes(q)
       );
     }
     return true;
@@ -342,6 +437,7 @@ export function ExceptionTransactionsTable() {
   const countUnderpaid = exceptions.filter((e) => e.type === "underpaid").length;
   const countOverpaid = exceptions.filter((e) => e.type === "overpaid").length;
   const countTimeout = exceptions.filter((e) => e.type === "webhook_timeout").length;
+  const countResolved = exceptions.filter((e) => e.type === "resolved").length;
 
   return (
     <div className="flex flex-col gap-4 w-full">
@@ -404,8 +500,8 @@ export function ExceptionTransactionsTable() {
             type="button"
             onClick={() => setFilterType("all")}
             className={`px-3 py-1.5 text-xs rounded-full cursor-pointer transition-all font-medium ${filterType === "all"
-                ? "bg-primary text-primary-foreground font-semibold shadow-2xs"
-                : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+              ? "bg-primary text-primary-foreground font-semibold shadow-2xs"
+              : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
           >
             Tất cả ngoại lệ ({exceptions.length})
@@ -414,8 +510,8 @@ export function ExceptionTransactionsTable() {
             type="button"
             onClick={() => setFilterType("underpaid")}
             className={`px-3 py-1.5 text-xs rounded-full cursor-pointer transition-all font-medium ${filterType === "underpaid"
-                ? "bg-destructive text-destructive-foreground font-semibold shadow-2xs"
-                : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+              ? "bg-destructive text-destructive-foreground font-semibold shadow-2xs"
+              : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
           >
             Thiếu tiền ({countUnderpaid})
@@ -424,8 +520,8 @@ export function ExceptionTransactionsTable() {
             type="button"
             onClick={() => setFilterType("overpaid")}
             className={`px-3 py-1.5 text-xs rounded-full cursor-pointer transition-all font-medium ${filterType === "overpaid"
-                ? "bg-blue-600 text-white font-semibold shadow-2xs"
-                : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+              ? "bg-blue-600 text-white font-semibold shadow-2xs"
+              : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
           >
             Thừa tiền ({countOverpaid})
@@ -434,8 +530,8 @@ export function ExceptionTransactionsTable() {
             type="button"
             onClick={() => setFilterType("webhook_timeout")}
             className={`px-3 py-1.5 text-xs rounded-full cursor-pointer transition-all font-medium ${filterType === "webhook_timeout"
-                ? "bg-amber-600 text-white font-semibold shadow-2xs"
-                : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+              ? "bg-amber-600 text-white font-semibold shadow-2xs"
+              : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
           >
             Webhook Delay ({countTimeout})
@@ -444,11 +540,11 @@ export function ExceptionTransactionsTable() {
             type="button"
             onClick={() => setFilterType("resolved")}
             className={`px-3 py-1.5 text-xs rounded-full cursor-pointer transition-all font-medium ${filterType === "resolved"
-                ? "bg-emerald-600 text-white font-semibold shadow-2xs"
-                : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+              ? "bg-emerald-600 text-white font-semibold shadow-2xs"
+              : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
           >
-            Đã giải quyết
+            Đã giải quyết ({countResolved})
           </button>
         </div>
 
@@ -456,7 +552,7 @@ export function ExceptionTransactionsTable() {
         <div className="relative w-full sm:w-64 shrink-0">
           <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
           <Input
-            placeholder="Tìm theo tên, mã PAY, SĐT..."
+            placeholder="Tìm theo tên thí sinh, mã đơn..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-8.5 h-8.5 rounded-full text-xs"
@@ -470,9 +566,9 @@ export function ExceptionTransactionsTable() {
           <TableHeader>
             <TableRow className="bg-muted/30">
               <TableHead className="font-semibold text-xs py-3">Mã đơn & Thời gian</TableHead>
-              <TableHead className="font-semibold text-xs py-3">Thí sinh & Ca thi</TableHead>
+              <TableHead className="font-semibold text-xs py-3">Thí sinh & Kỳ thi</TableHead>
               <TableHead className="font-semibold text-xs py-3 text-right">Lệ phí quy định</TableHead>
-              <TableHead className="font-semibold text-xs py-3 text-right">Thực nhận (PayOS)</TableHead>
+              <TableHead className="font-semibold text-xs py-3 text-right">Thực nhận</TableHead>
               <TableHead className="font-semibold text-xs py-3 text-center">Chênh lệch</TableHead>
               <TableHead className="font-semibold text-xs py-3 text-center">Chuẩn đoán</TableHead>
               <TableHead className="font-semibold text-xs py-3 text-right">Thao tác xử lý</TableHead>
@@ -489,46 +585,39 @@ export function ExceptionTransactionsTable() {
               paginatedList.map((tx) => (
                 <TableRow key={tx.id} className="hover:bg-muted/40 transition-colors">
                   {/* Mã đơn & Thời gian */}
-                  <TableCell className="align-top py-3">
-                    <div className="flex flex-col gap-0.5">
+                  <TableCell className="align-top py-3.5">
+                    <div className="flex flex-col gap-1">
                       <span className="font-mono font-bold text-xs text-foreground">
                         {tx.orderCode}
                       </span>
-                      <span className="text-[10px] text-muted-foreground font-mono">
-                        Ref: {tx.refCode}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-                        <ClockIcon className="size-3" />
+                      <span className="text-[11px] text-muted-foreground flex items-center gap-1 font-mono">
+                        <ClockIcon className="size-3 shrink-0" />
                         {tx.timestamp}
                       </span>
                     </div>
                   </TableCell>
 
-                  {/* Thí sinh & Ca thi */}
-                  <TableCell className="align-top py-3">
-                    <div className="flex flex-col gap-0.5">
+                  {/* Thí sinh & Kỳ thi */}
+                  <TableCell className="align-top py-3.5">
+                    <div className="flex flex-col gap-1">
                       <span className="font-semibold text-xs text-foreground">
                         {tx.candidateName}
                       </span>
-                      <span className="text-[10px] text-muted-foreground">
-                        SĐT: {tx.candidatePhone} • CCCD: {tx.candidateCccd}
-                      </span>
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 rounded-full font-medium">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <Badge variant="outline" className="text-[10px] px-2 py-0.5 rounded-full font-medium">
                           {tx.examLevel}
                         </Badge>
-                        <span className="text-[10px] text-muted-foreground">• {tx.roomName}</span>
                       </div>
                     </div>
                   </TableCell>
 
                   {/* Lệ phí quy định */}
-                  <TableCell className="align-top py-3 text-right font-mono text-xs font-semibold text-foreground">
+                  <TableCell className="align-top py-3.5 text-right font-mono text-xs font-semibold text-foreground">
                     {formatVND(tx.expectedAmount)}
                   </TableCell>
 
                   {/* Thực nhận PayOS */}
-                  <TableCell className="align-top py-3 text-right font-mono text-xs font-bold">
+                  <TableCell className="align-top py-3.5 text-right font-mono text-xs font-bold">
                     <span
                       className={
                         tx.type === "underpaid"
@@ -540,7 +629,7 @@ export function ExceptionTransactionsTable() {
                     >
                       {formatVND(tx.actualAmount)}
                     </span>
-                    <p className="text-[10px] text-muted-foreground font-normal">{tx.bankName}</p>
+                    <p className="text-[11px] text-muted-foreground font-normal">{tx.bankName}</p>
                   </TableCell>
 
                   {/* Chênh lệch */}
@@ -574,12 +663,12 @@ export function ExceptionTransactionsTable() {
                     )}
                     {tx.type === "webhook_timeout" && (
                       <Badge variant="outline" className="text-[10px] rounded-full px-2 py-0.5 border-amber-500 text-amber-600 dark:text-amber-400 bg-amber-500/10 animate-pulse">
-                        Webhook Timeout (504)
+                        Webhook Delay (504)
                       </Badge>
                     )}
                     {tx.type === "resolved" && (
-                      <Badge variant="default" className="text-[10px] rounded-full px-2 py-0.5 bg-emerald-600 text-white">
-                        <CheckIcon className="size-3 mr-0.5 inline" /> Đã xử lý
+                      <Badge variant="default" className="text-[10px] rounded-full px-2 py-0.5 bg-emerald-600 hover:bg-emerald-600 text-white font-medium">
+                        <CheckIcon className="size-3 mr-0.5 inline" /> Đã khớp tiền
                       </Badge>
                     )}
                     <p className="text-[10px] text-muted-foreground mt-1 max-w-[130px] truncate" title={tx.note}>
@@ -717,17 +806,17 @@ export function ExceptionTransactionsTable() {
                     )}
                     {selectedTxForLog.type === "webhook_timeout" && (
                       <Badge variant="outline" className="text-[10px] rounded-full px-2 py-0.5 border-amber-500 text-amber-600 dark:text-amber-400 bg-amber-500/10 animate-pulse">
-                        Webhook Timeout (504)
+                        Webhook Delay (504)
                       </Badge>
                     )}
                     {selectedTxForLog.type === "resolved" && (
-                      <Badge variant="default" className="text-[10px] rounded-full px-2 py-0.5 bg-emerald-600 text-white">
-                        <CheckIcon className="size-3 mr-0.5 inline" /> Đã xử lý
+                      <Badge variant="default" className="text-[10px] rounded-full px-2 py-0.5 bg-emerald-600 hover:bg-emerald-600 text-white font-medium">
+                        <CheckIcon className="size-3 mr-0.5 inline" /> Đã khớp tiền
                       </Badge>
                     )}
                   </div>
                   <DialogDescription className="text-xs text-muted-foreground">
-                    Mã đơn hàng: <strong className="font-mono text-foreground font-semibold">{selectedTxForLog.orderCode}</strong> • Mã đối soát: <strong className="font-mono text-foreground font-semibold">{selectedTxForLog.refCode}</strong>
+                    Mã đơn hàng: <strong className="font-mono text-foreground font-semibold">{selectedTxForLog.orderCode}</strong>
                   </DialogDescription>
                 </div>
               </div>
@@ -735,26 +824,25 @@ export function ExceptionTransactionsTable() {
 
             {/* Scrollable Body: Co giãn thông minh theo dữ liệu ngắn / dài */}
             <div className="p-4 sm:p-5 overflow-y-auto flex-1 min-h-0 space-y-4 text-xs">
-              {/* Thông tin Thí sinh & Ca thi */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-xl bg-muted/40 border border-border/80 text-xs min-w-0">
+              {/* Thông tin Thí sinh & Kỳ thi */}
+              <div className="grid grid-cols-2 gap-3 p-3.5 rounded-xl bg-muted/40 border border-border/80 text-xs min-w-0">
                 <div className="flex flex-col gap-1 min-w-0">
                   <span className="text-muted-foreground text-[11px]">Họ và tên thí sinh</span>
                   <strong className="text-foreground text-sm font-semibold truncate">{selectedTxForLog.candidateName}</strong>
-                  <span className="text-[11px] text-muted-foreground font-mono">
-                    SĐT: {selectedTxForLog.candidatePhone} • CCCD: {selectedTxForLog.candidateCccd}
-                  </span>
                 </div>
                 <div className="flex flex-col gap-1 min-w-0">
-                  <span className="text-muted-foreground text-[11px]">Ca thi & Phòng máy</span>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <Badge variant="outline" className="text-[11px] rounded-full font-medium">
-                      {selectedTxForLog.examLevel}
-                    </Badge>
-                    <span className="text-[11px] text-foreground font-medium">{selectedTxForLog.roomName}</span>
-                  </div>
-                  <span className="text-[11px] text-muted-foreground">
-                    Ngân hàng: <strong className="text-foreground font-medium">{selectedTxForLog.bankName}</strong> • {selectedTxForLog.timestamp}
-                  </span>
+                  <span className="text-muted-foreground text-[11px]">Kỳ thi</span>
+                  <Badge variant="outline" className="text-[11px] rounded-full font-medium w-fit">
+                    {selectedTxForLog.examLevel}
+                  </Badge>
+                </div>
+                <div className="flex flex-col gap-1 min-w-0">
+                  <span className="text-muted-foreground text-[11px]">Thanh toán qua</span>
+                  <strong className="text-foreground text-xs font-semibold">{selectedTxForLog.bankName}</strong>
+                </div>
+                <div className="flex flex-col gap-1 min-w-0">
+                  <span className="text-muted-foreground text-[11px]">Thời gian giao dịch</span>
+                  <span className="text-foreground text-xs font-mono font-medium">{selectedTxForLog.timestamp}</span>
                 </div>
               </div>
 
@@ -767,12 +855,12 @@ export function ExceptionTransactionsTable() {
                   </span>
                 </div>
                 <div className="flex flex-col gap-0.5 border-x border-border/60">
-                  <span className="text-[11px] text-muted-foreground">Thực nhận PayOS</span>
+                  <span className="text-[11px] text-muted-foreground">Tiền thực nhận</span>
                   <span className={`font-mono font-bold text-xs sm:text-sm ${selectedTxForLog.type === "underpaid"
-                      ? "text-destructive"
-                      : selectedTxForLog.type === "overpaid"
-                        ? "text-blue-600 dark:text-blue-400"
-                        : "text-emerald-600 dark:text-emerald-400"
+                    ? "text-destructive"
+                    : selectedTxForLog.type === "overpaid"
+                      ? "text-blue-600 dark:text-blue-400"
+                      : "text-emerald-600 dark:text-emerald-400"
                     }`}>
                     {formatVND(selectedTxForLog.actualAmount)}
                   </span>
@@ -780,10 +868,10 @@ export function ExceptionTransactionsTable() {
                 <div className="flex flex-col gap-0.5">
                   <span className="text-[11px] text-muted-foreground">Chênh lệch</span>
                   <span className={`font-mono font-bold text-xs sm:text-sm ${selectedTxForLog.diffAmount < 0
-                      ? "text-destructive"
-                      : selectedTxForLog.diffAmount > 0
-                        ? "text-blue-600 dark:text-blue-400"
-                        : "text-emerald-600"
+                    ? "text-destructive"
+                    : selectedTxForLog.diffAmount > 0
+                      ? "text-blue-600 dark:text-blue-400"
+                      : "text-emerald-600"
                     }`}>
                     {selectedTxForLog.diffAmount > 0 ? `+${formatVND(selectedTxForLog.diffAmount)}` : formatVND(selectedTxForLog.diffAmount)}
                   </span>
@@ -817,12 +905,39 @@ export function ExceptionTransactionsTable() {
                 </div>
               </div>
 
-              {/* Ghi chú nghiệp vụ & Hướng xử lý: Co giãn tự nhiên theo độ dài text */}
-              <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-900 dark:text-amber-300 text-xs leading-relaxed flex items-start gap-2.5 min-w-0">
-                <AlertTriangleIcon className="size-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              {/* Ghi chú nghiệp vụ & Hướng xử lý: Đổi màu theo trạng thái (Success/Error/Warning/Info) */}
+              <div
+                className={`p-3.5 rounded-xl border text-xs leading-relaxed flex items-start gap-2.5 min-w-0 ${selectedTxForLog.type === "resolved"
+                  ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-950 dark:text-emerald-200"
+                  : selectedTxForLog.type === "underpaid"
+                    ? "bg-destructive/10 border-destructive/25 text-destructive dark:text-destructive"
+                    : selectedTxForLog.type === "overpaid"
+                      ? "bg-blue-500/10 border-blue-500/25 text-blue-950 dark:text-blue-200"
+                      : "bg-amber-500/10 border-amber-500/25 text-amber-950 dark:text-amber-200"
+                  }`}
+              >
+                {selectedTxForLog.type === "resolved" ? (
+                  <CheckCircle2Icon className="size-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                ) : selectedTxForLog.type === "underpaid" ? (
+                  <ShieldAlertIcon className="size-4 text-destructive shrink-0 mt-0.5" />
+                ) : selectedTxForLog.type === "overpaid" ? (
+                  <RotateCcwIcon className="size-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                ) : (
+                  <ClockIcon className="size-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                )}
                 <div className="flex flex-col gap-0.5 min-w-0 break-words">
-                  <span className="font-semibold text-foreground">Ghi chú & Khuyến nghị xử lý:</span>
-                  <p className="text-muted-foreground whitespace-pre-line leading-relaxed">{selectedTxForLog.note}</p>
+                  <span className="font-semibold text-foreground">
+                    {selectedTxForLog.type === "resolved"
+                      ? "Ghi chú & Trạng thái xử lý:"
+                      : selectedTxForLog.type === "underpaid"
+                        ? "Cảnh báo thiếu lệ phí (Amount Guard):"
+                        : selectedTxForLog.type === "overpaid"
+                          ? "Yêu cầu hoàn trả lệ phí dư:"
+                          : "Khuyến nghị xử lý giữ slot khẩn cấp:"}
+                  </span>
+                  <p className="text-muted-foreground whitespace-pre-line leading-relaxed">
+                    {selectedTxForLog.note}
+                  </p>
                 </div>
               </div>
             </div>
