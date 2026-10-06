@@ -164,6 +164,9 @@ export const ProfileForm = React.memo(function ProfileForm({
               <Input
                 id="full_name_cn"
                 placeholder="阮文A"
+                lang="zh-CN"
+                autoComplete="off"
+                className="font-cjk text-base"
                 {...register("full_name_cn")}
               />
               {errors.full_name_cn && (

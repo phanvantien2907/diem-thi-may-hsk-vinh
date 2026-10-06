@@ -530,7 +530,7 @@ function SessionCreateDialog({
           </Button>
         }
       />
-      <DialogContent className="max-w-xl p-0 overflow-hidden rounded-2xl">
+      <DialogContent>
         <DialogHeader className="p-6 pb-4 pr-12 border-b bg-muted/20">
           <div className="flex items-center gap-2 mb-1">
             <Badge
@@ -878,7 +878,7 @@ function SessionCreateDialog({
             )}
           </div>
 
-          <DialogFooter className="p-4 border-t bg-muted/40 flex flex-row items-center justify-end gap-2 shrink-0">
+          <DialogFooter>
             <Button
               type="button"
               variant="outline"
@@ -944,7 +944,7 @@ function SessionDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl p-0 overflow-hidden rounded-2xl">
+      <DialogContent>
         <DialogHeader className="p-6 pb-4 pr-12 border-b bg-muted/20">
           <div className="flex flex-wrap items-center gap-2 mb-2">
             <Badge
@@ -1108,7 +1108,7 @@ function SessionDetailDialog({
           </div>
         </div>
 
-        <DialogFooter className="p-4 border-t bg-muted/40 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2.5 shrink-0">
+        <DialogFooter>
           <Button
             type="button"
             variant="ghost"
@@ -1133,9 +1133,9 @@ function SessionDetailDialog({
             {session.status !== "cancelled" && (
               <Button
                 type="button"
-                variant="destructive"
+                variant="outline"
                 size="sm"
-                className="rounded-full cursor-pointer text-xs"
+                className="rounded-full cursor-pointer text-xs text-destructive border-destructive hover:bg-destructive/10 hover:text-destructive"
                 onClick={() => {
                   onOpenChange(false);
                   onCancelSession(session);
@@ -1275,7 +1275,7 @@ function PublishScheduleDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md p-0 overflow-hidden rounded-2xl">
+      <DialogContent>
         <DialogHeader className="p-6 pb-4 pr-12 border-b bg-muted/20">
           <div className="flex flex-wrap items-center gap-2 mb-2">
             <Badge
@@ -1414,7 +1414,7 @@ function PublishScheduleDialog({
             </div>
           </div>
 
-          <DialogFooter className="p-4 border-t bg-muted/40 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2.5 shrink-0">
+          <DialogFooter>
             {onPublishNow ? (
               <Button
                 type="button"
@@ -2495,7 +2495,7 @@ export default function QuanLyKyThiCaThiPage() {
           if (!open) setSessionToPublish(null);
         }}
       >
-        <AlertDialogContent className="rounded-2xl max-w-md">
+        <AlertDialogContent>
           <AlertDialogHeader>
             <div className="size-11 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto sm:mx-0 mb-1">
               <GlobeIcon className="size-5" />
@@ -2533,7 +2533,7 @@ export default function QuanLyKyThiCaThiPage() {
               </p>
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="mt-2">
+          <AlertDialogFooter>
             <AlertDialogCancel className="rounded-full cursor-pointer hover:bg-muted text-xs">
               Hủy bỏ
             </AlertDialogCancel>
@@ -2552,7 +2552,7 @@ export default function QuanLyKyThiCaThiPage() {
         open={isCancelAlertOpen}
         onOpenChange={setIsCancelAlertOpen}
       >
-        <AlertDialogContent className="rounded-2xl max-w-md">
+        <AlertDialogContent>
           <AlertDialogHeader>
             <div className="size-11 rounded-full bg-destructive/10 text-destructive flex items-center justify-center mx-auto sm:mx-0 mb-1">
               <AlertTriangleIcon className="size-5" />
@@ -2564,7 +2564,7 @@ export default function QuanLyKyThiCaThiPage() {
               Bạn có chắc chắn muốn hủy ca thi này không? Ca thi sau khi hủy sẽ đóng toàn bộ tiếp nhận thí sinh và chuyển trạng thái sang "Đã hủy". Hành động này không thể hoàn tác.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="mt-2">
+          <AlertDialogFooter>
             <AlertDialogCancel className="rounded-full cursor-pointer hover:bg-muted text-xs">
               Không, giữ lại ca thi
             </AlertDialogCancel>

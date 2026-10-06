@@ -827,6 +827,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 ```json
 {
   "full_name": "Nguyễn Văn B",
+  "full_name_cn": "阮文B",
   "chinese_study_years": 4
 }
 ```
@@ -839,6 +840,22 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 | `religion` | `string` | ❌ | Tối đa 50 ký tự | Tôn giáo |
 | `nationality` | `string` | ❌ | Tối đa 50 ký tự | Quốc tịch |
 | `chinese_study_years` | `integer` | ❌ | Min 0 | Số năm học tiếng Trung |
+
+`full_name_cn` được lưu vào `candidates.candidate_full_name_cn` và trả lại trong
+response dưới dạng `full_name_cn`. Tên field phải dùng đúng snake_case như trên.
+Nếu không gửi field này trong PATCH thì giá trị cũ được giữ nguyên; nếu chưa có
+dữ liệu, response trả về `null`.
+
+Giá trị đúng cần gửi là chuỗi tên tiếng Trung, ví dụ `"full_name_cn": "潘文进"`.
+Backend cũng tự loại bỏ một lớp dấu ngoặc kép dư thừa nếu client gửi nhầm
+`"full_name_cn": "\"潘文进\""`, để dữ liệu lưu trong database vẫn là `潘文进`.
+
+**Hướng dẫn tích hợp Front-end:** `full_name_cn` phải được gửi dưới dạng chuỗi
+Unicode UTF-8 bình thường. Không gọi `JSON.stringify()` riêng cho giá trị này;
+hãy truyền object trực tiếp cho `fetch`/Axios và để thư viện serialize request body.
+Font `PingFang SC` chỉ là font hiển thị khi quản trị viên xem dữ liệu trong
+DataGrip/macOS, không phải một phần của dữ liệu database và không cần cài đặt
+font này ở Front-end.
 
 > **⚠️ Lưu ý:** Không thể sửa hồ sơ khi đang có đăng ký thi `confirmed`. Sẽ trả lỗi `409`.
 
@@ -1017,11 +1034,17 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 | Param | Kiểu | Bắt buộc | Validate | Mô tả |
 |---|---|---|---|---|
-| `status` | `string` | ❌ | `pending`, `verified`, `rejected` | Lọc theo trạng thái xác minh |
+| `status` | `string` | ❌ | `all`, `pending`, `verified`, `rejected` | Lọc theo trạng thái xác minh; bỏ trống hoặc `all` là tất cả |
+| `level` | `string` | ❌ | Tối đa 100 ký tự | Lọc theo cấp độ HSK của kỳ thi đã đăng ký |
+| `search` | `string` | ❌ | Tối đa 100 ký tự | Tìm theo họ tên hoặc số CCCD |
+| `exam_date` | `date` | ❌ | `YYYY-MM-DD` | Lọc theo ngày thi |
 | `page` | `integer` | ❌ | Min 1, mặc định 1 | Trang hiện tại |
 | `limit` | `integer` | ❌ | Min 1, max 100, mặc định 20 | Số bản ghi/trang |
 
-**Ví dụ:** `GET /api/v1/admin/candidates?status=pending&page=1&limit=20`
+**Ví dụ:** `GET /api/v1/admin/candidates?status=pending&level=HSK%203&search=Nguyen&page=1&limit=20`
+
+`exam_date` có thể dùng để chỉ lấy thí sinh thuộc một ngày thi cụ thể:
+`GET /api/v1/admin/candidates?exam_date=2026-11-27&page=1&limit=20`
 
 **Response (200 OK):** Mảng `AdminCandidateResponseDTO` + `meta` phân trang.
 
@@ -1033,15 +1056,34 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
       "id": 1,
       "account_id": 1,
       "full_name": "Nguyễn Văn A",
+      "full_name_cn": "阮文A",
       "dob": "2000-05-15T00:00:00Z",
       "gender": "male",
+      "ethnicity": "Kinh",
+      "religion": "Không",
       "nationality": "Việt Nam",
+      "birthplace": null,
+      "mother_tongue": null,
+      "chinese_study_years": 3,
+      "phone": "0901234567",
+      "email": "nguyenvana@email.com",
+      "exam_level": "HSK 4",
+      "target_exam_level": "HSK 4",
       "latest_document": {
         "id": 1,
         "candidate_id": 1,
         "doc_type": "cccd",
         "doc_number": "012345678901",
-        "verification_status": "pending"
+        "issue_date": "2021-06-15T00:00:00Z",
+        "issue_place": "Cục Cảnh sát QLHC về TTXH",
+        "front_image_url": "...",
+        "back_image_url": null,
+        "portrait_image_url": "...",
+        "verification_status": "pending",
+        "rejection_reason": null,
+        "ward_id": null,
+        "province_id": null,
+        "address_detail": "Số 123 Đường ABC"
       }
     }
   ],
@@ -1057,7 +1099,81 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 ---
 
-### 3.8. [Admin] Xem chi tiết thí sinh
+### 3.8. [Admin] Thống kê hồ sơ thí sinh
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/candidates/metrics` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Lấy tổng số hồ sơ và số lượng theo trạng thái giấy tờ mới nhất |
+
+```json
+{
+  "success": true,
+  "data": {
+    "total": 120,
+    "pending": 45,
+    "verified": 60,
+    "rejected": 15
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+### 3.9. [Admin] Xuất danh sách hồ sơ thí sinh
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/candidates/export` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Tải danh sách hồ sơ đã lọc dưới dạng tệp PDF |
+
+API bắt buộc nhận `exam_date=YYYY-MM-DD` để xác định đúng đợt thi; đồng thời nhận các query params `status`, `level` và `search` giống API danh sách. `status` nhận `all` (tất cả, mặc định khi bỏ trống), `pending` (chờ duyệt), `verified` (đã duyệt) hoặc `rejected` (từ chối). Response bắt buộc trả về `Content-Type: application/pdf` và `Content-Disposition` với tên file theo trạng thái và ngày thi.
+
+PDF sử dụng font Noto Serif SC Unicode được nhúng trực tiếp vào file (kiểu serif tương tự Times New Roman, hỗ trợ cả tiếng Việt và chữ Hán), không phụ thuộc font hệ thống hoặc container. Toàn bộ nội dung được truyền dưới dạng UTF-8; các tên tiếng Trung như `潘文进` phải hiển thị đúng.
+
+Tên file được tạo theo quy tắc: tất cả `ds_thi_sinh_{dd-mm-yyyy}.pdf`; chờ duyệt `ds_ho_so_thi_sinh_cho_duyet_{dd-mm-yyyy}.pdf`; đã duyệt `ds_ho_so_thi_sinh_da_duyet_{dd-mm-yyyy}.pdf`; từ chối `ds_ho_so_thi_sinh_tu_choi_{dd-mm-yyyy}.pdf`.
+
+PDF gồm các cột: `STT`, `Họ và tên`, `Ngày sinh`, `Số CCCD`, `Cấp thi`, `Ngày đăng ký` (`dd/mm/yyyy hh:mm`) và `Ghi chú`. Cấp thi sử dụng nguyên tên kỳ thi theo dữ liệu gốc; các kỳ HSK 1–2 không được đưa vào danh sách export. Nội dung dài trong ô được rút gọn bằng dấu `...` để không chồng lấn cột. Với hồ sơ `rejected`, cột `Ghi chú` hiển thị `Từ chối: {candidate_document_rejection_reason}`; nếu không có lý do thì hiển thị `-`. Tiêu đề thể hiện ngày thi theo định dạng `dd/mm/yyyy`, cùng tên đơn vị và phần tiêu ngữ theo thể thức văn bản hành chính.
+
+**Ví dụ tải file:**
+
+```http
+GET /api/v1/admin/candidates/export?exam_date=2026-11-27&status=verified
+Authorization: Bearer <admin_jwt>
+```
+
+Các lựa chọn xuất theo trạng thái:
+
+```http
+# Tất cả hồ sơ (bỏ status hoặc dùng status=all)
+GET /api/v1/admin/candidates/export?exam_date=2026-11-27
+GET /api/v1/admin/candidates/export?exam_date=2026-11-27&status=all
+
+# Hồ sơ chờ duyệt
+GET /api/v1/admin/candidates/export?exam_date=2026-11-27&status=pending
+
+# Hồ sơ đã duyệt
+GET /api/v1/admin/candidates/export?exam_date=2026-11-27&status=verified
+
+# Hồ sơ từ chối, kèm lý do từ chối trong cột Ghi chú
+GET /api/v1/admin/candidates/export?exam_date=2026-11-27&status=rejected
+```
+
+Khi `status=rejected`, PDF chỉ gồm các hồ sơ có trạng thái giấy tờ mới nhất là
+`rejected`. Cột `Ghi chú` có dạng `Từ chối: {rejection_reason}`; nếu không có
+lý do từ chối thì hiển thị `-`. Khi bỏ qua `status` hoặc dùng `status=all`, PDF
+bao gồm cả hồ sơ chưa có giấy tờ mới nhất và các hồ sơ có trạng thái
+`pending`, `verified`, `rejected`.
+
+**Lỗi thường gặp:**
+
+- Thiếu `exam_date`: HTTP `400`.
+- `exam_date` không đúng định dạng `YYYY-MM-DD`: HTTP `400`.
+- Không có quyền admin: HTTP `401` hoặc `403`.
+
+### 3.10. [Admin] Xem chi tiết thí sinh
 
 | | |
 |---|---|
@@ -1068,6 +1184,13 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 **Path Params:** `id` — ID thí sinh (`integer`)
 
 **Response (200 OK):** Trả về `AdminCandidateResponseDTO`.
+
+Response chi tiết sử dụng cùng đầy đủ contract với API danh sách (thông tin hồ sơ,
+tài khoản, cấp thi và `latest_document`). Các trường chưa có dữ liệu được trả về
+explicitly với giá trị `null`, không bị loại bỏ khỏi JSON. `exam_level` và
+`target_exam_level` hiện được lấy từ cấp của lần đăng ký thi gần nhất; hệ thống
+chưa có cột mục tiêu riêng. Trường `full_name_cn` chứa họ tên tiếng Trung của
+thí sinh và trả về `null` nếu chưa được cập nhật.
 
 ---
 
@@ -3100,10 +3223,12 @@ xóa `exam_session_publish_at`. Không thể cập nhật trạng thái phát h�
 | 19 | `GET` | `/me/candidate-profile/documents` | 🔐 | Candidate |
 | 20 | `GET` | `/me/candidate-profile/upload-signature` | 🔐 | Candidate |
 | 21 | `GET` | `/admin/candidates` | 🔐👑 | Candidate |
-| 22 | `GET` | `/admin/candidates/duplicates` | 🔐👑 | Candidate |
-| 23 | `GET` | `/admin/candidates/:id` | 🔐👑 | Candidate |
-| 24 | `POST` | `/admin/candidates/:id/approve` | 🔐👑 | Candidate |
-| 25 | `POST` | `/admin/candidates/:id/reject` | 🔐👑 | Candidate |
+| 22 | `GET` | `/admin/candidates/metrics` | 🔐👑 | Candidate |
+| 23 | `GET` | `/admin/candidates/export` | 🔐👑 | Candidate |
+| 24 | `GET` | `/admin/candidates/duplicates` | 🔐👑 | Candidate |
+| 25 | `GET` | `/admin/candidates/:id` | 🔐👑 | Candidate |
+| 26 | `POST` | `/admin/candidates/:id/approve` | 🔐👑 | Candidate |
+| 27 | `POST` | `/admin/candidates/:id/reject` | 🔐👑 | Candidate |
 | 26 | `GET` | `/admin/exam-sessions/:id/roster` | 🔐👑 | Candidate |
 | 27 | `GET` | `/exam-types` | 🔓 | Exam |
 | 28 | `GET` | `/exam-sessions` | 🔓 | Exam |

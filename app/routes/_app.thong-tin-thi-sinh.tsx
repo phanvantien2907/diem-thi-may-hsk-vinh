@@ -19,6 +19,18 @@ import { toast } from "~/components/ui/toast";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Card, CardHeader, CardContent } from "~/components/ui/card";
 
+type ApiErrorPayload = {
+  msg?: string;
+  error?: string | { message?: string } | null;
+};
+
+function getApiErrorMessage(payload: ApiErrorPayload | null): string | null {
+  if (payload?.msg) return payload.msg;
+  if (typeof payload?.error === "string") return payload.error;
+  if (payload?.error?.message) return payload.error.message;
+  return null;
+}
+
 // ─── SEO Meta ─────────────────────────────────────────────────────────────────
 export const meta: Route.MetaFunction = () => [
   { title: "Thông tin thí sinh" },
@@ -199,36 +211,62 @@ function CandidateFormsWrapper({
     const method = isNew ? "POST" : "PATCH";
     const url = `${apiBaseUrl}/api/v1/me/candidate-profile`;
 
+    const fields = isNew
+      ? data
+      : {
+          full_name: data.full_name,
+          full_name_cn: data.full_name_cn,
+          ethnicity: data.ethnicity,
+          religion: data.religion,
+          nationality: data.nationality,
+          chinese_study_years: data.chinese_study_years,
+        };
     const body: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(data)) {
+    for (const [key, value] of Object.entries(fields)) {
       if (value === "" || (typeof value === "number" && isNaN(value))) continue;
       body[key] = value;
     }
 
-    const response = await fetch(url, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
+    try {
+      const response = await fetch(url, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
+        },
+        body: JSON.stringify(body),
+      });
 
-    if (!response.ok) {
-      const err = (await response.json().catch(() => null)) as {
-        msg?: string;
-      } | null;
-      throw new Error(
-        err?.msg ?? "Không thể lưu thông tin. Vui lòng thử lại."
-      );
+      const payload = (await response.json().catch(() => null)) as
+        | ({ data?: CandidateResponseDTO } & ApiErrorPayload)
+        | null;
+
+      if (!response.ok) {
+        throw new Error(
+          getApiErrorMessage(payload) ??
+            "Không thể lưu thông tin. Vui lòng thử lại."
+        );
+      }
+
+      if (!payload?.data) {
+        throw new Error("API không trả về hồ sơ sau khi lưu.");
+      }
+
+      setProfile(payload.data);
+      toast.add({
+        type: "success",
+        title: isNew ? "Tạo hồ sơ thành công!" : "Cập nhật thành công!",
+      });
+    } catch (error) {
+      toast.add({
+        type: "error",
+        title: "Lưu thông tin thất bại",
+        description:
+          error instanceof Error
+            ? error.message
+            : "Không thể lưu thông tin. Vui lòng thử lại.",
+      });
     }
-
-    const result = (await response.json()) as { data: CandidateResponseDTO };
-    setProfile(result.data);
-    toast.add({
-      type: "success",
-      title: isNew ? "Tạo hồ sơ thành công!" : "Cập nhật thành công!",
-    });
   }
 
   async function handleDocumentSubmit(data: CandidateDocumentFormValues) {
