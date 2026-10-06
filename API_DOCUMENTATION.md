@@ -4,7 +4,7 @@
 > **Content-Type:** `application/json`
 > **Ngôn ngữ lỗi:** Tiếng Việt (tất cả thông báo lỗi trả về bằng Tiếng Việt)
 > **Phiên bản:** v1.1.0
-> **Cập nhật lần cuối:** 2026-10-03
+> **Cập nhật lần cuối:** 2026-10-04
 
 ---
 
@@ -24,7 +24,7 @@
 - [12. Bảng Enum tham chiếu](#12-bảng-enum-tham-chiếu)
 - [13. State Machines (Luồng trạng thái)](#13-state-machines-luồng-trạng-thái)
 - [14. WebSocket Real-time Events](#14-websocket-real-time-events)
-- [15. Module Dashboard Admin (Bảng điều khiển quản trị)](#15-module-dashboard-admin-bảng-điều-khiển-quản-trị)
+- [15. Module Dashboard (Bảng điều khiển quản trị)](#15-module-dashboard-bảng-điều-khiển-quản-trị)
 
 ---
 
@@ -279,7 +279,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 | `must_change_password` | `boolean` | `true` nếu là nhân viên lần đầu đăng nhập cần đổi mật khẩu tạm |
 
 > **⚠️ Khi `must_change_password = true`:** Front-end phải redirect sang trang đổi mật khẩu bắt buộc (gọi API [2.4](#24-đổi-mật-khẩu-bắt-buộc-nhân-viên)).
-> 
+>
 > **🧭 Xử lý phân quyền (RBAC) trên Frontend:**
 > Token JWT `access_token` chứa trường `user_role` (`admin`, `candidate`, `proctor`, `reviewer`). Frontend có thể dùng thư viện `jwt-decode` để giải mã token ngay phía client để lấy role, từ đó **điều hướng (redirect) user về đúng giao diện tương ứng**:
 > - `admin`: Chuyển sang layout Dashboard Quản trị (quản lý ca thi, thí sinh, tài chính...).
@@ -718,6 +718,8 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 ---
 
 ## 3. Module Candidate (Hồ sơ thí sinh)
+
+> Tất cả endpoint hồ sơ, giấy tờ, upload, tra cứu và phê duyệt thí sinh đều thuộc cùng module/tag `Candidate`; không tách riêng nhóm admin hay upload thành module khác.
 
 ### 3.1. Tạo hồ sơ thí sinh
 
@@ -1220,35 +1222,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 ---
 
-### 4.2. Danh sách phòng thi
-
-| | |
-|---|---|
-| **Endpoint** | `GET /api/v1/exam-rooms` |
-| **Auth** | 🔓 Public |
-| **Use-case** | Xem danh sách các phòng thi |
-
-**Response (200 OK):**
-
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "id": 1,
-      "name": "Phòng A101",
-      "location": "Tòa nhà A, Tầng 1",
-      "capacity": 40
-    }
-  ],
-  "error": null,
-  "meta": null
-}
-```
-
----
-
-### 4.3. Danh sách ca thi
+### 4.2. Danh sách ca thi
 
 | | |
 |---|---|
@@ -1267,6 +1241,23 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 **Ví dụ:** `GET /api/v1/exam-sessions?exam_type_id=1&from=2026-10-01&to=2026-12-31`
 
+### 4.2.1. [Admin] Danh sách toàn bộ ca thi
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/exam-sessions` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Admin xem toàn bộ ca thi, bao gồm `published`, `draft`, `scheduled` và `cancelled` |
+
+Endpoint này chỉ dành cho tài khoản Admin. API public bên trên chỉ trả về ca `published`
+đã đến thời điểm `exam_session_publish_at`; Admin API không áp dụng bộ lọc phát hành đó.
+
+**Query Params (tất cả tùy chọn):** `exam_type_id`, `from`, `to`.
+
+**Response (200 OK):** Mảng `ExamSessionResponseDTO`, giữ nguyên các field:
+`exam_session_publication_status`, `exam_session_publish_at`,
+`exam_session_check_in_at`.
+
 **Response (200 OK):**
 
 ```json
@@ -1276,13 +1267,15 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
     {
       "id": 1,
       "exam_type_id": 1,
-      "exam_room_id": 1,
       "date": "2026-10-15T00:00:00Z",
       "shift": "morning",
       "capacity": 40,
       "fee": 500000,
       "registration_deadline": "2026-10-10T23:59:59+07:00",
-      "status": "open"
+      "status": "open",
+      "exam_session_publication_status": "published",
+      "exam_session_publish_at": null,
+      "exam_session_check_in_at": "2026-10-15T07:30:00+07:00"
     }
   ],
   "error": null,
@@ -1296,17 +1289,19 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 |---|---|---|---|
 | `id` | `integer` | ❌ | ID ca thi |
 | `exam_type_id` | `integer` | ❌ | ID loại thi |
-| `exam_room_id` | `integer` | ❌ | ID phòng thi |
 | `date` | `datetime` | ❌ | Ngày thi |
 | `shift` | `string` | ❌ | Ca thi: `morning`, `afternoon`, `evening` |
 | `capacity` | `integer` | ❌ | Sức chứa tối đa |
 | `fee` | `integer` | ❌ | Lệ phí thi (đơn vị: VNĐ) |
 | `registration_deadline` | `datetime` | ❌ | Hạn đăng ký |
 | `status` | `string` | ❌ | `open`, `closed`, `cancelled` |
+| `exam_session_publication_status` | `string` | ❌ | `published`, `draft`, `scheduled` |
+| `exam_session_publish_at` | `datetime` | ✅ | Thời điểm công khai; bắt buộc ở trạng thái `scheduled` |
+| `exam_session_check_in_at` | `datetime` | ✅ | Giờ có mặt của thí sinh |
 
 ---
 
-### 4.4. Chi tiết ca thi
+### 4.3. Chi tiết ca thi
 
 | | |
 |---|---|
@@ -1316,11 +1311,11 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 **Path Params:** `id` — ID ca thi (`integer`)
 
-**Response (200 OK):** Trả về `ExamSessionResponseDTO` (xem [4.3](#43-danh-sách-ca-thi)).
+**Response (200 OK):** Trả về `ExamSessionResponseDTO` (xem [4.2](#42-danh-sách-ca-thi)).
 
 ---
 
-### 4.5. Sơ đồ ghế ngồi
+### 4.4. Sơ đồ ghế ngồi
 
 | | |
 |---|---|
@@ -1368,7 +1363,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 ---
 
-### 4.6. [Admin] Tạo ca thi hàng loạt
+### 4.5. [Admin] Tạo ca thi hàng loạt
 
 | | |
 |---|---|
@@ -1383,12 +1378,14 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
   "sessions": [
     {
       "exam_type_id": 1,
-      "exam_room_id": 1,
       "date": "2026-10-15",
       "shift": "morning",
       "capacity": 40,
       "fee": 500000,
-      "registration_deadline": "2026-10-10T23:59:59+07:00"
+      "registration_deadline": "2026-10-10T23:59:59+07:00",
+      "exam_session_publication_status": "scheduled",
+      "exam_session_publish_at": "2026-10-01T00:00:00+07:00",
+      "exam_session_check_in_at": "2026-10-15T07:30:00+07:00"
     }
   ]
 }
@@ -1398,18 +1395,20 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 |---|---|---|---|---|
 | `sessions` | `array` | ✅ | Min 1 phần tử | Mảng ca thi |
 | `sessions[].exam_type_id` | `integer` | ✅ | Min 1 | ID loại thi |
-| `sessions[].exam_room_id` | `integer` | ✅ | Min 1 | ID phòng thi |
 | `sessions[].date` | `string` | ✅ | Format: `YYYY-MM-DD` | Ngày thi |
 | `sessions[].shift` | `string` | ✅ | `morning`, `afternoon`, `evening` | Ca thi |
 | `sessions[].capacity` | `integer` | ✅ | Min 1 | Sức chứa |
 | `sessions[].fee` | `number` | ❌ | Min 0 | Lệ phí (VNĐ) |
 | `sessions[].registration_deadline` | `string` | ✅ | RFC 3339 datetime | Hạn đăng ký |
+| `sessions[].exam_session_publication_status` | `string` | ❌ | `published`, `draft`, `scheduled` | Trạng thái hiển thị; mặc định `published` |
+| `sessions[].exam_session_publish_at` | `string` | ❌ | RFC 3339 datetime | Bắt buộc và phải ở tương lai khi `scheduled` |
+| `sessions[].exam_session_check_in_at` | `string` | ❌ | RFC 3339 datetime | Giờ có mặt |
 
 **Response (201 Created):** Mảng `ExamSessionResponseDTO`.
 
 ---
 
-### 4.7. [Admin] Sinh ghế cho ca thi
+### 4.6. [Admin] Sinh ghế cho ca thi
 
 | | |
 |---|---|
@@ -1437,7 +1436,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 ---
 
-### 4.8. [Admin] Hủy ca thi
+### 4.7. [Admin] Hủy ca thi
 
 | | |
 |---|---|
@@ -1455,6 +1454,52 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 {
   "success": true,
   "data": { "message": "Ca thi đã được hủy" },
+  "error": null,
+  "meta": null
+}
+```
+
+---
+
+### 4.8. [Admin] Cập nhật trạng thái phát hành (Publication Status)
+
+| | |
+|---|---|
+| **Endpoint** | `PATCH /api/v1/admin/exam-sessions/:id/publication-status` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Admin thay đổi trạng thái phát hành của ca thi (draft, scheduled, published) |
+
+**Path Params:** `id` — ID ca thi (`integer`)
+
+**Request Body:**
+
+```json
+{
+  "exam_session_publication_status": "scheduled",
+  "exam_session_publish_at": "2026-10-20T10:00:00Z"
+}
+```
+
+| Field | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `exam_session_publication_status` | `string` | ✅ | `draft`, `published`, `scheduled` | Trạng thái phát hành |
+| `exam_session_publish_at` | `string` | ❌ | RFC 3339 datetime | Bắt buộc và phải ở tương lai khi `exam_session_publication_status` là `scheduled` |
+
+Quy tắc bổ sung: `draft` và `published` luôn lưu `exam_session_publish_at = null`;
+`published` được phát hành ngay. Với `scheduled`, backend bắt buộc thời điểm tương lai.
+Worker nền kiểm tra định kỳ và tự động chuyển ca đến hạn sang `published`, đồng thời
+xóa `exam_session_publish_at`. Không thể cập nhật trạng thái phát hành cho ca thi đã hủy.
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Cập nhật trạng thái phát hành thành công",
+    "exam_session_publication_status": "scheduled",
+    "exam_session_publish_at": "2026-10-20T10:00:00Z"
+  },
   "error": null,
   "meta": null
 }
@@ -3061,53 +3106,53 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 | 25 | `POST` | `/admin/candidates/:id/reject` | 🔐👑 | Candidate |
 | 26 | `GET` | `/admin/exam-sessions/:id/roster` | 🔐👑 | Candidate |
 | 27 | `GET` | `/exam-types` | 🔓 | Exam |
-| 28 | `GET` | `/exam-rooms` | 🔓 | Exam |
-| 29 | `GET` | `/exam-sessions` | 🔓 | Exam |
-| 30 | `GET` | `/exam-sessions/:id` | 🔓 | Exam |
-| 31 | `GET` | `/exam-sessions/:id/seats` | 🔓 | Exam |
+| 28 | `GET` | `/exam-sessions` | 🔓 | Exam |
+| 29 | `GET` | `/exam-sessions/:id` | 🔓 | Exam |
+| 30 | `GET` | `/exam-sessions/:id/seats` | 🔓 | Exam |
+| 31 | `GET` | `/admin/exam-sessions` | 🔐👑 | Exam |
 | 32 | `POST` | `/admin/exam-sessions/batch-create` | 🔐👑 | Exam |
 | 33 | `POST` | `/admin/exam-sessions/:id/seats/generate` | 🔐👑 | Exam |
 | 34 | `POST` | `/admin/exam-sessions/:id/cancel` | 🔐👑 | Exam |
-| 35 | `POST` | `/me/registrations` | 🔐 | Registration |
-| 36 | `GET` | `/me/registrations` | 🔐 | Registration |
-| 37 | `POST` | `/me/registrations/:id/payment-confirm` | 🔐 | Registration |
-| 38 | `POST` | `/me/registrations/:id/transfer` | 🔐 | Registration |
-| 39 | `POST` | `/me/registrations/:id/cancel` | 🔐 | Registration |
-| 40 | `GET` | `/me/registrations/:id/admission-slip` | 🔐 | Registration |
-| 41 | `POST` | `/me/exam-sessions/:id/waitlist` | 🔐 | Registration |
-| 42 | `PATCH` | `/proctor/exam-sessions/:id/attendance/:registration_id` | 🔐 | Registration |
-| 43 | `GET` | `/admin/exam-sessions/:id/dashboard` | 🔐👑 | Registration |
-| 44 | `GET` | `/admin/payments/reconcile` | 🔐👑 | Registration |
-| 45 | `POST` | `/payments` | 🔐 | Payment |
-| 46 | `POST` | `/payments/callback` | 🔐 | Payment |
-| 47 | `GET` | `/payments` | 🔐 | Payment |
-| 48 | `GET` | `/results/:registration_id` | 🔐 | Result |
-| 49 | `POST` | `/rechecks` | 🔐 | Result |
-| 50 | `POST` | `/admin/results` | 🔐👑 | Result |
-| 51 | `GET` | `/me/certificates` | 🔐 | Certificate |
-| 52 | `GET` | `/me/certificates/:id` | 🔐 | Certificate |
-| 53 | `GET` | `/me/certificates/:id/pdf` | 🔐 | Certificate |
-| 54 | `POST` | `/me/certificates/:id/deliveries` | 🔐 | Certificate |
-| 55 | `GET` | `/me/certificates/:id/deliveries` | 🔐 | Certificate |
-| 56 | `POST` | `/me/certificates/:id/reissue-request` | 🔐 | Certificate |
-| 57 | `PATCH` | `/me/deliveries/:delivery_id` | 🔐 | Certificate |
-| 58 | `GET` | `/public/certificates/verify` | 🔓 | Certificate |
-| 59 | `POST` | `/admin/certificates/:id/issue` | 🔐👑 | Certificate |
-| 60 | `POST` | `/admin/certificates/issue-batch` | 🔐👑 | Certificate |
-| 61 | `POST` | `/admin/certificates/:id/revoke` | 🔐👑 | Certificate |
-| 62 | `GET` | `/admin/certificates` | 🔐👑 | Certificate |
-| 63 | `GET` | `/admin/certificates/print-batch` | 🔐👑 | Certificate |
-| 64 | `GET` | `/admin/deliveries` | 🔐👑 | Certificate |
-| 65 | `PATCH` | `/admin/deliveries/:id` | 🔐👑 | Certificate |
-| 66 | `POST` | `/webhooks/shipping/:courier` | HMAC | Certificate |
-| 67 | `GET` | `/notifications` | 🔐 | Notification |
-| 68 | `PUT` | `/notifications/:id/read` | 🔐 | Notification |
-| 69 | `GET` | `/locations/provinces` | 🔓 | Location |
-| 70 | `GET` | `/locations/provinces/:id/wards` | 🔓 | Location |
-| 71 | `GET` | `/locations/wards/:id/delivery-coverage` | 🔓 | Location |
-| 72 | `GET` | `/admin/locations/stats/candidates-by-province` | 🔐👑 | Location |
-| 73 | `POST` | `/admin/locations/wards/:id/merge` | 🔐👑 | Location |
-| 74 | `GET` | `/admin/audit-logs` | 🔐👑 | Audit |
+| 34 | `POST` | `/me/registrations` | 🔐 | Registration |
+| 35 | `GET` | `/me/registrations` | 🔐 | Registration |
+| 36 | `POST` | `/me/registrations/:id/payment-confirm` | 🔐 | Registration |
+| 37 | `POST` | `/me/registrations/:id/transfer` | 🔐 | Registration |
+| 38 | `POST` | `/me/registrations/:id/cancel` | 🔐 | Registration |
+| 39 | `GET` | `/me/registrations/:id/admission-slip` | 🔐 | Registration |
+| 40 | `POST` | `/me/exam-sessions/:id/waitlist` | 🔐 | Registration |
+| 41 | `PATCH` | `/proctor/exam-sessions/:id/attendance/:registration_id` | 🔐 | Registration |
+| 42 | `GET` | `/admin/exam-sessions/:id/dashboard` | 🔐👑 | Registration |
+| 43 | `GET` | `/admin/payments/reconcile` | 🔐👑 | Registration |
+| 44 | `POST` | `/payments` | 🔐 | Payment |
+| 45 | `POST` | `/payments/callback` | 🔐 | Payment |
+| 46 | `GET` | `/payments` | 🔐 | Payment |
+| 47 | `GET` | `/results/:registration_id` | 🔐 | Result |
+| 48 | `POST` | `/rechecks` | 🔐 | Result |
+| 49 | `POST` | `/admin/results` | 🔐👑 | Result |
+| 50 | `GET` | `/me/certificates` | 🔐 | Certificate |
+| 51 | `GET` | `/me/certificates/:id` | 🔐 | Certificate |
+| 52 | `GET` | `/me/certificates/:id/pdf` | 🔐 | Certificate |
+| 53 | `POST` | `/me/certificates/:id/deliveries` | 🔐 | Certificate |
+| 54 | `GET` | `/me/certificates/:id/deliveries` | 🔐 | Certificate |
+| 55 | `POST` | `/me/certificates/:id/reissue-request` | 🔐 | Certificate |
+| 56 | `PATCH` | `/me/deliveries/:delivery_id` | 🔐 | Certificate |
+| 57 | `GET` | `/public/certificates/verify` | 🔓 | Certificate |
+| 58 | `POST` | `/admin/certificates/:id/issue` | 🔐👑 | Certificate |
+| 59 | `POST` | `/admin/certificates/issue-batch` | 🔐👑 | Certificate |
+| 60 | `POST` | `/admin/certificates/:id/revoke` | 🔐👑 | Certificate |
+| 61 | `GET` | `/admin/certificates` | 🔐👑 | Certificate |
+| 62 | `GET` | `/admin/certificates/print-batch` | 🔐👑 | Certificate |
+| 63 | `GET` | `/admin/deliveries` | 🔐👑 | Certificate |
+| 64 | `PATCH` | `/admin/deliveries/:id` | 🔐👑 | Certificate |
+| 65 | `POST` | `/webhooks/shipping/:courier` | HMAC | Certificate |
+| 66 | `GET` | `/notifications` | 🔐 | Notification |
+| 67 | `PUT` | `/notifications/:id/read` | 🔐 | Notification |
+| 68 | `GET` | `/locations/provinces` | 🔓 | Location |
+| 69 | `GET` | `/locations/provinces/:id/wards` | 🔓 | Location |
+| 70 | `GET` | `/locations/wards/:id/delivery-coverage` | 🔓 | Location |
+| 71 | `GET` | `/admin/locations/stats/candidates-by-province` | 🔐👑 | Location |
+| 72 | `POST` | `/admin/locations/wards/:id/merge` | 🔐👑 | Location |
+| 73 | `GET` | `/admin/audit-logs` | 🔐👑 | Audit |
 
 > **Chú thích:** 🔓 = Public | 🔐 = JWT | 🔐👑 = JWT + Admin | HMAC = Webhook signature
 
@@ -3144,7 +3189,7 @@ ws.onopen = () => {
 ws.onmessage = (event) => {
   const data = JSON.parse(event.data);
   console.log("[WS] Event:", data);
-  
+
   switch (data.type) {
     case "seats_released":
       // Reload danh sách ca thi để cập nhật số ghế
@@ -3247,11 +3292,13 @@ function connectWS(token, onMessage) {
 
 ---
 
-## 15. Module Dashboard Admin (Bảng điều khiển quản trị)
+## 15. Module Dashboard (Bảng điều khiển quản trị)
 
 > **Toàn bộ API trong module này yêu cầu:** 🔐 JWT + Admin (`role = admin`)
 >
 > **Prefix chung:** `/api/v1/admin/...`
+>
+> `GET /api/v1/admin/metrics/overview` là chức năng tổng quan thuộc cùng module/tag `Dashboard`, không phải module riêng.
 
 ### 15.1. Lấy chỉ số tổng quan (Top Metrics)
 

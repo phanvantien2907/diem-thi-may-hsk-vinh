@@ -26,7 +26,7 @@ import {
 import { toast } from "~/components/ui/toast";
 
 export const meta: Route.MetaFunction = () => [
-  { title: "Quản lý Hồ sơ Đăng ký — Cổng Quản Trị" },
+  { title: "Hồ sơ Đăng ký" },
   {
     name: "description",
     content: "Phê duyệt giấy tờ tùy thân, kiểm tra hồ sơ trùng lặp và xác nhận hồ sơ thí sinh dự thi HSK.",

@@ -100,6 +100,16 @@ Tên đầy đủ: **Vinh University HSK Computer-based Test Registration System
 - **Tương tác**: Reset trang về trang 1 khi người dùng thực hiện tìm kiếm hoặc chuyển đổi tab danh mục lọc.
 - **Component**: Sử dụng component `<Pagination>` chuẩn của shadcn/ui (`@/components/ui/pagination`), các nút bấm tròn `rounded-full` kèm `cursor-pointer`, vô hiệu hóa (`disabled`) khi ở trang đầu hoặc trang cuối.
 
+### 8. Quy chuẩn Tiêu đề Trang trong Meta Data (Page Title & Meta Rules — BẮT BUỘC)
+- **Nguyên tắc cốt lõi**: Tiêu đề trang (`title` trong hàm `meta` của route) phải **ngắn gọn, trực diện, đúng trọng tâm nội dung trang**.
+- **TUYỆT ĐỐI KHÔNG**:
+  - Không thêm tiền tố như `Quản lý...` (ví dụ: KHÔNG dùng `Quản lý ca thi`, `Quản lý kỳ thi`, `Quản lý hồ sơ`, `Quản lý giao dịch`).
+  - Không thêm hậu tố dài dòng như `- cổng quản trị`, `— Cổng Quản Trị`, `— Vinh University HSK`, v.v.
+- **Quy cách chuẩn**:
+  - Chỉ ghi ngắn gọn tên đối tượng / tính năng chính.
+  - Ví dụ chuẩn: `{ title: "Kỳ thi & Ca Thi" }`, `{ title: "Hồ sơ Đăng ký" }`, `{ title: "Giao dịch & Thanh toán" }`, `{ title: "Bảng điều khiển" }`.
+  - Nghiêm cấm: `{ title: "Quản lý ca thi - cổng quản trị" }`, `{ title: "Quản lý Hồ sơ Đăng ký — Cổng Quản Trị" }`, `{ title: "Quản lý Giao dịch & Thanh toán" }`.
+
 ---
 
 ## Component Conventions
@@ -183,6 +193,7 @@ app/
 - **Loaders** dùng để fetch data phía server trước khi render route.
 - **Actions** dùng để xử lý form submission (POST, PUT, DELETE).
 - **Không dùng** `useEffect` + `fetch` để load data nếu có thể dùng loader.
+- **Meta function**: Tiêu đề trang (`title`) phải tuân thủ chuẩn ngắn gọn, trực diện (xem mục 8 trong Design System Rules), không kèm tiền tố "Quản lý" hay hậu tố rườm rà.
 - Type safety: dùng types từ `./+types/[route-name]` cho mỗi route module.
 - Đọc skill `react-router` khi cần xử lý bất kỳ vấn đề nào liên quan đến routing.
 

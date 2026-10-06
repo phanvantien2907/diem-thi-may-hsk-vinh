@@ -248,7 +248,7 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-muted-foreground">
-            Xin chào, <strong className="text-foreground font-semibold">{user.name}</strong>! Giám sát đợt thi máy, doanh thu và lưu lượng thí sinh thời gian thực (Real-time 100%).
+            Xin chào, <strong className="text-foreground font-semibold">{user.name}</strong>! Giám sát đợt thi máy, doanh thu và lưu lượng thí sinh thời gian thực.
           </p>
         </div>
 

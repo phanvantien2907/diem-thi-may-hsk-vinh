@@ -26,7 +26,7 @@ import {
 import { toast } from "~/components/ui/toast";
 
 export const meta: Route.MetaFunction = () => [
-  { title: "Quản lý Giao dịch & Thanh toán" },
+  { title: "Giao dịch & Thanh toán" },
   {
     name: "description",
     content: "Đối soát thanh toán PayOS, giám sát luồng giao dịch ngân hàng và quản lý lệ phí thi HSK.",

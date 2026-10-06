@@ -86,10 +86,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     .then((json: ApiResponse<ExamType[]>) => json.data || [])
     .catch(() => [] as ExamType[]);
 
-  const examRoomsPromise = fetch(`${API_BASE_URL}/api/v1/exam-rooms`)
-    .then((res) => res.json())
-    .then((json: ApiResponse<ExamRoom[]>) => json.data || [])
-    .catch(() => [] as ExamRoom[]);
+  const examRoomsPromise = Promise.resolve([] as ExamRoom[]);
 
   const sessionsPromise = fetch(`${API_BASE_URL}/api/v1/exam-sessions`)
     .then((res) => res.json())
@@ -187,8 +184,6 @@ function DataWrapper({ loaderData }: { loaderData: LoaderData }) {
         ...s,
         available_slots: slotsMap[s.id] ?? s.capacity,
         exam_type_name: typeMap.get(s.exam_type_id)?.name,
-        exam_room_name: roomMap.get(s.exam_room_id)?.name,
-        exam_room_location: roomMap.get(s.exam_room_id)?.location,
       }));
   }, [sessions, examTypes, examRooms, slotsMap]);
 
@@ -303,7 +298,6 @@ function PayOSCheckoutWrapper({
       clearTimeout(timer);
       exit();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkoutUrl]);
 
   return (

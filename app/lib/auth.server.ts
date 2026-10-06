@@ -87,7 +87,7 @@ export async function requireAuth(request: Request): Promise<{ user: UserProfile
     user = { ...user, ...cachedUser };
   }
 
-  // 2. Lấy thông tin cơ bản từ JWT Token (đảm bảo an toàn môi trường Edge)
+  // 2. Lấy thông tin cơ bản từ JWT Token
   const payload = decodeJwtPayload(token);
   if (payload) {
     if (payload.user_id && !user.username) {

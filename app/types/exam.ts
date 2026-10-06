@@ -28,17 +28,23 @@ export type ExamShift = "morning" | "afternoon" | "evening";
 /** Trạng thái ca thi */
 export type ExamSessionStatus = "open" | "closed" | "cancelled";
 
+/** Trạng thái hiển thị / công khai ca thi */
+export type ExamPublicationStatus = "published" | "draft" | "scheduled";
+
 /** Ca thi — ExamSessionResponseDTO */
 export interface ExamSession {
   id: number;
   exam_type_id: number;
-  exam_room_id: number;
+  exam_room_id?: number;
   date: string;
   shift: ExamShift;
   capacity: number;
   fee: number;
   registration_deadline: string;
   status: ExamSessionStatus;
+  exam_session_publication_status?: ExamPublicationStatus;
+  exam_session_publish_at?: string | null;
+  exam_session_check_in_at?: string | null;
 }
 
 /** Ghế thi */
