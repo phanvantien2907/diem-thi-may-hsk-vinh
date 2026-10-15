@@ -82,6 +82,19 @@ export interface DocumentResponseDTO {
   address_detail?: string | null;
 }
 
+/** Kết quả tiền kiểm định ảnh chân dung (POST /api/v1/me/candidate-profile/validate-portrait) */
+export interface ValidatePortraitResponseDTO {
+  valid: boolean;
+  has_face?: boolean;
+  has_glasses?: boolean;
+  is_white_background?: boolean;
+  is_blurred?: boolean;
+  is_too_dark?: boolean;
+  brightness?: number;
+  reasons?: string[];
+  rejection_reason?: string;
+}
+
 // ─── Cloudinary Upload ────────────────────────────────────────────────────────
 
 /** Response từ GET /api/v1/me/candidate-profile/upload-signature */

@@ -881,7 +881,7 @@ export default function QuanLyHoSoDangKyPage() {
       {/* ── 2. KPI Cards (Thống kê chuẩn theo temple) ──────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Tổng thí sinh */}
-        <Card className="rounded-2xl border hover:shadow-xs transition-shadow">
+        <Card className="rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-primary/40">
           <CardContent className="p-4 sm:p-5 flex flex-col justify-between gap-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-muted-foreground">Tổng thí sinh đăng ký</span>
@@ -905,7 +905,7 @@ export default function QuanLyHoSoDangKyPage() {
         </Card>
 
         {/* Card 2: Chờ duyệt */}
-        <Card className="rounded-2xl border hover:shadow-xs transition-shadow">
+        <Card className="rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-amber-500/40">
           <CardContent className="p-4 sm:p-5 flex flex-col justify-between gap-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-muted-foreground">Hồ sơ chờ phê duyệt</span>
@@ -930,7 +930,7 @@ export default function QuanLyHoSoDangKyPage() {
         </Card>
 
         {/* Card 3: Đã duyệt */}
-        <Card className="rounded-2xl border hover:shadow-xs transition-shadow">
+        <Card className="rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-emerald-500/40">
           <CardContent className="p-4 sm:p-5 flex flex-col justify-between gap-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-muted-foreground">Đã duyệt hợp lệ</span>
@@ -957,7 +957,7 @@ export default function QuanLyHoSoDangKyPage() {
         </Card>
 
         {/* Card 4: Từ chối */}
-        <Card className="rounded-2xl border hover:shadow-xs transition-shadow">
+        <Card className="rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-destructive/40">
           <CardContent className="p-4 sm:p-5 flex flex-col justify-between gap-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-muted-foreground">Hồ sơ từ chối / cần sửa</span>
@@ -983,8 +983,8 @@ export default function QuanLyHoSoDangKyPage() {
       </div>
 
       {/* ── 3. Table Card Chuẩn Temple quan-ly-ky-thi-ca-thi.tsx ───────────── */}
-      <Card className="rounded-2xl border overflow-hidden">
-        <CardHeader className="p-4 sm:p-5 border-b bg-card">
+      <Card className="min-w-0 overflow-hidden rounded-2xl border shadow-2xs">
+        <CardHeader className="gap-3.5 border-b bg-card/50 p-4 sm:p-5">
           <div className="flex flex-col gap-4">
             {/* Hàng 1: Tabs bộ lọc */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1147,25 +1147,25 @@ export default function QuanLyHoSoDangKyPage() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/30 hover:bg-muted/30 border-b">
-                <TableHead className="w-[140px] py-3 text-xs font-semibold text-muted-foreground pl-5">
+                <TableHead className="w-[85px] py-3 text-xs font-semibold text-muted-foreground pl-5">
                   Số CCCD
                 </TableHead>
-                <TableHead className="min-w-[200px] py-3 text-xs font-semibold text-muted-foreground">
+                <TableHead className="min-w-[220px] py-3 text-xs font-semibold text-muted-foreground">
                   Họ và tên thí sinh
                 </TableHead>
-                <TableHead className="min-w-[120px] py-3 text-xs font-semibold text-muted-foreground">
+                <TableHead className="min-w-[200px] py-3 text-xs font-semibold text-muted-foreground">
                   Ngày sinh
                 </TableHead>
-                <TableHead className="min-w-[130px] py-3 text-xs font-semibold text-muted-foreground">
+                <TableHead className="min-w-[110px] py-3 text-xs font-semibold text-muted-foreground">
                   Số điện thoại
                 </TableHead>
-                <TableHead className="min-w-[160px] py-3 text-xs font-semibold text-muted-foreground">
+                <TableHead className="min-w-[120px] py-3 text-xs font-semibold text-muted-foreground">
                   Cấp độ đăng ký
                 </TableHead>
                 <TableHead className="min-w-[130px] py-3 text-xs font-semibold text-muted-foreground text-center">
                   Trạng thái giấy tờ
                 </TableHead>
-                <TableHead className="w-[100px] py-3 text-xs font-semibold text-muted-foreground text-right pr-5">
+                <TableHead className="w-[90px] py-3 text-xs font-semibold text-muted-foreground text-right pr-5">
                   Thao tác
                 </TableHead>
               </TableRow>
@@ -1482,7 +1482,7 @@ export default function QuanLyHoSoDangKyPage() {
       {/* ── 6. Dialog Từ Chối Hồ Sơ Kèm Lý Do ──────────────────────────────── */}
       <Dialog open={isRejectDialogOpen} onOpenChange={setIsRejectDialogOpen}>
         <DialogContent className="max-w-xl max-h-[90vh] overflow-hidden p-0">
-          <DialogHeader className="min-w-0 p-3 pb-2 pr-10 border-b bg-muted/20">
+          <DialogHeader className="p-6 pb-4 pr-12 border-b bg-muted/20">
             <div className="flex items-center gap-2 mb-1">
               <Badge
                 variant="outline"
@@ -1501,7 +1501,7 @@ export default function QuanLyHoSoDangKyPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="p-6 space-y-4">
+          <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-foreground">
                 Lý do từ chối thường gặp (Nhấp để chọn nhanh):

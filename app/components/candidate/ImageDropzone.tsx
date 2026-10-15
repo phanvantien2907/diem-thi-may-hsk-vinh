@@ -8,7 +8,7 @@
  * - Trạng thái: idle / dragover / uploading / done
  */
 import * as React from "react";
-import { ImagePlus, X, Loader2 } from "lucide-react";
+import { ImagePlus, X, Loader2, CheckCircle2 } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { validateImageFile } from "~/lib/cloudinary";
 
@@ -23,12 +23,16 @@ interface ImageDropzoneProps {
   onClear: () => void;
   /** Đang upload */
   uploading?: boolean;
+  /** Dòng text thông báo trạng thái khi đang upload / phân tích AI */
+  uploadingText?: string;
   /** Thông báo lỗi */
   error?: string;
   /** Tỉ lệ khung ảnh */
   aspectRatio?: "portrait" | "landscape";
   /** Disabled state */
   disabled?: boolean;
+  /** Đã vượt qua kiểm định AI (hiển thị badge chuẩn trên ảnh) */
+  isValidated?: boolean;
 }
 
 export function ImageDropzone({
@@ -37,9 +41,11 @@ export function ImageDropzone({
   onFileSelect,
   onClear,
   uploading = false,
+  uploadingText,
   error,
   aspectRatio = "landscape",
   disabled = false,
+  isValidated = false,
 }: ImageDropzoneProps) {
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = React.useState(false);
@@ -119,8 +125,13 @@ export function ImageDropzone({
 
         {/* Uploading overlay */}
         {uploading && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/70">
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-background/80 px-2 text-center backdrop-blur-[2px]">
             <Loader2 className="size-6 animate-spin text-primary" />
+            {uploadingText && (
+              <span className="text-xs font-medium text-foreground">
+                {uploadingText}
+              </span>
+            )}
           </div>
         )}
 
@@ -132,6 +143,14 @@ export function ImageDropzone({
               alt={label}
               className="absolute inset-0 h-full w-full object-cover"
             />
+            {/* Validated badge */}
+            {isValidated && (
+              <div className="absolute left-1.5 top-1.5 z-10">
+                <span className="inline-flex items-center gap-1 rounded-full bg-primary px-2 py-0.5 text-[10px] font-medium text-primary-foreground shadow-xs">
+                  <CheckCircle2 className="size-2.5" /> Đạt chuẩn AI
+                </span>
+              </div>
+            )}
             {/* Clear button */}
             {!disabled && !uploading && (
               <button
@@ -140,7 +159,7 @@ export function ImageDropzone({
                   e.stopPropagation();
                   onClear();
                 }}
-                className="absolute right-1.5 top-1.5 z-10 flex size-6 items-center justify-center rounded-full bg-foreground/70 text-background transition-colors hover:bg-foreground/90"
+                className="absolute right-1.5 top-1.5 z-10 flex size-6 items-center justify-center rounded-full bg-foreground/70 text-background transition-colors hover:bg-foreground/90 cursor-pointer"
                 aria-label={`Xóa ${label}`}
               >
                 <X className="size-3.5" />

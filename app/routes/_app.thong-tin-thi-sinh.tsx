@@ -9,6 +9,7 @@ import type {
   DocumentResponseDTO,
   Province,
   Ward,
+  ValidatePortraitResponseDTO,
 } from "~/types/candidate";
 import type { CandidateProfileFormValues } from "~/lib/schemas/candidate";
 import type { CandidateDocumentFormValues } from "~/lib/schemas/candidate";
@@ -291,30 +292,111 @@ function CandidateFormsWrapper({
       body[key] = value;
     }
 
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | ({ data?: DocumentResponseDTO } & ApiErrorPayload)
+        | null;
+
+      if (!response.ok) {
+        const errorMsg =
+          getApiErrorMessage(payload) ??
+          "Không thể lưu giấy tờ. Vui lòng kiểm tra lại thông tin.";
+        throw new Error(errorMsg);
+      }
+
+      if (!payload?.data) {
+        throw new Error("API không trả về dữ liệu giấy tờ sau khi lưu.");
+      }
+
+      setDocument(payload.data);
+
+      // Hiển thị toast theo trạng thái verification từ backend
+      const verificationStatus = payload.data.verification_status;
+      const rejectionReason = payload.data.rejection_reason;
+
+      if (verificationStatus === "rejected") {
+        toast.add({
+          type: "error",
+          title: "Ảnh chân dung không hợp lệ",
+          description:
+            rejectionReason ||
+            "Ảnh không đáp ứng yêu cầu. Vui lòng tải lại ảnh khác.",
+        });
+      } else {
+        // `verified` và `pending` (Vision không khả dụng) đều là lưu thành công:
+        // không thông báo "chờ quản trị viên duyệt" cho thí sinh.
+        toast.add({
+          type: "success",
+          title: "Cập nhật giấy tờ thành công!",
+          description:
+            "Thông tin giấy tờ và ảnh chân dung của bạn đã được lưu.",
+        });
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Không thể lưu giấy tờ. Vui lòng thử lại.";
+
+      const isPortraitError =
+        message.toLowerCase().includes("chân dung") ||
+        message.toLowerCase().includes("khuôn mặt") ||
+        message.toLowerCase().includes("kính") ||
+        message.toLowerCase().includes("nền") ||
+        message.toLowerCase().includes("ảnh");
+
+      toast.add({
+        type: "error",
+        title: isPortraitError
+          ? "Ảnh chân dung không hợp lệ"
+          : "Lưu giấy tờ thất bại",
+        description: message,
+      });
+
+      // Bắn lỗi ra để component form nắm được và kích hoạt thông báo lỗi cục bộ
+      throw error;
+    }
+  }
+
+  // Pre-validation API: kiểm tra tính hợp lệ của ảnh chân dung qua AI Vision
+  async function handleValidatePortrait(
+    portraitUrl: string
+  ): Promise<ValidatePortraitResponseDTO> {
+    const url = `${apiBaseUrl}/api/v1/me/candidate-profile/validate-portrait`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ portrait_image_url: portraitUrl }),
     });
 
-    if (!response.ok) {
-      const err = (await response.json().catch(() => null)) as {
-        msg?: string;
-      } | null;
-      throw new Error(
-        err?.msg ?? "Không thể lưu giấy tờ. Vui lòng thử lại."
-      );
+    const payload = (await response.json().catch(() => null)) as {
+      success?: boolean;
+      data?: ValidatePortraitResponseDTO;
+      msg?: string;
+      error?: string;
+    } | null;
+
+    if (!response.ok || !payload?.data) {
+      const errorMsg =
+        payload?.msg ||
+        (typeof payload?.error === "string" ? payload.error : null) ||
+        "Không thể kiểm tra ảnh chân dung qua hệ thống AI. Vui lòng thử lại.";
+      throw new Error(errorMsg);
     }
 
-    const result = (await response.json()) as { data: DocumentResponseDTO };
-    setDocument(result.data);
-    toast.add({
-      type: "success",
-      title: "Lưu giấy tờ thành công!",
-    });
+    return payload.data;
   }
 
   return (
@@ -332,6 +414,7 @@ function CandidateFormsWrapper({
         token={token}
         apiBaseUrl={apiBaseUrl}
         onSubmit={handleDocumentSubmit}
+        onValidatePortrait={handleValidatePortrait}
         disabled={profile === null || isAdminPreview}
         userCccd={userCccd}
       />
