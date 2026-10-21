@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8080}
+    image: diem-thi-may-hsk-vinh-fe:latest
+    container_name: hsk_vinh_frontend
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # URL gọi nội bộ giữa container Frontend và Backend (host.docker.internal trên Docker Desktop/Linux)
+      - INTERNAL_API_BASE_URL=${INTERNAL_API_BASE_URL:-http://host.docker.internal:8080}
+      - API_BASE_URL=${INTERNAL_API_BASE_URL:-http://host.docker.internal:8080}
+      # URL trả về cho Browser phía Client (người dùng truy cập qua trình duyệt máy thật)
+      - PUBLIC_API_BASE_URL=${PUBLIC_API_BASE_URL:-http://localhost:8080}
+      - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8080}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - hsk_frontend_net
+
+networks:
+  hsk_frontend_net:
+    driver: bridge

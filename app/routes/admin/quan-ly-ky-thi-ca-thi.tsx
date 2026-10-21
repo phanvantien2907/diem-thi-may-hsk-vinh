@@ -111,7 +111,9 @@ import {
   XCircleIcon,
   XIcon,
   BuildingIcon,
+  DatabaseIcon,
   AlertTriangleIcon,
+  LockIcon,
 } from "lucide-react";
 
 const PAGE_SIZE = 10;
@@ -233,36 +235,57 @@ function getShiftDetails(shift: ExamShift) {
   }
 }
 
-function getStatusDetails(status: ExamSessionStatus) {
-  switch (status) {
-    case "open":
-      return {
-        label: "Đang mở",
-        variant: "default" as const,
-        badgeClass:
-          "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800/60",
-        dotClass: "bg-emerald-500",
-        pulse: true,
-      };
-    case "closed":
-      return {
-        label: "Đã đóng",
-        variant: "secondary" as const,
-        badgeClass:
-          "bg-muted text-muted-foreground border-border dark:bg-muted/60",
-        dotClass: "bg-muted-foreground",
-        pulse: false,
-      };
-    case "cancelled":
-      return {
-        label: "Đã hủy",
-        variant: "destructive" as const,
-        badgeClass:
-          "bg-destructive/10 text-destructive border-destructive/20 dark:bg-destructive/20",
-        dotClass: "bg-destructive",
-        pulse: false,
-      };
+export function isSessionExpired(session?: {
+  registration_deadline?: string | null;
+  date?: string | null;
+  status?: string | null;
+} | null): boolean {
+  if (!session) return false;
+  if (session.status === "cancelled") return false;
+  if (session.status === "closed") return true;
+  const now = Date.now();
+  if (session.registration_deadline) {
+    const deadline = new Date(session.registration_deadline).getTime();
+    if (!isNaN(deadline) && deadline < now) return true;
   }
+  if (session.date) {
+    const examDate = new Date(session.date).getTime();
+    if (!isNaN(examDate) && examDate < now) return true;
+  }
+  return false;
+}
+
+function getStatusDetails(status: ExamSessionStatus, isExpired?: boolean) {
+  if (status === "cancelled") {
+    return {
+      label: "Đã hủy",
+      variant: "destructive" as const,
+      badgeClass:
+        "bg-destructive/10 text-destructive border-destructive/20 dark:bg-destructive/20",
+      dotClass: "bg-destructive",
+      pulse: false,
+    };
+  }
+  if (isExpired || status === "closed") {
+    return {
+      label: isExpired && status === "open" ? "Đã hết hạn" : "Đã đóng",
+      variant: "secondary" as const,
+      badgeClass:
+        isExpired && status === "open"
+          ? "bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800/60"
+          : "bg-muted text-muted-foreground border-border dark:bg-muted/60",
+      dotClass: isExpired && status === "open" ? "bg-rose-500" : "bg-muted-foreground",
+      pulse: false,
+    };
+  }
+  return {
+    label: "Đang mở",
+    variant: "default" as const,
+    badgeClass:
+      "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800/60",
+    dotClass: "bg-emerald-500",
+    pulse: true,
+  };
 }
 
 function getPublicationStatusDetails(
@@ -401,6 +424,8 @@ export async function action({ request }: Route.ActionArgs) {
       sessionPayload.exam_session_publish_at = new Date(pubAt).toISOString();
     }
     body = JSON.stringify(sessionPayload);
+  } else if (intent === "clear-cache") {
+    endpoint = "/api/v1/admin/exam-sessions/clear-cache";
   } else {
     return { error: "Thao tác không hợp lệ." } satisfies SessionAction;
   }
@@ -434,7 +459,11 @@ export async function action({ request }: Route.ActionArgs) {
         ? "Đã tạo ca thi mới thành công."
         : intent === "cancel"
           ? "Đã hủy ca thi thành công."
-          : "Cập nhật trạng thái phát hành thành công.",
+          : intent === "clear-cache"
+            ? (json && "data" in json && typeof (json.data as any)?.message === "string"
+                ? (json.data as any).message
+                : "Đã làm mới bộ nhớ đệm ca thi trên Redis thành công.")
+            : "Cập nhật trạng thái phát hành thành công.",
   } satisfies SessionAction;
 }
 
@@ -928,8 +957,9 @@ function SessionDetailDialog({
 }) {
   if (!session) return null;
 
+  const isExpired = isSessionExpired(session);
   const shiftInfo = getShiftDetails(session.shift);
-  const statusInfo = getStatusDetails(session.status);
+  const statusInfo = getStatusDetails(session.status, isExpired);
   const pubStatusInfo = getPublicationStatusDetails(session.exam_session_publication_status);
   const ShiftIcon = shiftInfo.icon;
 
@@ -960,6 +990,13 @@ function SessionDetailDialog({
               >
                 <span className={`size-1.5 rounded-full ${statusInfo.dotClass}`} />
                 {statusInfo.label}
+              </Badge>
+            ) : isExpired ? (
+              <Badge
+                className="rounded-full px-2.5 py-0.5 text-xs font-medium border flex items-center gap-1.5 bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800/60"
+              >
+                <LockIcon className="size-3 text-rose-500" />
+                Đã hết hạn
               </Badge>
             ) : session.exam_session_publication_status === "draft" ? (
               <Badge
@@ -998,6 +1035,20 @@ function SessionDetailDialog({
               "Hệ thống thi trắc nghiệm trên máy tính chuẩn khảo thí quốc tế HSK."}
           </DialogDescription>
         </DialogHeader>
+
+        {isExpired && (
+          <div className="mx-6 mt-4 p-3.5 rounded-xl border border-rose-200 bg-rose-50/70 text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300 flex items-start gap-2.5">
+            <LockIcon className="size-4 shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
+            <div>
+              <p className="font-semibold text-rose-900 dark:text-rose-200">
+                Ca thi đã hết hạn tiếp nhận hồ sơ / Đã kết thúc
+              </p>
+              <p className="mt-0.5 text-xs text-rose-700/90 dark:text-rose-300/90 leading-relaxed">
+                Hạn chót đăng ký hoặc ngày thi của ca này đã qua. Hệ thống đã tự động khóa ca thi, không thể công khai lại hoặc điều chỉnh thông tin ca thi.
+              </p>
+            </div>
+          </div>
+        )}
 
         <div className="p-6 overflow-y-auto max-h-[65vh] space-y-5">
           {/* Card thông tin thời gian */}
@@ -1078,7 +1129,8 @@ function SessionDetailDialog({
               <div>
                 <div className="flex items-center justify-between gap-1">
                   <p className="text-muted-foreground text-xs">Thời gian công khai</p>
-                  {(session.exam_session_publication_status === "draft" ||
+                  {!isExpired &&
+                    (session.exam_session_publication_status === "draft" ||
                     session.exam_session_publication_status === "scheduled") &&
                     onOpenPublishSchedule && (
                       <Button
@@ -1130,7 +1182,7 @@ function SessionDetailDialog({
             >
               Đóng
             </Button>
-            {session.status !== "cancelled" && (
+            {!isExpired && session.status !== "cancelled" && (
               <Button
                 type="button"
                 variant="outline"
@@ -1145,7 +1197,8 @@ function SessionDetailDialog({
                 Hủy ca thi
               </Button>
             )}
-            {session.status !== "cancelled" &&
+            {!isExpired &&
+              session.status !== "cancelled" &&
               session.exam_session_publication_status !== "published" &&
               onPublishNow && (
                 <Button
@@ -1258,6 +1311,7 @@ function PublishScheduleDialog({
   }, [fetcher.data, onOpenChange]);
 
   if (!session) return null;
+  const isExpired = isSessionExpired(session);
 
   const onSubmit = (values: UpdatePublishScheduleValues) => {
     fetcher.submit(
@@ -1304,6 +1358,20 @@ function PublishScheduleDialog({
             Xem chi tiết ngày công khai và cập nhật lịch phát hành tự động cho ca thi.
           </DialogDescription>
         </DialogHeader>
+
+        {isExpired && (
+          <div className="mx-6 mt-4 p-3.5 rounded-xl border border-rose-200 bg-rose-50/70 text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300 flex items-start gap-2.5">
+            <LockIcon className="size-4 shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
+            <div>
+              <p className="font-semibold text-rose-900 dark:text-rose-200">
+                Ca thi đã hết hạn — Đã khóa toàn bộ thao tác
+              </p>
+              <p className="mt-0.5 text-xs text-rose-700/90 dark:text-rose-300/90 leading-relaxed">
+                Ca thi đã qua hạn chót nhận đăng ký ({formatDateTime(session.registration_deadline, false)}) hoặc đã qua ngày thi ({formatDateOnly(session.date)}). Không thể chỉnh sửa hoặc lưu lại cấu hình phát hành.
+              </p>
+            </div>
+          </div>
+        )}
 
         <form onSubmit={form.handleSubmit(onSubmit)}>
           <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
@@ -1353,6 +1421,7 @@ function PublishScheduleDialog({
                 >
                   <SelectTrigger
                     id="edit_pub_status"
+                    disabled={isExpired || isSubmitting}
                     className="w-full h-9 rounded-full px-3 text-xs cursor-pointer"
                   >
                     <SelectValue placeholder="Chọn trạng thái">
@@ -1397,6 +1466,7 @@ function PublishScheduleDialog({
                   <Input
                     id="edit_publish_at"
                     type="datetime-local"
+                    disabled={isExpired || isSubmitting}
                     className="h-9 rounded-full px-3 text-xs bg-background"
                     {...form.register("publish_at")}
                   />
@@ -1415,7 +1485,7 @@ function PublishScheduleDialog({
           </div>
 
           <DialogFooter>
-            {onPublishNow ? (
+            {!isExpired && onPublishNow ? (
               <Button
                 type="button"
                 variant="outline"
@@ -1440,21 +1510,23 @@ function PublishScheduleDialog({
               >
                 Đóng
               </Button>
-              <Button
-                type="submit"
-                size="sm"
-                className="rounded-full cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-medium"
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? (
-                  <>
-                    <RefreshCwIcon className="size-3 mr-1.5 animate-spin" />
-                    Đang lưu...
-                  </>
-                ) : (
-                  "Lưu thay đổi"
-                )}
-              </Button>
+              {!isExpired && (
+                <Button
+                  type="submit"
+                  size="sm"
+                  className="rounded-full cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-medium"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <>
+                      <RefreshCwIcon className="size-3 mr-1.5 animate-spin" />
+                      Đang lưu...
+                    </>
+                  ) : (
+                    "Lưu thay đổi"
+                  )}
+                </Button>
+              )}
             </div>
           </DialogFooter>
         </form>
@@ -1517,8 +1589,13 @@ export default function QuanLyKyThiCaThiPage() {
       const matchesType =
         examTypeFilter === "all" ||
         String(session.exam_type_id) === examTypeFilter;
+      const isExpired = isSessionExpired(session);
       const matchesStatus =
-        statusFilter === "all" || session.status === statusFilter;
+        statusFilter === "all" ||
+        (statusFilter === "open" && session.status === "open" && !isExpired) ||
+        (statusFilter === "expired" && isExpired && session.status !== "cancelled") ||
+        (statusFilter === "closed" && (session.status === "closed" || (isExpired && session.status !== "cancelled"))) ||
+        (statusFilter === "cancelled" && session.status === "cancelled");
       const matchesShift =
         shiftFilter === "all" || session.shift === shiftFilter;
       const matchesPubStatus =
@@ -1539,11 +1616,15 @@ export default function QuanLyKyThiCaThiPage() {
     );
   }, [filteredSessions, currentPage]);
 
-  // Metrics summary (Đang mở chỉ tính ca thi đã phát hành công khai)
+  // Metrics summary (Đang mở chỉ tính ca thi còn hạn và đã phát hành công khai)
   const openCount = sessions.filter(
     (s) =>
       s.status === "open" &&
+      !isSessionExpired(s) &&
       (s.exam_session_publication_status ?? "published") === "published"
+  ).length;
+  const expiredCount = sessions.filter(
+    (s) => s.status !== "cancelled" && isSessionExpired(s)
   ).length;
   const closedCount = sessions.filter((s) => s.status === "closed").length;
   const cancelledCount = sessions.filter((s) => s.status === "cancelled").length;
@@ -1576,29 +1657,50 @@ export default function QuanLyKyThiCaThiPage() {
     shiftFilter !== "all" ||
     pubStatusFilter !== "all";
 
-  // Notifications from actionFetcher
-  React.useEffect(() => {
-    if (actionFetcher.data?.success) {
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await fetch("/internal/admin/system/clear-cache?target=exam-sessions", { method: "POST" });
       toast.add({
         type: "success",
-        title: "Thao tác thành công",
-        description: actionFetcher.data.message,
+        title: "Làm mới dữ liệu thành công",
+        description: "Đã làm mới bộ nhớ đệm ca thi và đồng bộ dữ liệu mới nhất.",
       });
       revalidator.revalidate();
-      setSessionToCancel(null);
-      setIsCancelAlertOpen(false);
-      setSessionToPublish(null);
-      setIsPublishAlertOpen(false);
-      setSessionForPublishSchedule(null);
-      setIsPublishScheduleOpen(false);
-    } else if (actionFetcher.data?.error) {
-      toast.add({
-        type: "error",
-        title: "Không thể hoàn tất thao tác",
-        description: actionFetcher.data.error,
-      });
+    } catch {
+      revalidator.revalidate();
+    } finally {
+      setIsRefreshing(false);
     }
-  }, [actionFetcher.data, revalidator]);
+  };
+
+  // Notifications from actionFetcher (guarded against revalidation loops)
+  const lastHandledActionRef = React.useRef<any>(null);
+  React.useEffect(() => {
+    if (actionFetcher.data && actionFetcher.data !== lastHandledActionRef.current) {
+      lastHandledActionRef.current = actionFetcher.data;
+      if (actionFetcher.data.success) {
+        toast.add({
+          type: "success",
+          title: "Thao tác thành công",
+          description: actionFetcher.data.message,
+        });
+        setSessionToCancel(null);
+        setIsCancelAlertOpen(false);
+        setSessionToPublish(null);
+        setIsPublishAlertOpen(false);
+        setSessionForPublishSchedule(null);
+        setIsPublishScheduleOpen(false);
+      } else if (actionFetcher.data.error) {
+        toast.add({
+          type: "error",
+          title: "Không thể hoàn tất thao tác",
+          description: actionFetcher.data.error,
+        });
+      }
+    }
+  }, [actionFetcher.data]);
 
   const confirmCancelSession = () => {
     if (!sessionToCancel) return;
@@ -1644,6 +1746,10 @@ export default function QuanLyKyThiCaThiPage() {
             </Badge>
             <span className="text-muted-foreground/60 text-xs">•</span>
             <span className="text-xs text-muted-foreground">Đại học Vinh</span>
+            <span className="text-muted-foreground/60 text-xs">•</span>
+            <Badge variant="outline" className="rounded-full px-2 py-0.5 text-[10px] font-mono border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5">
+              Redis Cache: 10m (±35% Jitter)
+            </Badge>
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
             Kỳ thi & Ca thi
@@ -1653,18 +1759,17 @@ export default function QuanLyKyThiCaThiPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
           <Button
             variant="outline"
             className="rounded-full cursor-pointer hover:bg-muted font-medium text-xs sm:text-sm shadow-2xs"
-            onClick={() => revalidator.revalidate()}
-            disabled={revalidator.state === "loading"}
+            onClick={handleRefresh}
+            disabled={isRefreshing || revalidator.state === "loading"}
           >
             <RefreshCwIcon
-              className={`size-3.5 mr-1.5 ${revalidator.state === "loading" ? "animate-spin" : ""
-                }`}
+              className={`size-3.5 mr-1.5 ${isRefreshing || revalidator.state === "loading" ? "animate-spin" : ""}`}
             />
-            {revalidator.state === "loading" ? "Đang đồng bộ..." : "Làm mới dữ liệu"}
+            {isRefreshing || revalidator.state === "loading" ? "Đang đồng bộ..." : "Làm mới dữ liệu"}
           </Button>
 
           <SessionCreateDialog examTypes={examTypes} />
@@ -1788,9 +1893,9 @@ export default function QuanLyKyThiCaThiPage() {
               <ClockIcon className="size-4" />
             </div>
             <div className="min-w-0">
-              <p className="text-[11px] text-muted-foreground truncate">Đóng / Hủy</p>
+              <p className="text-[11px] text-muted-foreground truncate">Đóng / Hết hạn</p>
               <p className="text-xl font-bold tracking-tight text-foreground">
-                {closedCount + cancelledCount}
+                {closedCount + expiredCount + cancelledCount}
               </p>
             </div>
           </CardContent>
@@ -1971,6 +2076,7 @@ export default function QuanLyKyThiCaThiPage() {
                       const current = val ?? statusFilter;
                       if (!current || current === "all") return "Mọi trạng thái";
                       if (current === "open") return "Đang mở";
+                      if (current === "expired") return "Đã hết hạn";
                       if (current === "closed") return "Đã đóng";
                       if (current === "cancelled") return "Đã hủy";
                       return "Mọi trạng thái";
@@ -1983,13 +2089,16 @@ export default function QuanLyKyThiCaThiPage() {
                       Mọi trạng thái
                     </SelectItem>
                     <SelectItem value="open" className="cursor-pointer text-xs">
-                      Đang mở
+                      Đang mở ({openCount})
+                    </SelectItem>
+                    <SelectItem value="expired" className="cursor-pointer text-xs">
+                      Đã hết hạn ({expiredCount})
                     </SelectItem>
                     <SelectItem value="closed" className="cursor-pointer text-xs">
-                      Đã đóng
+                      Đã đóng ({closedCount})
                     </SelectItem>
                     <SelectItem value="cancelled" className="cursor-pointer text-xs">
-                      Đã hủy
+                      Đã hủy ({cancelledCount})
                     </SelectItem>
                   </SelectGroup>
                 </SelectContent>
@@ -2074,9 +2183,10 @@ export default function QuanLyKyThiCaThiPage() {
             </TableHeader>
             <TableBody>
               {visibleSessions.map((session) => {
+                const isExpired = isSessionExpired(session);
                 const type = examTypes.find((item) => item.id === session.exam_type_id);
                 const shiftInfo = getShiftDetails(session.shift);
-                const statusInfo = getStatusDetails(session.status);
+                const statusInfo = getStatusDetails(session.status, isExpired);
                 const pubStatusInfo = getPublicationStatusDetails(session.exam_session_publication_status);
                 const ShiftIcon = shiftInfo.icon;
 
@@ -2162,6 +2272,14 @@ export default function QuanLyKyThiCaThiPage() {
                             <span className={`size-1.5 rounded-full ${statusInfo.dotClass}`} />
                             {statusInfo.label}
                           </Badge>
+                        ) : isExpired ? (
+                          <Badge
+                            className="rounded-full px-2.5 py-0.5 text-[11px] font-medium border inline-flex items-center gap-1.5 w-fit bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800/60"
+                            title="Ca thi đã qua hạn chót đăng ký hoặc đã qua ngày thi"
+                          >
+                            <LockIcon className="size-3 text-rose-500" />
+                            Đã hết hạn
+                          </Badge>
                         ) : session.exam_session_publication_status === "draft" ? (
                           <Badge
                             variant="secondary"
@@ -2213,7 +2331,7 @@ export default function QuanLyKyThiCaThiPage() {
                           <span className="sr-only">Xem chi tiết</span>
                         </Button>
 
-                        {(session.exam_session_publication_status === "draft" ||
+                        {!isExpired && (session.exam_session_publication_status === "draft" ||
                           session.exam_session_publication_status === "scheduled") && (
                             <Button
                               variant="ghost"
@@ -2274,9 +2392,8 @@ export default function QuanLyKyThiCaThiPage() {
                             </DropdownMenuGroup>
 
                             {/* Publication status quick actions */}
-                            {session.status !== "cancelled" &&
-                              (session.exam_session_publication_status === "draft" ||
-                                session.exam_session_publication_status === "scheduled") && (
+                            {!isExpired &&
+                              session.status !== "cancelled" && (
                                 <>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase tracking-wider">
@@ -2310,7 +2427,7 @@ export default function QuanLyKyThiCaThiPage() {
                                 </>
                               )}
 
-                            {session.status !== "cancelled" && (
+                            {!isExpired && session.status !== "cancelled" && (
                               <>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem
@@ -2323,6 +2440,16 @@ export default function QuanLyKyThiCaThiPage() {
                                 >
                                   <XCircleIcon className="size-3.5 mr-2" />
                                   Hủy ca thi
+                                </DropdownMenuItem>
+                              </>
+                            )}
+
+                            {isExpired && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem disabled className="text-xs text-muted-foreground flex items-center gap-1.5 cursor-not-allowed">
+                                  <LockIcon className="size-3.5 text-muted-foreground" />
+                                  Ca thi đã khóa (Hết hạn)
                                 </DropdownMenuItem>
                               </>
                             )}

@@ -4,7 +4,7 @@ import { cn } from "~/lib/utils";
 import { useWebSocket, type WSEvent } from "~/hooks/use-websocket";
 import type { Route } from "./+types/_app.dang-ky-thi";
 import { requireAuth } from "~/lib/auth.server";
-import { API_BASE_URL } from "~/lib/env.server";
+import { API_BASE_URL, PUBLIC_API_BASE_URL } from "~/lib/env.server";
 import type {
   ExamType,
   ExamRoom,
@@ -132,7 +132,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   return {
     token,
-    apiBaseUrl: API_BASE_URL,
+    apiBaseUrl: PUBLIC_API_BASE_URL,
     examTypesPromise,
     examRoomsPromise,
     sessionsPromise,

@@ -2,7 +2,7 @@ import * as React from "react";
 import { useOutletContext } from "react-router";
 import type { Route } from "./+types/_app.thong-tin-thi-sinh";
 import { requireAuth } from "~/lib/auth.server";
-import { API_BASE_URL } from "~/lib/env.server";
+import { API_BASE_URL, PUBLIC_API_BASE_URL } from "~/lib/env.server";
 
 import type {
   CandidateResponseDTO,
@@ -119,7 +119,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     provincesPromise,
     wardsPromise,
     token,
-    apiBaseUrl: API_BASE_URL,
+    apiBaseUrl: PUBLIC_API_BASE_URL,
     userCccd,
     userFullName,
   };

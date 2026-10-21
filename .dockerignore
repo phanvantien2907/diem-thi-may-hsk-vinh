@@ -1,4 +1,15 @@
+.git
+.gitignore
+.agents
 .react-router
 build
 node_modules
 README.md
+*.md
+.env
+.env.*
+.vscode
+.idea
+*.log
+.DS_Store
+dist

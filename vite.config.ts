@@ -8,6 +8,15 @@ export default defineConfig({
     tsconfigPaths: true,
   },
   server: {
+    headers: {
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    },
+    watch: {
+      usePolling: true,
+      interval: 100,
+    },
     proxy: {
       "/api": {
         target: "http://localhost:8080",

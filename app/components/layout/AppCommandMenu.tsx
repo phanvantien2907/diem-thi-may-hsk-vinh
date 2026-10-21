@@ -41,7 +41,9 @@ import {
   ArrowRightLeftIcon,
   ActivityIcon,
   FileCodeIcon,
+  DatabaseIcon,
 } from "lucide-react";
+import { toast } from "~/components/ui/toast";
 
 interface AppCommandMenuProps {
   open: boolean;
@@ -152,6 +154,94 @@ export function AppCommandMenu({
                 <CreditCardIcon className="size-4 text-primary" />
                 <span>Quản lý Giao dịch & Thanh toán</span>
                 <CommandShortcut>G G</CommandShortcut>
+              </CommandItem>
+            </CommandGroup>
+
+            <CommandSeparator />
+
+            <CommandGroup heading="Hiệu Năng & Bộ Nhớ Đệm (Redis)">
+              <CommandItem
+                value="Xóa toàn bộ cache Redis hệ thống flush master clear cache hsk"
+                onSelect={() =>
+                  handleSelect(async () => {
+                    try {
+                      const res = await fetch("/internal/admin/system/clear-cache?target=system", {
+                        method: "POST",
+                      });
+                      const data = await res.json();
+                      toast.add({
+                        type: "success",
+                        title: "Làm mới Cache Redis thành công",
+                        description: data.message || "Toàn bộ bộ nhớ đệm hệ thống đã được làm mới.",
+                      });
+                    } catch (e: any) {
+                      toast.add({
+                        type: "error",
+                        title: "Lỗi kết nối",
+                        description: "Không thể kết nối đến máy chủ Redis.",
+                      });
+                    }
+                  })
+                }
+              >
+                <DatabaseIcon className="size-4 text-amber-500" />
+                <span>Xóa toàn bộ Cache Redis (Master Flush)</span>
+              </CommandItem>
+
+              <CommandItem
+                value="Làm mới cache ca thi exam sessions clear cache redis"
+                onSelect={() =>
+                  handleSelect(async () => {
+                    try {
+                      const res = await fetch("/internal/admin/system/clear-cache?target=exam-sessions", {
+                        method: "POST",
+                      });
+                      const data = await res.json();
+                      toast.add({
+                        type: "success",
+                        title: "Làm mới Cache Ca thi",
+                        description: data.message || "Đã xóa cache ca thi trên Redis.",
+                      });
+                    } catch (e: any) {
+                      toast.add({
+                        type: "error",
+                        title: "Lỗi kết nối",
+                        description: "Không thể kết nối đến máy chủ Redis.",
+                      });
+                    }
+                  })
+                }
+              >
+                <CalendarDaysIcon className="size-4 text-primary" />
+                <span>Làm mới Cache Ca thi (Redis)</span>
+              </CommandItem>
+
+              <CommandItem
+                value="Làm mới cache hồ sơ thí sinh candidates clear cache redis"
+                onSelect={() =>
+                  handleSelect(async () => {
+                    try {
+                      const res = await fetch("/internal/admin/system/clear-cache?target=candidates", {
+                        method: "POST",
+                      });
+                      const data = await res.json();
+                      toast.add({
+                        type: "success",
+                        title: "Làm mới Cache Thí sinh",
+                        description: data.message || "Đã xóa cache thí sinh trên Redis.",
+                      });
+                    } catch (e: any) {
+                      toast.add({
+                        type: "error",
+                        title: "Lỗi kết nối",
+                        description: "Không thể kết nối đến máy chủ Redis.",
+                      });
+                    }
+                  })
+                }
+              >
+                <UsersRoundIcon className="size-4 text-blue-500" />
+                <span>Làm mới Cache Thí sinh (Redis)</span>
               </CommandItem>
             </CommandGroup>
 

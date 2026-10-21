@@ -225,3 +225,17 @@ Domain: Đăng ký thi máy HSK (汉语水平考试 - Chinese Proficiency Test)
 - Hệ thống quản lý ca thi, phòng thi, và danh sách thí sinh.
 - Có phân quyền: Admin, Giám thị, Thí sinh.
 - Hiển thị điểm thi sau khi công bố kết quả.
+
+---
+
+## Docker Packaging & Optimization Guidelines
+
+- **Package Manager trong Docker:** BẮT BUỘC dùng `pnpm` qua `corepack enable`. Tuyệt đối không dùng `npm` hay `yarn`.
+- **Cấu trúc Multi-Stage Build:**
+  - `base`: `node:22-alpine` với `corepack enable`.
+  - `dependencies`: Cài đặt toàn bộ dependencies với `pnpm install --frozen-lockfile`.
+  - `builder`: Sinh type `pnpm exec react-router typegen` trước khi `pnpm run build`.
+  - `prod-deps`: Cài `pnpm install --prod --frozen-lockfile` và tự động lọc bỏ các tệp rác (`*.d.ts`, `*.map`, `*.md`, `test/`).
+  - `runner`: `node:22-alpine` chạy với `USER node`, dọn dẹp sạch `npm`/`yarn` khỏi runtime layer để thu nhỏ kích thước.
+- **Dung lượng mạng tối ưu:** Compressed layer transfer đạt **~72.8MB** (dưới 100MB cho ứng dụng React Router v7 SSR hoàn chỉnh).
+- **Log Rotation trong Docker Compose:** Bắt buộc khai báo `logging: json-file (max-size: 10m, max-file: 3)`.

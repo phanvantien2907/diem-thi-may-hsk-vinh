@@ -25,6 +25,7 @@ import {
   MapPinIcon,
   Image as ImageIcon,
   BuildingIcon,
+  DatabaseIcon,
   ExternalLinkIcon,
   FileCheckIcon,
 } from "lucide-react";
@@ -87,7 +88,7 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { toast } from "~/components/ui/toast";
-import { useLoaderData, useNavigation, useSearchParams, useFetcher, useNavigate } from "react-router";
+import { useLoaderData, useNavigation, useSearchParams, useFetcher, useNavigate, useRevalidator } from "react-router";
 
 // ─── Metadata chuẩn theo Project Rules (Rule 8) ──────────────────────────────
 export const meta: Route.MetaFunction = () => [
@@ -596,6 +597,26 @@ export async function action({ request }: Route.ActionArgs) {
     return { success: true, intent: "reject", message: "Đã gửi thông báo từ chối hồ sơ tới thí sinh." };
   }
 
+  if (intent === "clear-cache") {
+    const res = await fetch(`${API_BASE_URL}/api/v1/admin/candidates/clear-cache`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }).catch(() => null);
+
+    if (!res || !res.ok) {
+      const err = await res?.json().catch(() => null);
+      return { error: err?.msg || "Không thể xoá bộ nhớ đệm thí sinh." };
+    }
+    const json = await res.json().catch(() => null);
+    return {
+      success: true,
+      intent: "clear-cache",
+      message: (json && json.data && json.data.message) || "Đã làm mới toàn bộ bộ nhớ đệm thí sinh trên Redis.",
+    };
+  }
+
   return { error: "Hành động không hợp lệ" };
 }
 
@@ -617,6 +638,25 @@ export default function QuanLyHoSoDangKyPage() {
   const [query, setQuery] = React.useState(search);
   const fetcher = useFetcher();
   const navigate = useNavigate();
+  const revalidator = useRevalidator();
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await fetch("/internal/admin/system/clear-cache?target=candidates", { method: "POST" });
+      toast.add({
+        type: "success",
+        title: "Làm mới dữ liệu thành công",
+        description: "Đã làm mới bộ nhớ đệm hồ sơ và đồng bộ dữ liệu mới nhất.",
+      });
+      revalidator.revalidate();
+    } catch {
+      revalidator.revalidate();
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   // State Modal Chi tiết thí sinh & giấy tờ
   const [selectedCandidate, setSelectedCandidate] = React.useState<AdminCandidateResponseDTO | null>(null);
@@ -647,9 +687,11 @@ export default function QuanLyHoSoDangKyPage() {
     setQuery(search);
   }, [search]);
 
-  // Xử lý thông báo sau khi fetcher thực thi action
+  // Xử lý thông báo sau khi fetcher thực thi action (guarded against revalidation loops)
+  const lastHandledFetcherRef = React.useRef<any>(null);
   React.useEffect(() => {
-    if (fetcher.data && fetcher.state === "idle") {
+    if (fetcher.data && fetcher.state === "idle" && fetcher.data !== lastHandledFetcherRef.current) {
+      lastHandledFetcherRef.current = fetcher.data;
       const data = fetcher.data as any;
       if (data.success) {
         toast.add({
@@ -839,15 +881,31 @@ export default function QuanLyHoSoDangKyPage() {
       {/* ── 1. Page Header Chuẩn ─────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">
-            Hồ sơ Đăng ký
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">
+              Hồ sơ Đăng ký
+            </h1>
+            <Badge variant="outline" className="rounded-full px-2 py-0.5 text-[10px] font-mono border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5">
+              Redis Cache: 6h
+            </Badge>
+          </div>
           <p className="text-xs sm:text-sm text-muted-foreground mt-1">
             Xác minh danh tính thí sinh, kiểm tra căn cước công dân và phê duyệt giấy tờ dự thi HSK.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={handleRefresh}
+            disabled={isRefreshing || revalidator.state === "loading"}
+            className="rounded-full cursor-pointer hover:bg-muted font-medium text-xs sm:text-sm h-9 shadow-2xs"
+            title="Làm mới bộ nhớ đệm và đồng bộ dữ liệu hồ sơ mới nhất"
+          >
+            <RefreshCwIcon className={`size-3.5 mr-1.5 ${isRefreshing || revalidator.state === "loading" ? "animate-spin" : ""}`} />
+            {isRefreshing || revalidator.state === "loading" ? "Đang đồng bộ..." : "Làm mới dữ liệu"}
+          </Button>
+
           <Button
             variant="outline"
             onClick={handleScanDuplicates}
@@ -864,16 +922,6 @@ export default function QuanLyHoSoDangKyPage() {
           >
             <DownloadIcon className="size-4 mr-1.5 text-primary" />
             Xuất danh sách
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate(".", { replace: true })}
-            className="rounded-full cursor-pointer hover:bg-muted size-9"
-            title="Tải lại dữ liệu"
-          >
-            <RefreshCwIcon className="size-4 text-muted-foreground" />
           </Button>
         </div>
       </div>

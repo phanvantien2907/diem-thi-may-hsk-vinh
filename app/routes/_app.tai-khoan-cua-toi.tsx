@@ -6,7 +6,7 @@ import type { Route } from "./+types/_app.tai-khoan-cua-toi";
 import { requireAuth } from "~/lib/auth.server";
 import { updateProfileSchema, changePasswordSchema, type UpdateProfileFormValues, type ChangePasswordFormValues } from "~/lib/schemas/auth";
 
-import { API_BASE_URL } from "~/lib/env.server";
+import { API_BASE_URL, PUBLIC_API_BASE_URL } from "~/lib/env.server";
 import type { AccountResponseDTO, UserProfile } from "~/types/auth";
 
 import {
@@ -78,7 +78,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<LoaderData>
     user,
     token,
     account,
-    apiBaseUrl: API_BASE_URL,
+    apiBaseUrl: PUBLIC_API_BASE_URL,
   };
 }
 

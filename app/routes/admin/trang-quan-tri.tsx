@@ -3,7 +3,7 @@ import type { Route } from "./+types/trang-quan-tri";
 import { Link, useRevalidator } from "react-router";
 import { useWebSocket, type WSEvent } from "~/hooks/use-websocket";
 import { requireAdminAuth } from "~/lib/auth.server";
-import { API_BASE_URL } from "~/lib/env.server";
+import { API_BASE_URL, PUBLIC_API_BASE_URL } from "~/lib/env.server";
 import {
   TrendingUpIcon,
   UsersIcon,
@@ -23,10 +23,29 @@ import {
   PieChartIcon,
   BarChart3Icon,
   ShieldAlertIcon,
+  DatabaseIcon,
+  ServerIcon,
+  ChevronDownIcon,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "~/components/ui/dropdown-menu";
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationPrevious,
+  PaginationNext,
+  PaginationButton,
+} from "~/components/ui/pagination";
 import { toast } from "~/components/ui/toast";
 import { formatVND, formatNumber } from "~/lib/chart-utils";
 
@@ -165,7 +184,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     console.error("Error fetching admin dashboard data:", error);
   }
 
-  return { user, token, apiBaseUrl: API_BASE_URL, dashboardData };
+  return { user, token, apiBaseUrl: PUBLIC_API_BASE_URL, dashboardData };
 }
 
 export default function AdminDashboardPage({ loaderData }: Route.ComponentProps) {
@@ -177,9 +196,22 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
   const [hoveredPointInfo, setHoveredPointInfo] = React.useState<DataPoint | null>(null);
   const [activeExceptionsCount, setActiveExceptionsCount] = React.useState<number>(0);
 
+  // Phân trang danh sách Ca thi thời gian thực (4 ca thi / trang để hiển thị cân đối trên grid 2 cột)
+  const [sessionPage, setSessionPage] = React.useState(1);
+  const SESSIONS_PER_PAGE = 4;
+  const totalSessionCount = dashboardData.realtime_sessions?.length || 0;
+  const totalSessionPages = Math.max(1, Math.ceil(totalSessionCount / SESSIONS_PER_PAGE));
+  const safeSessionPage = Math.min(sessionPage, totalSessionPages);
+  const paginatedSessions = (dashboardData.realtime_sessions || []).slice(
+    (safeSessionPage - 1) * SESSIONS_PER_PAGE,
+    safeSessionPage * SESSIONS_PER_PAGE
+  );
+
   React.useEffect(() => {
     setLastSyncTime(new Date().toLocaleTimeString("vi-VN", { hour12: false }));
   }, []);
+
+  const lastWsRevalidateRef = React.useRef<number>(0);
 
   // Kết nối WebSocket thời gian thực (Real-time 100%, không dùng polling API theo yêu cầu)
   const { isConnected } = useWebSocket({
@@ -189,8 +221,10 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
       console.log("[WS Dashboard] Real-time event received:", event.type, event.payload);
       setLastSyncTime(new Date().toLocaleTimeString("vi-VN", { hour12: false }));
 
-      // Tự động revalidate tải lại dữ liệu mới nhất khi nhận tín hiệu từ WebSocket
-      if (revalidator.state === "idle") {
+      // Tự động revalidate tải lại dữ liệu mới nhất khi nhận tín hiệu từ WebSocket (throttle 3s)
+      const now = Date.now();
+      if (now - lastWsRevalidateRef.current > 3000 && revalidator.state === "idle") {
+        lastWsRevalidateRef.current = now;
         revalidator.revalidate();
       }
 
@@ -223,18 +257,22 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
     },
   });
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setIsRefreshing(true);
-    revalidator.revalidate();
-    setTimeout(() => {
-      setIsRefreshing(false);
-      setLastSyncTime(new Date().toLocaleTimeString("vi-VN", { hour12: false }));
+    try {
+      await fetch("/internal/admin/system/clear-cache?target=system", { method: "POST" });
       toast.add({
         type: "success",
-        title: "Đồng bộ thời gian thực thành công!",
-        description: `Dữ liệu Dashboard được làm mới tức thì từ máy chủ PostgreSQL lúc ${new Date().toLocaleTimeString("vi-VN")}`,
+        title: "Đồng bộ thành công!",
+        description: `Đã làm mới bộ nhớ đệm và cập nhật dữ liệu bảng điều khiển mới nhất lúc ${new Date().toLocaleTimeString("vi-VN")}`,
       });
-    }, 300);
+      revalidator.revalidate();
+      setLastSyncTime(new Date().toLocaleTimeString("vi-VN", { hour12: false }));
+    } catch {
+      revalidator.revalidate();
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   return (
@@ -258,11 +296,11 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
             variant="outline"
             size="sm"
             onClick={handleRefresh}
-            disabled={isRefreshing}
+            disabled={isRefreshing || revalidator.state === "loading"}
             className="rounded-full cursor-pointer hover:bg-muted font-medium text-xs h-8.5 px-3.5 shadow-2xs"
           >
-            <RefreshCwIcon className={`size-3.5 mr-1.5 ${isRefreshing ? "animate-spin" : ""}`} />
-            {isRefreshing ? "Đang đồng bộ..." : "Đồng bộ"}
+            <RefreshCwIcon className={`size-3.5 mr-1.5 ${isRefreshing || revalidator.state === "loading" ? "animate-spin" : ""}`} />
+            {isRefreshing || revalidator.state === "loading" ? "Đang đồng bộ..." : "Đồng bộ"}
           </Button>
 
           <Button
@@ -304,7 +342,7 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
             </span>
             <span className="text-muted-foreground">•</span>
             <span className="text-muted-foreground">
-              Dữ liệu truy vấn trực tiếp thời gian thực 100% (Không bộ nhớ đệm cache). Tự động nhận biến động thanh toán & ghế thi.
+              Vận hành song song: PostgreSQL Real-time (Giao dịch tài chính) & Redis Cache phòng thủ (Ca thi, Thí sinh, Địa điểm).
             </span>
           </div>
         </div>
@@ -577,6 +615,12 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                   <span className="relative inline-flex rounded-full size-2 bg-emerald-500" />
                 </span>
+                <Badge
+                  variant="outline"
+                  className="rounded-full text-[11px] font-mono px-2 py-0.5 border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 ml-1"
+                >
+                  Tổng {totalSessionCount} ca thi
+                </Badge>
               </div>
               <CardDescription className="text-xs mt-0.5">
                 Giám sát tỷ lệ lấp đầy ghế ngồi theo thời gian thực (Đã đặt, Đang giữ chỗ 15 phút, Ghế trống).
@@ -600,7 +644,7 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
 
         <CardContent className="p-4 sm:p-5">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {dashboardData.realtime_sessions.map((session) => {
+            {paginatedSessions.map((session) => {
               const bookedPct = Math.round((session.booked / session.capacity) * 100);
               const heldPct = Math.round((session.held / session.capacity) * 100);
               const isFull = session.available === 0;
@@ -695,6 +739,45 @@ export default function AdminDashboardPage({ loaderData }: Route.ComponentProps)
               );
             })}
           </div>
+
+          {/* Phân trang tối ưu cho danh sách Ca thi */}
+          {totalSessionPages > 1 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-border/60 mt-5">
+              <span className="text-xs text-muted-foreground">
+                Hiển thị <strong>{(safeSessionPage - 1) * SESSIONS_PER_PAGE + 1}</strong> - <strong>{Math.min(safeSessionPage * SESSIONS_PER_PAGE, totalSessionCount)}</strong> trong tổng số <strong>{totalSessionCount}</strong> ca thi
+              </span>
+
+              <Pagination className="mx-0 w-auto justify-end">
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      disabled={safeSessionPage <= 1}
+                      onClick={() => setSessionPage((p) => Math.max(1, p - 1))}
+                      className="rounded-full cursor-pointer hover:bg-muted"
+                    />
+                  </PaginationItem>
+                  {Array.from({ length: totalSessionPages }, (_, i) => i + 1).map((pageNum) => (
+                    <PaginationItem key={pageNum}>
+                      <PaginationButton
+                        isActive={safeSessionPage === pageNum}
+                        onClick={() => setSessionPage(pageNum)}
+                        className="rounded-full"
+                      >
+                        {pageNum}
+                      </PaginationButton>
+                    </PaginationItem>
+                  ))}
+                  <PaginationItem>
+                    <PaginationNext
+                      disabled={safeSessionPage >= totalSessionPages}
+                      onClick={() => setSessionPage((p) => Math.min(totalSessionPages, p + 1))}
+                      className="rounded-full cursor-pointer hover:bg-muted"
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            </div>
+          )}
         </CardContent>
       </Card>
 
