@@ -1,7 +1,19 @@
 import * as React from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import type { Route } from "./+types/quan-ly-ho-so-dang-ky";
 import { requireAdminAuth } from "~/lib/auth.server";
 import { API_BASE_URL } from "~/lib/env.server";
+import { rejectCandidateSchema, type RejectCandidateFormValues } from "~/lib/schemas/admin-candidate";
+import { CandidateAuditLogDialog } from "~/components/dashboard/CandidateAuditLogDialog";
+import type {
+  AdminCandidateResponseDTO,
+  ApiEnvelope,
+  CandidateMetrics,
+  CandidateRowActions,
+  DuplicateCandidateItem,
+  PaginationMeta,
+} from "~/types/admin";
 import {
   UsersRoundIcon,
   SearchIcon,
@@ -28,6 +40,11 @@ import {
   DatabaseIcon,
   ExternalLinkIcon,
   FileCheckIcon,
+  HistoryIcon,
+  HashIcon,
+  ScanSearchIcon,
+  Undo2Icon,
+  UserXIcon,
 } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -88,7 +105,7 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { toast } from "~/components/ui/toast";
-import { useLoaderData, useNavigation, useSearchParams, useFetcher, useNavigate, useRevalidator } from "react-router";
+import { useLoaderData, useSearchParams, useFetcher, useRevalidator } from "react-router";
 
 // ─── Metadata chuẩn theo Project Rules (Rule 8) ──────────────────────────────
 export const meta: Route.MetaFunction = () => [
@@ -99,70 +116,15 @@ export const meta: Route.MetaFunction = () => [
   },
 ];
 
-// ─── Định dạng ngày giờ chuẩn BẮT BUỘC theo Project Rules (Rule 6) ────────────
-export function EmptyFieldBadge({ className }: { className?: string }) {
-  return (
-    <Badge
-      variant="outline"
-      className={`rounded-full px-2 py-0.5 text-[10px] sm:text-[11px] font-normal text-muted-foreground border-dashed border-border/80 bg-muted/30 select-none inline-flex items-center gap-1 shrink-0 ${className || ""
-        }`}
-    >
-      Chưa cập nhật
-    </Badge>
-  );
-}
+import {
+  CandidateDetailDialog,
+  EmptyFieldBadge,
+  renderFieldOrBadge,
+  formatGender,
+  formatDateOrBadge,
+} from "~/components/dashboard/CandidateDetailDialog";
 
-function isEmptyFieldValue(value: React.ReactNode): boolean {
-  if (
-    value === null ||
-    value === undefined ||
-    (typeof value === "string" && value.trim() === "") ||
-    value === "—" ||
-    (typeof value === "string" &&
-      ["null", "undefined"].includes(value.trim().toLowerCase()))
-  ) {
-    return true;
-  }
-  return false;
-}
-
-function renderFieldOrBadge(
-  value: React.ReactNode,
-  className?: string
-): React.ReactNode {
-  return isEmptyFieldValue(value) ? (
-    <EmptyFieldBadge className={className} />
-  ) : (
-    value
-  );
-}
-
-function formatGender(value: string | null | undefined): string | null {
-  if (!value) return null;
-  if (value === "male") return "Nam";
-  if (value === "female") return "Nữ";
-  if (value === "other") return "Khác";
-  return value;
-}
-
-function formatDateOrBadge(
-  value: string | null | undefined,
-  includeSeconds = false
-): React.ReactNode {
-  if (!value) return <EmptyFieldBadge />;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return <EmptyFieldBadge />;
-  const d = String(date.getDate()).padStart(2, "0");
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const y = date.getFullYear();
-  if (!includeSeconds) {
-    return `${d}/${m}/${y}`;
-  }
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mm = String(date.getMinutes()).padStart(2, "0");
-  const ss = String(date.getSeconds()).padStart(2, "0");
-  return `${d}/${m}/${y} ${hh}:${mm}:${ss}`;
-}
+export { EmptyFieldBadge, renderFieldOrBadge, formatGender, formatDateOrBadge };
 
 function formatDateOnly(value: string | null | undefined): string {
   if (!value) return "—";
@@ -190,63 +152,48 @@ function formatDateTime(value: string | null | undefined, includeSeconds = false
   return `${d}/${m}/${y} ${hh}:${mm}:${ss}`;
 }
 
-// ─── Types & DTOs theo API_DOCUMENTATION.md ──────────────────────────────────
-export interface CandidateDocument {
-  id: number;
-  candidate_id: number;
-  doc_type: "cccd" | "passport" | string;
-  doc_number: string;
-  issue_date?: string;
-  issue_place?: string;
-  front_image_url?: string;
-  back_image_url?: string;
-  portrait_image_url?: string;
-  verification_status: "pending" | "verified" | "rejected";
-  rejection_reason?: string | null;
-  ward_id?: number | null;
-  province_id?: number | null;
-  address_detail?: string | null;
+// ─── Types & DTOs: định nghĩa tại ~/types/admin (Project Rules) ──────────────
+export type {
+  AdminCandidateResponseDTO,
+  CandidateDocument,
+  CandidateMetrics,
+  DuplicateCandidateItem,
+  PaginationMeta,
+} from "~/types/admin";
+
+/** Ma trận hành động theo trạng thái giấy tờ — quyết định item nào hiển thị trong dropdown */
+function getCandidateActions(c: AdminCandidateResponseDTO): CandidateRowActions {
+  const doc = c.latest_document;
+  const status = doc?.verification_status;
+  return {
+    canApprove: Boolean(doc) && status === "pending",
+    canReject: Boolean(doc) && status === "pending",
+    canReapprove: Boolean(doc) && status === "rejected",
+    canRevoke: Boolean(doc) && status === "verified",
+    canCheckDuplicate: Boolean(doc?.doc_number),
+    canCopyDocNumber: Boolean(doc?.doc_number),
+    canCopyPhone: Boolean(c.phone?.trim()),
+    canEmail: Boolean(c.email?.trim()),
+    canDisableAccount: Number.isInteger(c.account_id) && c.account_id > 0,
+  };
 }
 
-export interface AdminCandidateResponseDTO {
-  id: number;
-  account_id: number;
-  full_name: string;
-  full_name_cn?: string | null;
-  dob: string;
-  gender: "male" | "female" | "other" | string;
-  nationality: string;
-  ethnicity?: string | null;
-  religion?: string | null;
-  chinese_study_years?: number | null;
-  phone?: string | null;
-  email?: string | null;
-  latest_document?: CandidateDocument;
-  exam_level?: string | null;
-  target_exam_level?: string | null;
-  created_at?: string;
+function copyToClipboard(value: string, title: string) {
+  if (!navigator.clipboard) {
+    toast.add({ type: "error", title: "Trình duyệt không hỗ trợ sao chép" });
+    return;
+  }
+  navigator.clipboard.writeText(value).then(
+    () => toast.add({ type: "info", title, description: value }),
+    () => toast.add({ type: "error", title: "Không thể sao chép", description: "Vui lòng thử lại." })
+  );
 }
 
-export interface CandidateMetrics {
-  total: number;
-  pending: number;
-  verified: number;
-  rejected: number;
-}
+type CandidateIntent = "approve" | "reject" | "reapprove" | "revoke" | "disable-account" | "clear-cache";
 
-export interface PaginationMeta {
-  page: number;
-  per_page: number;
-  total_items: number;
-  total_pages: number;
-}
-
-export interface DuplicateCandidateItem {
-  doc_number: string;
-  doc_type: string;
-  candidate_ids: number[];
-  count: number;
-}
+type ActionResult =
+  | { success: true; intent: CandidateIntent; message: string; error?: undefined }
+  | { success?: false; intent?: CandidateIntent; error: string; message?: undefined };
 
 // ─── Dữ liệu mẫu Fallback khi Database môi trường Dev chưa có bản ghi ────────
 const fallbackSampleCandidates: AdminCandidateResponseDTO[] = [
@@ -429,6 +376,7 @@ const fallbackSampleCandidates: AdminCandidateResponseDTO[] = [
 
 // ─── React Router v7 Loader ──────────────────────────────────────────────────
 export async function loader({ request }: Route.LoaderArgs) {
+  // JWT chỉ dùng phía server — KHÔNG trả về client
   const { user, token } = await requireAdminAuth(request);
   const url = new URL(request.url);
   const page = url.searchParams.get("page") || "1";
@@ -499,7 +447,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     const json = await sessionsRes.json().catch(() => null);
     if (json?.success && Array.isArray(json.data)) {
       const datesSet = new Set<string>();
-      json.data.forEach((s: any) => {
+      (json.data as { date?: string | null }[]).forEach((s) => {
         if (s.date) datesSet.add(s.date.split("T")[0]);
       });
       examDates = Array.from(datesSet).sort();
@@ -539,7 +487,6 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   return {
     user,
-    token,
     candidates,
     meta,
     metrics,
@@ -555,8 +502,16 @@ export async function loader({ request }: Route.LoaderArgs) {
 export async function action({ request }: Route.ActionArgs) {
   const { token } = await requireAdminAuth(request);
   const formData = await request.formData();
-  const intent = formData.get("intent");
-  const candidateId = formData.get("candidate_id");
+  const intent = formData.get("intent")?.toString();
+  const candidateId = formData.get("candidate_id")?.toString();
+
+  // Helper bust cache Redis ngay sau các thao tác thay đổi trạng thái
+  const clearCandidatesCache = async () => {
+    await fetch(`${API_BASE_URL}/api/v1/admin/candidates/clear-cache`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(() => null);
+  };
 
   if (intent === "approve") {
     if (!candidateId) return { error: "Thiếu ID thí sinh" };
@@ -572,29 +527,84 @@ export async function action({ request }: Route.ActionArgs) {
       const err = await res?.json().catch(() => null);
       return { error: err?.msg || "Không thể phê duyệt hồ sơ thí sinh." };
     }
+    await clearCandidatesCache();
     return { success: true, intent: "approve", message: "Đã phê duyệt hồ sơ thí sinh thành công." };
   }
 
-  if (intent === "reject") {
+  if (intent === "reapprove") {
     if (!candidateId) return { error: "Thiếu ID thí sinh" };
-    const reason = formData.get("reason")?.toString().trim();
-    if (!reason) {
-      return { error: "Vui lòng nhập lý do từ chối hồ sơ." };
+    const res = await fetch(`${API_BASE_URL}/api/v1/admin/candidates/${candidateId}/approve`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    }).catch(() => null);
+
+    if (!res || !res.ok) {
+      const err = await res?.json().catch(() => null);
+      return { error: err?.msg || "Không thể phê duyệt lại hồ sơ thí sinh." };
     }
+    await clearCandidatesCache();
+    return { success: true, intent: "reapprove", message: "Đã phê duyệt lại hồ sơ thí sinh thành công." };
+  }
+
+  if (intent === "reject" || intent === "revoke") {
+    if (!candidateId) return { error: "Thiếu ID thí sinh" };
+    const reasonRaw = formData.get("reason")?.toString() || "";
+    const parsed = rejectCandidateSchema.safeParse({ reason: reasonRaw });
+    if (!parsed.success) {
+      return { error: parsed.error.issues[0]?.message || "Lý do không hợp lệ (tối đa 500 ký tự)." };
+    }
+
     const res = await fetch(`${API_BASE_URL}/api/v1/admin/candidates/${candidateId}/reject`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({ reason: parsed.data.reason }),
     }).catch(() => null);
 
     if (!res || !res.ok) {
       const err = await res?.json().catch(() => null);
-      return { error: err?.msg || "Không thể từ chối hồ sơ thí sinh." };
+      return {
+        error:
+          err?.msg ||
+          (intent === "revoke" ? "Không thể thu hồi phê duyệt hồ sơ." : "Không thể từ chối hồ sơ thí sinh."),
+      };
     }
-    return { success: true, intent: "reject", message: "Đã gửi thông báo từ chối hồ sơ tới thí sinh." };
+    await clearCandidatesCache();
+    return {
+      success: true,
+      intent,
+      message:
+        intent === "revoke"
+          ? "Đã thu hồi phê duyệt và gửi thông báo tới thí sinh."
+          : "Đã gửi thông báo từ chối hồ sơ tới thí sinh.",
+    };
+  }
+
+  if (intent === "disable-account") {
+    const accountId = formData.get("account_id")?.toString();
+    if (!accountId) return { error: "Thiếu ID tài khoản cần vô hiệu hóa" };
+    const res = await fetch(`${API_BASE_URL}/api/v1/admin/delete-account/${accountId}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }).catch(() => null);
+
+    if (!res || !res.ok) {
+      const err = await res?.json().catch(() => null);
+      return { error: err?.msg || "Không thể vô hiệu hóa tài khoản thí sinh." };
+    }
+    await clearCandidatesCache();
+    return {
+      success: true,
+      intent: "disable-account",
+      message: "Đã vô hiệu hóa tài khoản thí sinh thành công.",
+    };
   }
 
   if (intent === "clear-cache") {
@@ -631,13 +641,11 @@ export default function QuanLyHoSoDangKyPage() {
     level,
     examDate,
     examDates,
-    token,
   } = useLoaderData<typeof loader>();
 
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = React.useState(search);
   const fetcher = useFetcher();
-  const navigate = useNavigate();
   const revalidator = useRevalidator();
   const [isRefreshing, setIsRefreshing] = React.useState(false);
 
@@ -658,21 +666,45 @@ export default function QuanLyHoSoDangKyPage() {
     }
   };
 
-  // State Modal Chi tiết thí sinh & giấy tờ
+  // State Modal Chi tiết thí sinh & thẩm định giấy tờ (API §3.10)
   const [selectedCandidate, setSelectedCandidate] = React.useState<AdminCandidateResponseDTO | null>(null);
   const [isDetailOpen, setIsDetailOpen] = React.useState(false);
 
-  // State Dialog Từ chối kèm lý do
-  const [candidateToReject, setCandidateToReject] = React.useState<AdminCandidateResponseDTO | null>(null);
-  const [isRejectDialogOpen, setIsRejectDialogOpen] = React.useState(false);
-  const [rejectionReason, setRejectionReason] = React.useState("");
+  // State Dialog Lịch sử thao tác (Audit Log - API §11.1)
+  const [auditLogCandidate, setAuditLogCandidate] = React.useState<AdminCandidateResponseDTO | null>(null);
+  const [isAuditLogOpen, setIsAuditLogOpen] = React.useState(false);
 
-  // State Dialog Quét hồ sơ trùng lặp
+  // State Dialog Từ chối / Thu hồi kèm lý do (RHF + Zod theo chuẩn dự án)
+  const [candidateToReject, setCandidateToReject] = React.useState<AdminCandidateResponseDTO | null>(null);
+  const [rejectMode, setRejectMode] = React.useState<"reject" | "revoke">("reject");
+  const [isRejectDialogOpen, setIsRejectDialogOpen] = React.useState(false);
+
+  const {
+    register: registerReject,
+    handleSubmit: handleSubmitReject,
+    setValue: setRejectValue,
+    reset: resetRejectForm,
+    formState: { errors: rejectErrors },
+  } = useForm<RejectCandidateFormValues>({
+    resolver: zodResolver(rejectCandidateSchema),
+    defaultValues: { reason: "" },
+  });
+
+  // State Dialog Phê duyệt lại hồ sơ đã từ chối
+  const [candidateToReapprove, setCandidateToReapprove] = React.useState<AdminCandidateResponseDTO | null>(null);
+  const [isReapproveAlertOpen, setIsReapproveAlertOpen] = React.useState(false);
+
+  // State Dialog Vô hiệu hóa tài khoản thí sinh (§2.13)
+  const [candidateToDisable, setCandidateToDisable] = React.useState<AdminCandidateResponseDTO | null>(null);
+  const [isDisableAlertOpen, setIsDisableAlertOpen] = React.useState(false);
+
+  // State Dialog Quét hồ sơ trùng lặp (API §3.11)
   const [isDuplicateDialogOpen, setIsDuplicateDialogOpen] = React.useState(false);
   const [duplicateList, setDuplicateList] = React.useState<DuplicateCandidateItem[]>([]);
   const [isScanningDuplicates, setIsScanningDuplicates] = React.useState(false);
+  const [targetDocNumber, setTargetDocNumber] = React.useState<string | null>(null);
 
-  // State Dialog Xuất danh sách PDF
+  // State Dialog Xuất danh sách PDF (API §3.9)
   const [isExportDialogOpen, setIsExportDialogOpen] = React.useState(false);
   const [exportExamDate, setExportExamDate] = React.useState(examDate || examDates[0] || "2026-11-27");
   const [exportStatus, setExportStatus] = React.useState("all");
@@ -700,8 +732,10 @@ export default function QuanLyHoSoDangKyPage() {
           description: data.message || "Hệ thống đã cập nhật trạng thái hồ sơ.",
         });
         setIsRejectDialogOpen(false);
+        setIsReapproveAlertOpen(false);
+        setIsDisableAlertOpen(false);
         setIsDetailOpen(false);
-        setRejectionReason("");
+        resetRejectForm({ reason: "" });
       } else if (data.error) {
         toast.add({
           type: "error",
@@ -710,7 +744,7 @@ export default function QuanLyHoSoDangKyPage() {
         });
       }
     }
-  }, [fetcher.data, fetcher.state]);
+  }, [fetcher.data, fetcher.state, resetRejectForm]);
 
   // Hàm updateParams chuẩn theo temple quan-ly-ky-thi-ca-thi.tsx
   const updateParams = React.useCallback(
@@ -751,42 +785,67 @@ export default function QuanLyHoSoDangKyPage() {
     );
   };
 
-  // Thao tác mở Dialog từ chối
-  const handleOpenReject = (candidate: AdminCandidateResponseDTO) => {
+  // Mở Dialog Từ chối / Thu hồi
+  const handleOpenReject = (candidate: AdminCandidateResponseDTO, mode: "reject" | "revoke" = "reject") => {
     setCandidateToReject(candidate);
-    setRejectionReason("Ảnh CCCD bị mờ, không đọc được thông tin");
+    setRejectMode(mode);
+    resetRejectForm({
+      reason:
+        mode === "revoke"
+          ? "Thu hồi phê duyệt để thí sinh chụp lại ảnh giấy tờ rõ nét hơn"
+          : "Ảnh CCCD bị mờ, không đọc được thông tin",
+    });
     setIsRejectDialogOpen(true);
   };
 
-  // Xác nhận từ chối
-  const handleConfirmReject = () => {
+  // Xác nhận từ chối / thu hồi (qua form validation)
+  const onSubmitReject = (data: RejectCandidateFormValues) => {
     if (!candidateToReject) return;
-    if (!rejectionReason.trim()) {
-      toast.add({
-        type: "error",
-        title: "Thiếu lý do",
-        description: "Vui lòng nhập lý do từ chối hồ sơ.",
-      });
-      return;
-    }
     fetcher.submit(
       {
-        intent: "reject",
+        intent: rejectMode,
         candidate_id: String(candidateToReject.id),
-        reason: rejectionReason.trim(),
+        reason: data.reason.trim(),
       },
       { method: "post" }
     );
   };
 
-  // Quét hồ sơ trùng lặp
-  const handleScanDuplicates = async () => {
+  // Mở Dialog Phê duyệt lại
+  const handleOpenReapprove = (candidate: AdminCandidateResponseDTO) => {
+    setCandidateToReapprove(candidate);
+    setIsReapproveAlertOpen(true);
+  };
+
+  const handleConfirmReapprove = () => {
+    if (!candidateToReapprove) return;
+    fetcher.submit(
+      { intent: "reapprove", candidate_id: String(candidateToReapprove.id) },
+      { method: "post" }
+    );
+  };
+
+  // Mở Dialog Vô hiệu hóa tài khoản
+  const handleOpenDisableAccount = (candidate: AdminCandidateResponseDTO) => {
+    setCandidateToDisable(candidate);
+    setIsDisableAlertOpen(true);
+  };
+
+  const handleConfirmDisableAccount = () => {
+    if (!candidateToDisable || !candidateToDisable.account_id) return;
+    fetcher.submit(
+      { intent: "disable-account", account_id: String(candidateToDisable.account_id) },
+      { method: "post" }
+    );
+  };
+
+  // Quét hồ sơ trùng lặp (qua resource route an toàn phía server)
+  const handleScanDuplicates = async (filterDoc?: string) => {
+    setTargetDocNumber(filterDoc || null);
     setIsScanningDuplicates(true);
     setIsDuplicateDialogOpen(true);
     try {
-      const res = await fetch(`/api/v1/admin/candidates/duplicates`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetch("/internal/admin/candidates/duplicates");
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
@@ -804,7 +863,7 @@ export default function QuanLyHoSoDangKyPage() {
     }
   };
 
-  // Xuất file PDF danh sách thí sinh
+  // Xuất file PDF danh sách thí sinh (qua resource route an toàn)
   const handleExportPdf = async () => {
     if (!exportExamDate) {
       toast.add({
@@ -823,9 +882,7 @@ export default function QuanLyHoSoDangKyPage() {
       if (exportLevel && exportLevel !== "all") exportParams.set("level", exportLevel);
       if (search) exportParams.set("search", search);
 
-      const res = await fetch(`/api/v1/admin/candidates/export?${exportParams.toString()}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetch(`/internal/admin/candidates/export?${exportParams.toString()}`);
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => null);
@@ -908,7 +965,7 @@ export default function QuanLyHoSoDangKyPage() {
 
           <Button
             variant="outline"
-            onClick={handleScanDuplicates}
+            onClick={() => handleScanDuplicates()}
             className="rounded-full cursor-pointer hover:bg-muted font-medium text-xs sm:text-sm h-9"
           >
             <AlertTriangleIcon className="size-4 mr-1.5 text-amber-500" />
@@ -1324,77 +1381,179 @@ export default function QuanLyHoSoDangKyPage() {
                             <span className="sr-only">Xem chi tiết</span>
                           </Button>
 
-                          <DropdownMenu>
-                            <DropdownMenuTrigger
-                              render={
-                                <Button
-                                  variant="ghost"
-                                  size="icon-sm"
-                                  className="rounded-full cursor-pointer hover:bg-muted text-muted-foreground hover:text-foreground"
-                                  aria-label={`Thao tác hồ sơ ${c.full_name}`}
-                                />
-                              }
-                            >
-                              <MoreHorizontalIcon className="size-4" />
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="w-52 rounded-xl">
-                              <DropdownMenuLabel className="text-xs text-muted-foreground">
-                                Hồ sơ: {c.full_name}
-                              </DropdownMenuLabel>
-                              <DropdownMenuGroup>
-                                <DropdownMenuItem
-                                  className="cursor-pointer text-xs"
-                                  onClick={() => {
-                                    setSelectedCandidate(c);
-                                    setIsDetailOpen(true);
-                                  }}
+                          {(() => {
+                            const actions = getCandidateActions(c);
+                            const isPassport = c.latest_document?.doc_type === "passport";
+                            return (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger
+                                  render={
+                                    <Button
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      className="rounded-full cursor-pointer hover:bg-muted text-muted-foreground hover:text-foreground"
+                                      aria-label={`Thao tác hồ sơ ${c.full_name}`}
+                                    />
+                                  }
                                 >
-                                  <EyeIcon className="size-3.5 mr-2" />
-                                  Xem chi tiết hồ sơ
-                                </DropdownMenuItem>
-                                {c.latest_document?.doc_number && (
-                                  <DropdownMenuItem
-                                    className="cursor-pointer text-xs"
-                                    onClick={() => {
-                                      navigator.clipboard?.writeText(c.latest_document!.doc_number).then(() => {
-                                        toast.add({
-                                          type: "info",
-                                          title: "Đã sao chép số CCCD",
-                                        });
-                                      });
-                                    }}
-                                  >
-                                    <CopyIcon className="size-3.5 mr-2" />
-                                    Sao chép số CCCD
-                                  </DropdownMenuItem>
-                                )}
-                              </DropdownMenuGroup>
-
-                              {docStatus === "pending" && (
-                                <>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase tracking-wider">
-                                    Xử lý hồ sơ
+                                  <MoreHorizontalIcon className="size-4" />
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-56 rounded-xl p-1.5 shadow-lg border">
+                                  <DropdownMenuLabel className="text-xs text-muted-foreground font-semibold px-2 py-1.5 truncate">
+                                    Hồ sơ: {c.full_name}
                                   </DropdownMenuLabel>
-                                  <DropdownMenuItem
-                                    className="cursor-pointer text-xs text-emerald-600 dark:text-emerald-400 font-medium"
-                                    onClick={() => handleQuickApprove(c)}
-                                  >
-                                    <CheckCircle2Icon className="size-3.5 mr-2" />
-                                    Phê duyệt giấy tờ
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    variant="destructive"
-                                    className="cursor-pointer text-xs text-destructive font-medium"
-                                    onClick={() => handleOpenReject(c)}
-                                  >
-                                    <XCircleIcon className="size-3.5 mr-2" />
-                                    Từ chối hồ sơ
-                                  </DropdownMenuItem>
-                                </>
-                              )}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                                  <DropdownMenuGroup>
+                                    <DropdownMenuItem
+                                      className="cursor-pointer text-xs rounded-lg font-medium"
+                                      onClick={() => {
+                                        setSelectedCandidate(c);
+                                        setIsDetailOpen(true);
+                                      }}
+                                    >
+                                      <EyeIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                      Xem chi tiết hồ sơ
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      className="cursor-pointer text-xs rounded-lg font-medium"
+                                      onClick={() => {
+                                        setAuditLogCandidate(c);
+                                        setIsAuditLogOpen(true);
+                                      }}
+                                    >
+                                      <HistoryIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                      Lịch sử thao tác
+                                    </DropdownMenuItem>
+                                    {actions.canCheckDuplicate && (
+                                      <DropdownMenuItem
+                                        className="cursor-pointer text-xs rounded-lg font-medium"
+                                        onClick={() => handleScanDuplicates(c.latest_document!.doc_number)}
+                                      >
+                                        <ScanSearchIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                        Kiểm tra trùng giấy tờ
+                                      </DropdownMenuItem>
+                                    )}
+                                  </DropdownMenuGroup>
+
+                                  <DropdownMenuSeparator className="my-1" />
+                                  <DropdownMenuLabel className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider px-2 py-1">
+                                    Sao chép & Liên hệ
+                                  </DropdownMenuLabel>
+                                  <DropdownMenuGroup>
+                                    {actions.canCopyDocNumber && (
+                                      <DropdownMenuItem
+                                        className="cursor-pointer text-xs rounded-lg font-medium"
+                                        onClick={() =>
+                                          copyToClipboard(
+                                            c.latest_document!.doc_number,
+                                            isPassport ? "Đã sao chép số Hộ chiếu" : "Đã sao chép số CCCD"
+                                          )
+                                        }
+                                      >
+                                        <CopyIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                        {isPassport ? "Sao chép số Hộ chiếu" : "Sao chép số CCCD"}
+                                      </DropdownMenuItem>
+                                    )}
+                                    <DropdownMenuItem
+                                      className="cursor-pointer text-xs rounded-lg font-medium"
+                                      onClick={() => copyToClipboard(String(c.id), "Đã sao chép mã thí sinh")}
+                                    >
+                                      <HashIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                      Sao chép mã thí sinh (#{c.id})
+                                    </DropdownMenuItem>
+                                    {actions.canCopyPhone && (
+                                      <DropdownMenuItem
+                                        className="cursor-pointer text-xs rounded-lg font-medium"
+                                        onClick={() => copyToClipboard(c.phone!.trim(), "Đã sao chép số điện thoại")}
+                                      >
+                                        <PhoneIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                        Sao chép số điện thoại
+                                      </DropdownMenuItem>
+                                    )}
+                                    {actions.canEmail && (
+                                      <DropdownMenuItem
+                                        className="cursor-pointer text-xs rounded-lg font-medium"
+                                        onClick={() => {
+                                          window.location.href = `mailto:${c.email!.trim()}?subject=${encodeURIComponent(
+                                            "Thông báo hồ sơ đăng ký thi HSK - Đại học Vinh"
+                                          )}`;
+                                        }}
+                                      >
+                                        <MailIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                        Gửi email thí sinh
+                                      </DropdownMenuItem>
+                                    )}
+                                  </DropdownMenuGroup>
+
+                                  {(actions.canApprove || actions.canReject || actions.canRevoke || actions.canReapprove) && (
+                                    <>
+                                      <DropdownMenuSeparator className="my-1" />
+                                      <DropdownMenuLabel className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider px-2 py-1">
+                                        Xử lý hồ sơ
+                                      </DropdownMenuLabel>
+                                      <DropdownMenuGroup>
+                                        {actions.canApprove && (
+                                          <DropdownMenuItem
+                                            className="cursor-pointer text-xs rounded-lg font-medium text-emerald-600 dark:text-emerald-400 focus:text-emerald-600 focus:bg-emerald-50 dark:focus:bg-emerald-950/40"
+                                            onClick={() => handleQuickApprove(c)}
+                                          >
+                                            <CheckCircle2Icon className="size-3.5 mr-2" />
+                                            Phê duyệt giấy tờ
+                                          </DropdownMenuItem>
+                                        )}
+                                        {actions.canReject && (
+                                          <DropdownMenuItem
+                                            variant="destructive"
+                                            className="cursor-pointer text-xs rounded-lg font-medium text-destructive focus:text-destructive focus:bg-destructive/10"
+                                            onClick={() => handleOpenReject(c, "reject")}
+                                          >
+                                            <XCircleIcon className="size-3.5 mr-2" />
+                                            Từ chối hồ sơ
+                                          </DropdownMenuItem>
+                                        )}
+                                        {actions.canRevoke && (
+                                          <DropdownMenuItem
+                                            className="cursor-pointer text-xs rounded-lg font-medium text-amber-600 dark:text-amber-400 focus:text-amber-600 focus:bg-amber-50 dark:focus:bg-amber-950/40"
+                                            onClick={() => handleOpenReject(c, "revoke")}
+                                          >
+                                            <Undo2Icon className="size-3.5 mr-2" />
+                                            Thu hồi phê duyệt
+                                          </DropdownMenuItem>
+                                        )}
+                                        {actions.canReapprove && (
+                                          <DropdownMenuItem
+                                            className="cursor-pointer text-xs rounded-lg font-medium text-emerald-600 dark:text-emerald-400 focus:text-emerald-600 focus:bg-emerald-50 dark:focus:bg-emerald-950/40"
+                                            onClick={() => handleOpenReapprove(c)}
+                                          >
+                                            <CheckCircle2Icon className="size-3.5 mr-2" />
+                                            Phê duyệt lại
+                                          </DropdownMenuItem>
+                                        )}
+                                      </DropdownMenuGroup>
+                                    </>
+                                  )}
+
+                                  {actions.canDisableAccount && (
+                                    <>
+                                      <DropdownMenuSeparator className="my-1" />
+                                      <DropdownMenuLabel className="text-[10px] text-destructive/80 font-bold uppercase tracking-wider px-2 py-1">
+                                        Vùng nguy hiểm
+                                      </DropdownMenuLabel>
+                                      <DropdownMenuGroup>
+                                        <DropdownMenuItem
+                                          variant="destructive"
+                                          className="cursor-pointer text-xs rounded-lg font-medium text-destructive focus:text-destructive focus:bg-destructive/10"
+                                          onClick={() => handleOpenDisableAccount(c)}
+                                        >
+                                          <UserXIcon className="size-3.5 mr-2" />
+                                          Vô hiệu hóa tài khoản
+                                        </DropdownMenuItem>
+                                      </DropdownMenuGroup>
+                                    </>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            );
+                          })()}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1514,7 +1673,7 @@ export default function QuanLyHoSoDangKyPage() {
         </div>
       </Card>
 
-      {/* ── 5. Modal Chi Tiết Thí Sinh & Thẩm Định Giấy Tờ ─────────────────── */}
+      {/* ── 5. Modal Chi Tiết Thí Sinh & Thẩm Định Giấy Tờ (API §3.10) ────────── */}
       <CandidateDetailDialog
         candidate={selectedCandidate}
         open={isDetailOpen}
@@ -1522,26 +1681,45 @@ export default function QuanLyHoSoDangKyPage() {
         onApprove={(c) => handleQuickApprove(c)}
         onReject={(c) => {
           setIsDetailOpen(false);
-          handleOpenReject(c);
+          handleOpenReject(c, "reject");
+        }}
+        onReapprove={(c) => {
+          setIsDetailOpen(false);
+          handleOpenReapprove(c);
+        }}
+        onRevoke={(c) => {
+          setIsDetailOpen(false);
+          handleOpenReject(c, "revoke");
         }}
         onPreviewImage={(url) => setPreviewImageUrl(url)}
       />
 
-      {/* ── 6. Dialog Từ Chối Hồ Sơ Kèm Lý Do ──────────────────────────────── */}
+      {/* ── 5.1. Modal Lịch Sử Thao Tác (Audit Log - API §11.1) ───────────────── */}
+      <CandidateAuditLogDialog
+        candidate={auditLogCandidate}
+        open={isAuditLogOpen}
+        onOpenChange={setIsAuditLogOpen}
+      />
+
+      {/* ── 6. Dialog Từ Chối / Thu Hồi Kèm Lý Do (RHF + Zod) ──────────────── */}
       <Dialog open={isRejectDialogOpen} onOpenChange={setIsRejectDialogOpen}>
         <DialogContent className="max-w-xl max-h-[90vh] overflow-hidden p-0">
           <DialogHeader className="p-6 pb-4 pr-12 border-b bg-muted/20">
             <div className="flex items-center gap-2 mb-1">
               <Badge
                 variant="outline"
-                className="rounded-full px-2.5 py-0.5 text-xs font-semibold text-destructive border-destructive/20 bg-destructive/5"
+                className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                  rejectMode === "revoke"
+                    ? "text-amber-600 border-amber-300 bg-amber-50 dark:bg-amber-950/40 dark:border-amber-900/60"
+                    : "text-destructive border-destructive/20 bg-destructive/5"
+                }`}
               >
-                Từ chối hồ sơ
+                {rejectMode === "revoke" ? "Thu hồi phê duyệt" : "Từ chối hồ sơ"}
               </Badge>
               <span className="text-xs text-muted-foreground">• Thẩm định giấy tờ</span>
             </div>
             <DialogTitle className="text-xl font-bold text-foreground">
-              Từ chối hồ sơ thí sinh
+              {rejectMode === "revoke" ? "Thu hồi phê duyệt hồ sơ thí sinh" : "Từ chối hồ sơ thí sinh"}
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground mt-0.5">
               Thí sinh: <span className="font-semibold text-foreground">{candidateToReject?.full_name || <EmptyFieldBadge />}</span>
@@ -1549,72 +1727,135 @@ export default function QuanLyHoSoDangKyPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-foreground">
-                Lý do từ chối thường gặp (Nhấp để chọn nhanh):
-              </Label>
-              <div className="flex flex-wrap gap-1.5">
-                {[
-                  "Ảnh CCCD bị mờ, không đọc được thông tin",
-                  "Thông tin họ tên/ngày sinh không khớp với CCCD",
-                  "Ảnh chân dung không đúng quy cách 3x4",
-                  "Giấy tờ tùy thân đã hết hạn sử dụng",
-                ].map((reason) => (
-                  <button
-                    key={reason}
-                    type="button"
-                    onClick={() => setRejectionReason(reason)}
-                    className="text-[11px] px-2.5 py-1 rounded-full border bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
-                  >
-                    {reason}
-                  </button>
-                ))}
+          <form onSubmit={handleSubmitReject(onSubmitReject)}>
+            <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-foreground">
+                  Lý do thường gặp (Nhấp để chọn nhanh):
+                </Label>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    "Ảnh CCCD bị mờ, không đọc được thông tin",
+                    "Thông tin họ tên/ngày sinh không khớp với CCCD",
+                    "Ảnh chân dung không đúng quy cách 3x4",
+                    "Giấy tờ tùy thân đã hết hạn sử dụng",
+                    ...(rejectMode === "revoke"
+                      ? ["Thu hồi phê duyệt để thí sinh chụp lại ảnh giấy tờ rõ nét hơn"]
+                      : []),
+                  ].map((reason) => (
+                    <button
+                      key={reason}
+                      type="button"
+                      onClick={() => setRejectValue("reason", reason, { shouldValidate: true })}
+                      className="text-[11px] px-2.5 py-1 rounded-full border bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
+                    >
+                      {reason}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="reason-input" className="text-xs font-semibold text-foreground">
+                  Nội dung lý do chi tiết <span className="text-destructive">*</span>
+                </Label>
+                <Textarea
+                  id="reason-input"
+                  rows={3}
+                  {...registerReject("reason")}
+                  placeholder="Nhập lý do cụ thể để thí sinh biết cần bổ sung hoặc chụp lại giấy tờ..."
+                  className="text-xs rounded-xl"
+                />
+                {rejectErrors.reason && (
+                  <p className="text-[11px] text-destructive font-medium">
+                    {rejectErrors.reason.message}
+                  </p>
+                )}
+                <p className="text-[11px] text-muted-foreground">
+                  Thông báo này sẽ được gửi trực tiếp đến hộp thư và tài khoản của thí sinh.
+                </p>
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="reason-input" className="text-xs font-semibold text-foreground">
-                Nội dung lý do từ chối chi tiết <span className="text-destructive">*</span>
-              </Label>
-              <Textarea
-                id="reason-input"
-                rows={3}
-                value={rejectionReason}
-                onChange={(e) => setRejectionReason(e.target.value)}
-                placeholder="Nhập lý do cụ thể để thí sinh biết cần bổ sung hoặc chụp lại giấy tờ..."
-                className="text-xs rounded-xl"
-              />
-              <p className="text-[11px] text-muted-foreground">
-                Thông báo này sẽ được gửi trực tiếp đến hộp thư và tài khoản của thí sinh.
-              </p>
-            </div>
-          </div>
-
-          <DialogFooter className="p-4 border-t bg-muted/40 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 shrink-0">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setIsRejectDialogOpen(false)}
-              className="rounded-full cursor-pointer hover:bg-muted text-xs h-9 w-full sm:w-auto"
-            >
-              Hủy bỏ
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={handleConfirmReject}
-              disabled={fetcher.state !== "idle" || !rejectionReason.trim()}
-              className="rounded-full cursor-pointer text-xs h-9 text-destructive border-destructive hover:bg-destructive/10 hover:text-destructive w-full sm:w-auto font-medium"
-            >
-              <XCircleIcon className="size-3.5 mr-1.5" />
-              Xác nhận từ chối
-            </Button>
-          </DialogFooter>
+            <DialogFooter className="p-4 border-t bg-muted/40 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 shrink-0">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsRejectDialogOpen(false)}
+                className="rounded-full cursor-pointer hover:bg-muted text-xs h-9 w-full sm:w-auto"
+              >
+                Hủy bỏ
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={fetcher.state !== "idle"}
+                className={`rounded-full cursor-pointer text-xs h-9 w-full sm:w-auto font-medium ${
+                  rejectMode === "revoke"
+                    ? "bg-amber-600 text-white hover:bg-amber-700"
+                    : "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                }`}
+              >
+                {rejectMode === "revoke" ? (
+                  <>
+                    <Undo2Icon className="size-3.5 mr-1.5" />
+                    Xác nhận thu hồi
+                  </>
+                ) : (
+                  <>
+                    <XCircleIcon className="size-3.5 mr-1.5" />
+                    Xác nhận từ chối
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
+
+      {/* ── 6.1. AlertDialog Xác nhận Phê duyệt lại ────────────────────────── */}
+      <AlertDialog open={isReapproveAlertOpen} onOpenChange={setIsReapproveAlertOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Xác nhận phê duyệt lại hồ sơ</AlertDialogTitle>
+            <AlertDialogDescription>
+              Hồ sơ thí sinh <strong>{candidateToReapprove?.full_name}</strong> (CCCD: {candidateToReapprove?.latest_document?.doc_number || "—"}) hiện đang ở trạng thái từ chối. Bạn có chắc chắn muốn phê duyệt lại hồ sơ này hợp lệ để thí sinh đủ điều kiện dự thi?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-full cursor-pointer hover:bg-muted">Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              className="rounded-full cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90"
+              onClick={handleConfirmReapprove}
+            >
+              Xác nhận phê duyệt
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ── 6.2. AlertDialog Xác nhận Vô hiệu hóa tài khoản thí sinh (§2.13) ── */}
+      <AlertDialog open={isDisableAlertOpen} onOpenChange={setIsDisableAlertOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Vô hiệu hóa tài khoản thí sinh</AlertDialogTitle>
+            <AlertDialogDescription>
+              Bạn có chắc chắn muốn vô hiệu hóa tài khoản của thí sinh <strong>{candidateToDisable?.full_name}</strong> (Mã tài khoản: #{candidateToDisable?.account_id})? Thao tác này sẽ khóa phiên đăng nhập và ngăn thí sinh truy cập hệ thống theo đúng quy chuẩn bảo mật.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-full cursor-pointer hover:bg-muted">Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              className="rounded-full cursor-pointer"
+              onClick={handleConfirmDisableAccount}
+            >
+              Vô hiệu hóa tài khoản
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* ── 7. Dialog Quét Hồ Sơ Trùng Lặp ─────────────────────────────────── */}
       <Dialog open={isDuplicateDialogOpen} onOpenChange={setIsDuplicateDialogOpen}>
@@ -1627,10 +1868,12 @@ export default function QuanLyHoSoDangKyPage() {
               >
                 Đối soát trùng lặp
               </Badge>
-              <span className="text-xs text-muted-foreground">• Toàn bộ hệ thống</span>
+              <span className="text-xs text-muted-foreground">
+                {targetDocNumber ? `• Kiểm tra số: ${targetDocNumber}` : "• Toàn bộ hệ thống"}
+              </span>
             </div>
             <DialogTitle className="text-xl font-bold text-foreground">
-              Kết quả quét hồ sơ CCCD trùng lặp
+              {targetDocNumber ? `Đối soát trùng lặp: ${targetDocNumber}` : "Kết quả quét hồ sơ CCCD trùng lặp"}
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground mt-0.5">
               Hệ thống tự động rà soát cơ sở dữ liệu để phát hiện trường hợp 1 giấy tờ đăng ký nhiều tài khoản.
@@ -1643,59 +1886,131 @@ export default function QuanLyHoSoDangKyPage() {
                 <RefreshCwIcon className="size-6 animate-spin text-primary" />
                 <p className="text-xs text-muted-foreground">Đang quét toàn bộ danh sách thí sinh...</p>
               </div>
-            ) : duplicateList.length > 0 ? (
-              <div className="space-y-3">
-                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 dark:bg-amber-950/40 dark:border-amber-900/60 dark:text-amber-300 text-xs flex items-start gap-2">
-                  <AlertTriangleIcon className="size-4 shrink-0 mt-0.5" />
-                  <span>
-                    Phát hiện <span className="font-bold">{duplicateList.length}</span> số giấy tờ đang được sử dụng lặp lại bởi nhiều thí sinh. Vui lòng kiểm tra kỹ trước khi phê duyệt!
-                  </span>
-                </div>
+            ) : (() => {
+              const matchedTarget = targetDocNumber
+                ? duplicateList.find((d) => d.doc_number === targetDocNumber)
+                : null;
 
-                <div className="rounded-xl border overflow-hidden">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-muted/30">
-                        <TableHead className="text-xs font-semibold">Số giấy tờ</TableHead>
-                        <TableHead className="text-xs font-semibold">Loại</TableHead>
-                        <TableHead className="text-xs font-semibold text-center">Số lượt trùng</TableHead>
-                        <TableHead className="text-xs font-semibold">Mã thí sinh liên quan</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {duplicateList.map((item, idx) => (
-                        <TableRow key={idx}>
-                          <TableCell className="font-mono text-xs font-semibold">
-                            {item.doc_number}
-                          </TableCell>
-                          <TableCell className="text-xs uppercase">
-                            {item.doc_type}
-                          </TableCell>
-                          <TableCell className="text-xs text-center font-bold text-destructive">
-                            {item.count}
-                          </TableCell>
-                          <TableCell className="text-xs font-mono text-muted-foreground">
-                            {item.candidate_ids?.length ? item.candidate_ids.map((id) => `#${id}`).join(", ") : <EmptyFieldBadge />}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+              if (targetDocNumber && !matchedTarget) {
+                return (
+                  <div className="space-y-4">
+                    <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 dark:bg-emerald-950/40 dark:border-emerald-900/60 dark:text-emerald-300 text-xs flex items-start gap-2.5">
+                      <CheckCircle2Icon className="size-5 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+                      <div className="space-y-1">
+                        <p className="font-semibold text-sm">Giấy tờ duy nhất & Hợp lệ</p>
+                        <p>
+                          Số giấy tờ <span className="font-mono font-bold">{targetDocNumber}</span> là duy nhất, không trùng lặp với bất kỳ thí sinh nào khác trên hệ thống.
+                        </p>
+                      </div>
+                    </div>
+                    {duplicateList.length > 0 && (
+                      <div className="pt-2 text-center">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setTargetDocNumber(null)}
+                          className="rounded-full text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                        >
+                          Xem danh sách các giấy tờ trùng lặp khác ({duplicateList.length})
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              if (duplicateList.length > 0) {
+                return (
+                  <div className="space-y-3">
+                    <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 dark:bg-amber-950/40 dark:border-amber-900/60 dark:text-amber-300 text-xs flex items-start gap-2">
+                      <AlertTriangleIcon className="size-4 shrink-0 mt-0.5" />
+                      <span>
+                        {targetDocNumber && matchedTarget ? (
+                          <>
+                            Cảnh báo: Số giấy tờ <span className="font-mono font-bold">{targetDocNumber}</span> đang bị trùng lặp trên <span className="font-bold">{matchedTarget.count}</span> hồ sơ thí sinh!
+                          </>
+                        ) : (
+                          <>
+                            Phát hiện <span className="font-bold">{duplicateList.length}</span> số giấy tờ đang được sử dụng lặp lại bởi nhiều thí sinh. Vui lòng kiểm tra kỹ trước khi phê duyệt!
+                          </>
+                        )}
+                      </span>
+                    </div>
+
+                    <div className="rounded-xl border overflow-hidden">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-muted/30">
+                            <TableHead className="text-xs font-semibold">Số giấy tờ</TableHead>
+                            <TableHead className="text-xs font-semibold">Loại</TableHead>
+                            <TableHead className="text-xs font-semibold text-center">Số lượt trùng</TableHead>
+                            <TableHead className="text-xs font-semibold">Mã thí sinh liên quan</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {duplicateList.map((item, idx) => {
+                            const isCurrentTarget = item.doc_number === targetDocNumber;
+                            return (
+                              <TableRow
+                                key={idx}
+                                className={isCurrentTarget ? "bg-amber-50/60 dark:bg-amber-950/30" : ""}
+                              >
+                                <TableCell className="font-mono text-xs font-semibold">
+                                  {item.doc_number}
+                                  {isCurrentTarget && (
+                                    <Badge variant="outline" className="ml-2 text-[10px] rounded-full border-amber-500 text-amber-600">
+                                      Đang kiểm tra
+                                    </Badge>
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-xs uppercase">
+                                  {item.doc_type}
+                                </TableCell>
+                                <TableCell className="text-xs text-center font-bold text-destructive">
+                                  {item.count}
+                                </TableCell>
+                                <TableCell className="text-xs font-mono text-muted-foreground">
+                                  {item.candidate_ids?.length
+                                    ? item.candidate_ids.map((id) => `#${id}`).join(", ")
+                                    : <EmptyFieldBadge />}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+
+                    {targetDocNumber && (
+                      <div className="text-center pt-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setTargetDocNumber(null)}
+                          className="rounded-full text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                        >
+                          Hiển thị toàn bộ ({duplicateList.length} giấy tờ)
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              return (
+                <div className="flex flex-col items-center justify-center py-8 text-center gap-2">
+                  <div className="size-12 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                    <CheckCircle2Icon className="size-6" />
+                  </div>
+                  <p className="text-sm font-semibold text-foreground">
+                    Không phát hiện hồ sơ trùng lặp
+                  </p>
+                  <p className="text-xs text-muted-foreground max-w-sm">
+                    Tất cả các số Căn cước công dân và Hộ chiếu trên hệ thống đều là duy nhất và hợp lệ.
+                  </p>
                 </div>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-8 text-center gap-2">
-                <div className="size-12 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-                  <CheckCircle2Icon className="size-6" />
-                </div>
-                <p className="text-sm font-semibold text-foreground">
-                  Không phát hiện hồ sơ trùng lặp
-                </p>
-                <p className="text-xs text-muted-foreground max-w-sm">
-                  Tất cả các số Căn cước công dân và Hộ chiếu trên hệ thống đều là duy nhất và hợp lệ.
-                </p>
-              </div>
-            )}
+              );
+            })()}
           </div>
 
           <DialogFooter className="p-4 border-t bg-muted/40 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 shrink-0">
@@ -1938,332 +2253,5 @@ export default function QuanLyHoSoDangKyPage() {
         </DialogContent>
       </Dialog>
     </div>
-  );
-}
-
-// ─── Component: Dialog Chi Tiết Hồ Sơ Thí Sinh ───────────────────────────────
-function CandidateDetailDialog({
-  candidate,
-  open,
-  onOpenChange,
-  onApprove,
-  onReject,
-  onPreviewImage,
-}: {
-  candidate: AdminCandidateResponseDTO | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onApprove: (c: AdminCandidateResponseDTO) => void;
-  onReject: (c: AdminCandidateResponseDTO) => void;
-  onPreviewImage: (url: string) => void;
-}) {
-  if (!candidate) return null;
-
-  const doc = candidate.latest_document;
-  const docStatus = doc?.verification_status || "pending";
-  const isPassport = doc?.doc_type === "passport";
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-hidden p-0">
-        <DialogHeader className="min-w-0 p-3 pb-2 pr-10 border-b bg-muted/20">
-          <div className="flex flex-wrap items-center gap-2 mb-1">
-            <Badge
-              variant="outline"
-              className="rounded-full px-2 py-0.5 text-[11px] font-semibold text-primary border-primary/20 bg-primary/5"
-            >
-              Thí sinh #{candidate.id}
-            </Badge>
-            <span className="text-xs text-muted-foreground/60">•</span>
-            {docStatus === "verified" ? (
-              <Badge className="rounded-full px-2 py-0.5 text-[11px] font-medium border flex items-center gap-1 bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800/60">
-                <span className="size-1.5 rounded-full bg-emerald-500" />
-                Đã duyệt hợp lệ
-              </Badge>
-            ) : docStatus === "rejected" ? (
-              <Badge variant="destructive" className="rounded-full px-2 py-0.5 text-[11px] font-medium border flex items-center gap-1">
-                <span className="size-1.5 rounded-full bg-white dark:bg-foreground" />
-                Đã từ chối
-              </Badge>
-            ) : (
-              <Badge className="rounded-full px-2 py-0.5 text-[11px] font-medium border flex items-center gap-1 bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800/60">
-                <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />
-                Chờ phê duyệt
-              </Badge>
-            )}
-          </div>
-          <DialogTitle className="min-w-0 truncate text-base font-bold text-foreground">
-            {renderFieldOrBadge(candidate.full_name)}
-          </DialogTitle>
-          <DialogDescription className="text-xs text-muted-foreground mt-0.5">
-            Đối chiếu thông tin giấy tờ tùy thân và xác minh điều kiện dự thi HSK.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="min-w-0 p-3 overflow-y-auto max-h-[65vh] space-y-3">
-          {/* Cảnh báo lý do từ chối nếu có */}
-          {docStatus === "rejected" && (
-            <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-[11px] text-destructive space-y-1">
-              <p className="font-semibold flex items-center gap-1.5">
-                <XCircleIcon className="size-4" />
-                Lý do từ chối hồ sơ:
-              </p>
-              <p className="break-words leading-relaxed pl-5.5 text-foreground/90 font-medium">
-                {renderFieldOrBadge(doc?.rejection_reason)}
-              </p>
-            </div>
-          )}
-
-          {/* Section 1: Thông tin cá nhân */}
-          <div className="rounded-xl border bg-card/60 p-3 space-y-2">
-            <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-              <UsersRoundIcon className="size-3.5 text-primary" />
-              Thông tin nhân thân thí sinh
-            </h4>
-            <div className="grid min-w-0 grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-              <div className="min-w-0">
-                <p className="text-muted-foreground text-[11px]">Họ và tên đầy đủ</p>
-                <div className="mt-0.5 font-semibold text-foreground">
-                  {renderFieldOrBadge(candidate.full_name)}
-                </div>
-              </div>
-              <div className="min-w-0">
-                <p className="text-muted-foreground text-[11px]">Tên tiếng Trung</p>
-                <div className="mt-0.5 min-w-0 break-words text-base font-semibold text-foreground">
-                  {renderFieldOrBadge(candidate.full_name_cn)}
-                </div>
-              </div>
-              <div className="min-w-0">
-                <p className="text-muted-foreground text-[11px]">Ngày tháng năm sinh</p>
-                <div className="mt-0.5 font-semibold text-foreground">
-                  {formatDateOrBadge(candidate.dob)}
-                </div>
-              </div>
-              <div className="min-w-0">
-                <p className="text-muted-foreground text-[11px]">Giới tính & Quốc tịch</p>
-                <div className="mt-0.5 font-semibold text-foreground flex flex-wrap items-center gap-1.5">
-                  <span>{renderFieldOrBadge(formatGender(candidate.gender))}</span>
-                  <span>•</span>
-                  <span>{renderFieldOrBadge(candidate.nationality)}</span>
-                </div>
-              </div>
-              <div className="min-w-0">
-                <p className="text-muted-foreground text-[11px]">Dân tộc</p>
-                <div className="mt-0.5 font-semibold text-foreground">
-                  {renderFieldOrBadge(candidate.ethnicity)}
-                </div>
-              </div>
-              <div className="min-w-0">
-                <p className="text-muted-foreground text-[11px]">Tôn giáo</p>
-                <div className="mt-0.5 font-semibold text-foreground">
-                  {renderFieldOrBadge(candidate.religion)}
-                </div>
-              </div>
-              <div className="min-w-0">
-                <p className="text-muted-foreground text-[11px]">Số điện thoại liên hệ</p>
-                <div className="mt-0.5 break-all font-mono font-semibold text-foreground">
-                  {renderFieldOrBadge(candidate.phone)}
-                </div>
-              </div>
-              <div className="min-w-0">
-                <p className="text-muted-foreground text-[11px]">Hộp thư điện tử</p>
-                <div className="mt-0.5 min-w-0 break-all font-semibold text-foreground">
-                  {renderFieldOrBadge(candidate.email)}
-                </div>
-              </div>
-              <div className="min-w-0">
-                <p className="text-muted-foreground text-[11px]">Cấp độ đăng ký thi</p>
-                <div className="mt-0.5">
-                  {candidate.exam_level || candidate.target_exam_level ? (
-                    <Badge variant="outline" className="flex h-auto max-w-full min-w-0 items-start whitespace-normal rounded-full px-2 py-0.5 text-left text-[11px] font-medium">
-                      <GraduationCapIcon className="mt-0.5 size-3 shrink-0 mr-1 text-primary" />
-                      <span className="min-w-0 break-words">
-                        {candidate.exam_level || candidate.target_exam_level}
-                      </span>
-                    </Badge>
-                  ) : (
-                    <EmptyFieldBadge />
-                  )}
-                </div>
-              </div>
-              <div className="min-w-0">
-                <p className="text-muted-foreground text-[11px]">Kinh nghiệm học tiếng Trung</p>
-                <div className="mt-0.5 font-semibold text-foreground">
-                  {candidate.chinese_study_years != null ? (
-                    `${candidate.chinese_study_years} năm`
-                  ) : (
-                    <EmptyFieldBadge />
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Section 2: Giấy tờ tùy thân */}
-          <div className="rounded-xl border bg-card/60 p-3 space-y-2">
-            <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-              <FileTextIcon className="size-3.5 text-primary" />
-              Thông tin giấy tờ tùy thân ({isPassport ? "Hộ chiếu" : "Căn cước công dân"})
-            </h4>
-            <div className="grid min-w-0 grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-              <div>
-                <p className="text-muted-foreground text-xs">Số giấy tờ ({isPassport ? "Passport No." : "Số CCCD"})</p>
-                <div className="mt-0.5 break-all font-mono text-sm font-bold text-foreground">
-                  {renderFieldOrBadge(doc?.doc_number)}
-                </div>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-xs">Ngày cấp</p>
-                <div className="mt-0.5 font-semibold text-foreground">
-                  {formatDateOrBadge(doc?.issue_date)}
-                </div>
-              </div>
-              <div className="sm:col-span-2">
-                <p className="text-muted-foreground text-xs">Nơi cấp</p>
-                <div className="mt-0.5 font-semibold text-foreground">
-                  {renderFieldOrBadge(doc?.issue_place)}
-                </div>
-              </div>
-              <div className="sm:col-span-2">
-                <p className="text-muted-foreground text-xs">Địa chỉ thường trú</p>
-                <div className="mt-0.5 font-medium text-foreground">
-                  {renderFieldOrBadge(doc?.address_detail)}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Section 3: Ảnh đối chiếu CCCD và chân dung */}
-          <div className="rounded-xl border bg-card/60 p-4 space-y-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-              <ImageIcon className="size-3.5 text-primary" />
-              Ảnh chứng thực đối soát
-            </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {/* Ảnh mặt trước */}
-              <div className="space-y-1">
-                <p className="text-[11px] font-medium text-muted-foreground">Mặt trước CCCD</p>
-                {doc?.front_image_url ? (
-                  <button
-                    type="button"
-                    onClick={() => onPreviewImage(doc.front_image_url!)}
-                    className="relative group w-full aspect-[4/3] rounded-xl overflow-hidden border bg-muted cursor-pointer"
-                  >
-                    <img
-                      src={doc.front_image_url}
-                      alt="Mặt trước CCCD"
-                      className="w-full h-full object-cover transition-transform group-hover:scale-105"
-                    />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium">
-                      <EyeIcon className="size-4 mr-1" />
-                      Phóng to
-                    </div>
-                  </button>
-                ) : (
-                  <div className="w-full aspect-[4/3] rounded-xl border border-dashed bg-muted/20 flex flex-col items-center justify-center gap-1.5 p-3 text-muted-foreground">
-                    <ImageIcon className="size-5 text-muted-foreground/40" />
-                    <EmptyFieldBadge />
-                  </div>
-                )}
-              </div>
-
-              {/* Ảnh mặt sau */}
-              <div className="space-y-1">
-                <p className="text-[11px] font-medium text-muted-foreground">Mặt sau CCCD</p>
-                {doc?.back_image_url ? (
-                  <button
-                    type="button"
-                    onClick={() => onPreviewImage(doc.back_image_url!)}
-                    className="relative group w-full aspect-[4/3] rounded-xl overflow-hidden border bg-muted cursor-pointer"
-                  >
-                    <img
-                      src={doc.back_image_url}
-                      alt="Mặt sau CCCD"
-                      className="w-full h-full object-cover transition-transform group-hover:scale-105"
-                    />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium">
-                      <EyeIcon className="size-4 mr-1" />
-                      Phóng to
-                    </div>
-                  </button>
-                ) : (
-                  <div className="w-full aspect-[4/3] rounded-xl border border-dashed bg-muted/20 flex flex-col items-center justify-center gap-1.5 p-3 text-muted-foreground">
-                    <ImageIcon className="size-5 text-muted-foreground/40" />
-                    {isPassport ? (
-                      <span className="text-[11px] text-muted-foreground text-center">Hộ chiếu không có mặt sau</span>
-                    ) : (
-                      <EmptyFieldBadge />
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Ảnh chân dung 3x4 */}
-              <div className="space-y-1">
-                <p className="text-[11px] font-medium text-muted-foreground">Ảnh thẻ chân dung 3x4</p>
-                {doc?.portrait_image_url ? (
-                  <button
-                    type="button"
-                    onClick={() => onPreviewImage(doc.portrait_image_url!)}
-                    className="relative group w-full aspect-[4/3] rounded-xl overflow-hidden border bg-muted cursor-pointer"
-                  >
-                    <img
-                      src={doc.portrait_image_url}
-                      alt="Ảnh thẻ chân dung"
-                      className="w-full h-full object-cover transition-transform group-hover:scale-105"
-                    />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium">
-                      <EyeIcon className="size-4 mr-1" />
-                      Phóng to
-                    </div>
-                  </button>
-                ) : (
-                  <div className="w-full aspect-[4/3] rounded-xl border border-dashed bg-muted/20 flex flex-col items-center justify-center gap-1.5 p-3 text-muted-foreground">
-                    <ImageIcon className="size-5 text-muted-foreground/40" />
-                    <EmptyFieldBadge />
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <DialogFooter className="p-4 border-t bg-muted/40 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2.5 shrink-0">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-            className="rounded-full cursor-pointer hover:bg-muted text-xs h-9 w-full sm:w-auto"
-          >
-            Đóng cửa sổ
-          </Button>
-
-          {docStatus === "pending" && (
-            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => onReject(candidate)}
-                className="rounded-full cursor-pointer text-xs h-9 text-destructive border-destructive hover:bg-destructive/10 hover:text-destructive w-full sm:w-auto font-medium"
-              >
-                <XCircleIcon className="size-3.5 mr-1" />
-                Từ chối hồ sơ
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => onApprove(candidate)}
-                className="rounded-full cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-medium h-9 w-full sm:w-auto shadow-2xs"
-              >
-                <CheckCircle2Icon className="size-3.5 mr-1" />
-                Phê duyệt hợp lệ
-              </Button>
-            </div>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

@@ -79,3 +79,127 @@ export interface AdminDashboardData {
   payment_funnel: any[];
   exception_transactions: any[];
 }
+
+// ─── Hồ sơ thí sinh (Admin) — theo API_DOCUMENTATION.md §3.8 – §3.11 ─────────
+export type DocumentVerificationStatus = "pending" | "verified" | "rejected";
+
+export interface CandidateDocument {
+  id: number;
+  candidate_id: number;
+  doc_type: "cccd" | "passport" | string;
+  doc_number: string;
+  issue_date?: string | null;
+  issue_place?: string | null;
+  front_image_url?: string | null;
+  back_image_url?: string | null;
+  portrait_image_url?: string | null;
+  verification_status: DocumentVerificationStatus;
+  rejection_reason?: string | null;
+  ward_id?: number | null;
+  province_id?: number | null;
+  address_detail?: string | null;
+}
+
+export interface AdminCandidateResponseDTO {
+  id: number;
+  account_id: number;
+  full_name: string;
+  full_name_cn?: string | null;
+  dob: string;
+  gender: "male" | "female" | "other" | string;
+  nationality: string;
+  ethnicity?: string | null;
+  religion?: string | null;
+  chinese_study_years?: number | null;
+  phone?: string | null;
+  email?: string | null;
+  latest_document?: CandidateDocument | null;
+  exam_level?: string | null;
+  target_exam_level?: string | null;
+  created_at?: string;
+}
+
+export interface CandidateMetrics {
+  total: number;
+  pending: number;
+  verified: number;
+  rejected: number;
+}
+
+export interface PaginationMeta {
+  page: number;
+  per_page: number;
+  total_items: number;
+  total_pages: number;
+}
+
+export interface DuplicateCandidateItem {
+  doc_number: string;
+  doc_type: string;
+  candidate_ids: number[];
+  count: number;
+}
+
+/** Ma trận hành động hiển thị trong dropdown của từng hồ sơ */
+export interface CandidateRowActions {
+  canApprove: boolean;
+  canReject: boolean;
+  canReapprove: boolean;
+  canRevoke: boolean;
+  canCheckDuplicate: boolean;
+  canCopyDocNumber: boolean;
+  canCopyPhone: boolean;
+  canEmail: boolean;
+  canDisableAccount: boolean;
+}
+
+// ─── Nhật ký hệ thống — API_DOCUMENTATION.md §11.1 ───────────────────────────
+export type AuditLogAction =
+  | "CREATE"
+  | "UPDATE"
+  | "DELETE"
+  | "SOFT_DELETE"
+  | "RESTORE"
+  | "LOGIN"
+  | "LOGOUT"
+  | "PASSWORD_CHANGE"
+  | "PAYMENT"
+  | "REFUND"
+  | "EXPORT"
+  | "APPROVE"
+  | "REJECT"
+  | "RECHECK";
+
+export type AuditLogEntityTable =
+  | "accounts"
+  | "candidates"
+  | "candidate_documents"
+  | "exam_rooms"
+  | "exam_sessions"
+  | "exam_seats"
+  | "exam_registrations"
+  | "payments"
+  | "exam_results"
+  | "exam_recheck_requests"
+  | "certificates"
+  | "certificate_deliveries";
+
+export interface AuditLogEntryDTO {
+  id: number;
+  actor_id: number | null;
+  action: AuditLogAction | string;
+  entity_table: AuditLogEntityTable | string;
+  entity_id: number;
+  old_value: Record<string, unknown> | null;
+  new_value: Record<string, unknown> | null;
+  created_at: string;
+}
+
+/** Envelope chuẩn của API (§1.1) */
+export interface ApiEnvelope<T> {
+  success: boolean;
+  data: T | null;
+  error: { code?: string; message?: string } | string | null;
+  meta?: PaginationMeta | null;
+  msg?: string;
+}

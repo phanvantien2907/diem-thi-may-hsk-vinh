@@ -29,6 +29,10 @@ export default [
   // ── API routes ────────────────────────────────────────────────────────────
   route("internal/admin/system/clear-cache", "routes/internal.admin.system.clear-cache.ts"),
   route("internal/admin/users/me/audit-log", "routes/internal.admin.users.me.audit-log.ts"),
+  route("internal/admin/audit-logs", "routes/internal.admin.audit-logs.ts"),
+  route("internal/admin/candidates/duplicates", "routes/internal.admin.candidates.duplicates.ts"),
+  route("internal/admin/candidates/export", "routes/internal.admin.candidates.export.ts"),
+  route("internal/admin/candidates/:id", "routes/internal.admin.candidates.$id.ts"),
 
   // ── Catch-all 404 route ───────────────────────────────────────────────────
   route("*", "routes/$.tsx"),
