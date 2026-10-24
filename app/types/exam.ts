@@ -25,8 +25,36 @@ export interface ExamRoom {
 /** Ca thi (Shift) */
 export type ExamShift = "morning" | "afternoon" | "evening";
 
+/** Trạng thái đợt thi — API_DOCUMENTATION.md §12.6 */
+export type ExamPeriodStatus =
+  | "draft"
+  | "published"
+  | "registration_open"
+  | "registration_closed"
+  | "rescheduled"
+  | "cancelled"
+  | "completed";
+
+/** Đợt thi — ExamPeriodResponseDTO (API_DOCUMENTATION.md §4.10, §4.11) */
+export interface ExamPeriod {
+  id: number;
+  name: string;
+  code: string;
+  description: string | null;
+  instructions: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  registration_start: string | null;
+  registration_deadline: string | null;
+  status: ExamPeriodStatus;
+  session_count: number;
+  sessions?: ExamSession[];
+  created_at: string;
+  updated_at: string;
+}
+
 /** Trạng thái ca thi */
-export type ExamSessionStatus = "open" | "closed" | "cancelled";
+export type ExamSessionStatus = "open" | "closed" | "cancelled" | "full" | "in_progress";
 
 /** Trạng thái hiển thị / công khai ca thi */
 export type ExamPublicationStatus = "published" | "draft" | "scheduled";
@@ -34,17 +62,19 @@ export type ExamPublicationStatus = "published" | "draft" | "scheduled";
 /** Ca thi — ExamSessionResponseDTO */
 export interface ExamSession {
   id: number;
+  period_id?: number | null;
   exam_type_id: number;
   exam_room_id?: number;
-  date: string;
+  date: string | null;
   shift: ExamShift;
   capacity: number;
   fee: number;
-  registration_deadline: string;
+  registration_deadline: string | null;
   status: ExamSessionStatus;
   exam_session_publication_status?: ExamPublicationStatus;
   exam_session_publish_at?: string | null;
   exam_session_check_in_at?: string | null;
+  occupancy_rate?: number;
 }
 
 /** Ghế thi */

@@ -14,12 +14,24 @@ import { requireAdminAuth } from "~/lib/auth.server";
 import { API_BASE_URL } from "~/lib/env.server";
 import type {
   ApiResponse,
+  ExamPeriod,
+  ExamPeriodStatus,
   ExamPublicationStatus,
   ExamSession,
   ExamSessionStatus,
   ExamShift,
   ExamType,
 } from "~/types/exam";
+import { CreatePeriodDialog } from "~/components/dashboard/CreatePeriodDialog";
+import { EditPeriodDialog } from "~/components/dashboard/EditPeriodDialog";
+import { DuplicatePeriodDialog } from "~/components/dashboard/DuplicatePeriodDialog";
+import { ReschedulePeriodDialog } from "~/components/dashboard/ReschedulePeriodDialog";
+import {
+  CloseRegistrationAlertDialog,
+  type CloseRegistrationTarget,
+} from "~/components/dashboard/CloseRegistrationAlertDialog";
+import { EditSessionDialog } from "~/components/dashboard/EditSessionDialog";
+import { PeriodDetailDialog } from "~/components/dashboard/PeriodDetailDialog";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
@@ -89,14 +101,17 @@ import {
   CalendarDaysIcon,
   CalendarIcon,
   CalendarClockIcon,
+  CalendarRangeIcon,
   CheckCircle2Icon,
   ClockIcon,
   CopyIcon,
+  EditIcon,
   EyeIcon,
   FileTextIcon,
   FilterIcon,
   GlobeIcon,
   InfoIcon,
+  LayersIcon,
   MapPinIcon,
   MoreHorizontalIcon,
   PlusIcon,
@@ -104,6 +119,7 @@ import {
   RotateCcwIcon,
   SearchIcon,
   SendIcon,
+  ShieldAlertIcon,
   SunIcon,
   SunsetIcon,
   MoonIcon,
@@ -122,6 +138,7 @@ const PAGE_SIZE = 10;
 const createSessionSchema = z
   .object({
     exam_type_id: z.coerce.number().int().min(1, "Vui lòng chọn loại kỳ thi"),
+    period_id: z.coerce.number().int().optional(),
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Vui lòng chọn ngày thi hợp lệ"),
     shift: z.enum(["morning", "afternoon"]),
     capacity: z.coerce.number().int().min(1, "Số slot tiếp nhận phải lớn hơn 0"),
@@ -317,6 +334,81 @@ function getPublicationStatusDetails(
   }
 }
 
+function getPeriodStatusDetails(status?: ExamPeriodStatus | string | null) {
+  switch (status) {
+    case "draft":
+      return {
+        label: "Bản nháp",
+        variant: "secondary" as const,
+        badgeClass: "bg-muted text-muted-foreground border-border dark:bg-muted/60",
+        dotClass: "bg-muted-foreground",
+        pulse: false,
+      };
+    case "published":
+      return {
+        label: "Đã công bố",
+        variant: "outline" as const,
+        badgeClass:
+          "bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800/60",
+        dotClass: "bg-sky-500",
+        pulse: false,
+      };
+    case "registration_open":
+      return {
+        label: "Đang mở ĐK",
+        variant: "default" as const,
+        badgeClass:
+          "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800/60",
+        dotClass: "bg-emerald-500",
+        pulse: true,
+      };
+    case "registration_closed":
+      return {
+        label: "Đã đóng ĐK",
+        variant: "secondary" as const,
+        badgeClass:
+          "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800/60",
+        dotClass: "bg-amber-500",
+        pulse: false,
+      };
+    case "rescheduled":
+      return {
+        label: "Đã dời lịch",
+        variant: "outline" as const,
+        badgeClass:
+          "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/50 dark:text-purple-300 dark:border-purple-800/60",
+        dotClass: "bg-purple-500",
+        pulse: false,
+      };
+    case "cancelled":
+      return {
+        label: "Đã hủy",
+        variant: "destructive" as const,
+        badgeClass:
+          "bg-destructive/10 text-destructive border-destructive/20 dark:bg-destructive/20",
+        dotClass: "bg-destructive",
+        pulse: false,
+      };
+    case "completed":
+      return {
+        label: "Đã hoàn thành",
+        variant: "secondary" as const,
+        badgeClass:
+          "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300",
+        dotClass: "bg-slate-500",
+        pulse: false,
+      };
+    default:
+      return {
+        label: status || "Không xác định",
+        variant: "outline" as const,
+        badgeClass: "bg-muted text-muted-foreground border-border",
+        dotClass: "bg-muted-foreground",
+        pulse: false,
+      };
+  }
+}
+
 // ─── React Router v7 Loader ─────────────────────────────────────────────────
 export async function loader({ request }: Route.LoaderArgs) {
   const { user, token } = await requireAdminAuth(request);
@@ -329,12 +421,15 @@ export async function loader({ request }: Route.LoaderArgs) {
   if (from) params.set("from", from);
   if (to) params.set("to", to);
 
-  const [sessionsResponse, examTypesResponse] = await Promise.all([
+  const [sessionsResponse, examTypesResponse, periodsResponse] = await Promise.all([
     fetch(
       `${API_BASE_URL}/api/v1/admin/exam-sessions${params.size ? `?${params}` : ""}`,
       { headers: { Authorization: `Bearer ${token}` } }
     ),
     fetch(`${API_BASE_URL}/api/v1/exam-types`, { headers: { Authorization: `Bearer ${token}` } }),
+    fetch(`${API_BASE_URL}/api/v1/admin/exam-periods`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(() => null),
   ]);
 
   if (!sessionsResponse.ok || !examTypesResponse.ok) {
@@ -343,14 +438,18 @@ export async function loader({ request }: Route.LoaderArgs) {
     });
   }
 
-  const [sessionsJson, examTypesJson] = await Promise.all([
+  const [sessionsJson, examTypesJson, periodsJson] = await Promise.all([
     sessionsResponse.json() as Promise<ApiResponse<ExamSession[]>>,
     examTypesResponse.json() as Promise<ApiResponse<ExamType[]>>,
+    periodsResponse && periodsResponse.ok
+      ? (periodsResponse.json() as Promise<ApiResponse<ExamPeriod[]>>)
+      : Promise.resolve({ success: true, data: [], error: null, meta: null } as ApiResponse<ExamPeriod[]>),
   ]);
 
   return {
     user,
     token,
+    periods: getData(periodsJson) ?? [],
     sessions: getData(sessionsJson) ?? [],
     examTypes: getData(examTypesJson) ?? [],
   };
@@ -362,6 +461,7 @@ export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
   const sessionId = String(formData.get("session_id") ?? "");
+  const periodId = String(formData.get("period_id") ?? "");
   const headers = {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
@@ -370,9 +470,11 @@ export async function action({ request }: Route.ActionArgs) {
   let endpoint = "";
   let method = "POST";
   let body: string | undefined;
+
   if (intent === "create") {
     endpoint = "/api/v1/admin/exam-sessions/batch-create";
     const examTypeId = Number(formData.get("exam_type_id"));
+    const periodIdVal = formData.get("period_id") ? Number(formData.get("period_id")) : undefined;
     const date = String(formData.get("date"));
     const shift = String(formData.get("shift"));
     const capacity = Number(formData.get("capacity"));
@@ -399,7 +501,9 @@ export async function action({ request }: Route.ActionArgs) {
         : "",
       exam_session_publication_status: publicationStatus,
     };
-
+    if (periodIdVal) {
+      sessionPayload.period_id = periodIdVal;
+    }
     if (publicationStatus === "scheduled" && publishAtRaw) {
       sessionPayload.exam_session_publish_at = new Date(publishAtRaw).toISOString();
     }
@@ -417,13 +521,166 @@ export async function action({ request }: Route.ActionArgs) {
     method = "PATCH";
     const pubStatus = String(formData.get("publication_status") || "published");
     const pubAt = formData.get("publish_at") ? String(formData.get("publish_at")) : "";
+    const currentPubStatusClient = String(formData.get("current_publication_status") ?? "");
+
+    // 1. Kiểm tra phòng thủ cấp độ 1: Dữ liệu gửi từ client
+    if (currentPubStatusClient === "published" && pubStatus === "scheduled") {
+      return {
+        error: "Ca thi đã được công khai trên hệ thống. Không thể lên lịch hẹn giờ cho ca thi đã công khai.",
+      } satisfies SessionAction;
+    }
+
+    // 2. Kiểm tra phòng thủ cấp độ 2: Kiểm tra trực tiếp trạng thái thực tế từ Backend API
+    try {
+      const checkRes = await fetch(`${API_BASE_URL}/api/v1/admin/exam-sessions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (checkRes.ok) {
+        const checkJson = (await checkRes.json()) as ApiResponse<ExamSession[]>;
+        const currentSession = checkJson.data?.find((s) => s.id === Number(sessionId));
+        if (currentSession) {
+          if (currentSession.status === "cancelled") {
+            return {
+              error: "Không thể cập nhật trạng thái phát hành cho ca thi đã bị hủy.",
+            } satisfies SessionAction;
+          }
+          if (
+            currentSession.exam_session_publication_status === "published" &&
+            pubStatus === "scheduled"
+          ) {
+            return {
+              error: "Ca thi đã được công khai trên hệ thống. Không thể lên lịch hẹn giờ cho ca thi đã công khai.",
+            } satisfies SessionAction;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[action] Không thể tải danh sách ca thi để đối soát:", err);
+    }
+
+    // 3. Kiểm tra tính hợp lệ của thời điểm công khai khi lên lịch
     const sessionPayload: Record<string, string> = {
       exam_session_publication_status: pubStatus,
     };
-    if (pubStatus === "scheduled" && pubAt) {
+    if (pubStatus === "scheduled") {
+      if (!pubAt || pubAt.trim() === "") {
+        return {
+          error: "Vui lòng chọn thời điểm công khai khi lên lịch.",
+        } satisfies SessionAction;
+      }
+      const pubTime = new Date(pubAt).getTime();
+      if (isNaN(pubTime) || pubTime <= Date.now()) {
+        return {
+          error: "Thời điểm công khai phải ở tương lai.",
+        } satisfies SessionAction;
+      }
       sessionPayload.exam_session_publish_at = new Date(pubAt).toISOString();
     }
+
     body = JSON.stringify(sessionPayload);
+  } else if (intent === "create-period") {
+    endpoint = "/api/v1/admin/exam-periods";
+    method = "POST";
+    const name = String(formData.get("name") ?? "");
+    const code = String(formData.get("code") ?? "");
+    const startDate = formData.get("start_date") ? String(formData.get("start_date")) : null;
+    const endDate = formData.get("end_date") ? String(formData.get("end_date")) : null;
+    const regStart = formData.get("registration_start") ? new Date(String(formData.get("registration_start"))).toISOString() : null;
+    const regDeadline = formData.get("registration_deadline") ? new Date(String(formData.get("registration_deadline"))).toISOString() : null;
+    const description = formData.get("description") ? String(formData.get("description")) : null;
+    const instructions = formData.get("instructions") ? String(formData.get("instructions")) : null;
+    const status = String(formData.get("status") || "draft");
+
+    body = JSON.stringify({
+      name,
+      code,
+      start_date: startDate,
+      end_date: endDate,
+      registration_start: regStart,
+      registration_deadline: regDeadline,
+      description,
+      instructions,
+      status,
+    });
+  } else if (intent === "update-period" && periodId) {
+    endpoint = `/api/v1/admin/exam-periods/${periodId}`;
+    method = "PUT";
+    const name = String(formData.get("name") ?? "");
+    const code = String(formData.get("code") ?? "");
+    const startDate = formData.get("start_date") ? String(formData.get("start_date")) : null;
+    const endDate = formData.get("end_date") ? String(formData.get("end_date")) : null;
+    const regStart = formData.get("registration_start") ? new Date(String(formData.get("registration_start"))).toISOString() : null;
+    const regDeadline = formData.get("registration_deadline") ? new Date(String(formData.get("registration_deadline"))).toISOString() : null;
+    const description = formData.get("description") ? String(formData.get("description")) : null;
+    const instructions = formData.get("instructions") ? String(formData.get("instructions")) : null;
+    const status = formData.get("status") ? String(formData.get("status")) : undefined;
+
+    body = JSON.stringify({
+      name,
+      code,
+      start_date: startDate,
+      end_date: endDate,
+      registration_start: regStart,
+      registration_deadline: regDeadline,
+      description,
+      instructions,
+      ...(status ? { status } : {}),
+    });
+  } else if (intent === "duplicate-period" && periodId) {
+    endpoint = `/api/v1/admin/exam-periods/${periodId}/duplicate`;
+    method = "POST";
+    const name = String(formData.get("name") ?? "");
+    const code = String(formData.get("code") ?? "");
+    body = JSON.stringify({ name, code });
+  } else if (intent === "reschedule-period" && periodId) {
+    endpoint = `/api/v1/admin/exam-periods/${periodId}/reschedule`;
+    method = "POST";
+    const startDate = String(formData.get("start_date") ?? "");
+    const endDate = String(formData.get("end_date") ?? "");
+    const regDeadline = String(formData.get("registration_deadline") ?? "");
+    const reason = String(formData.get("reason") ?? "");
+    const notifyCandidates = formData.get("notify_candidates") === "true";
+
+    body = JSON.stringify({
+      start_date: startDate,
+      end_date: endDate,
+      registration_deadline: new Date(regDeadline).toISOString(),
+      reason,
+      notify_candidates: notifyCandidates,
+    });
+  } else if (intent === "close-period-registration" && periodId) {
+    endpoint = `/api/v1/admin/exam-periods/${periodId}/close-registration`;
+    method = "POST";
+    const reason = String(formData.get("reason") ?? "");
+    body = JSON.stringify({ reason });
+  } else if (intent === "update-session" && sessionId) {
+    endpoint = `/api/v1/admin/exam-sessions/${sessionId}`;
+    method = "PUT";
+    const date = formData.get("date") ? String(formData.get("date")) : null;
+    const shift = String(formData.get("shift") ?? "morning");
+    const capacity = Number(formData.get("capacity") ?? 40);
+    const fee = Number(String(formData.get("fee") ?? "0").replace(/\D/g, ""));
+    const regDeadlineRaw = formData.get("registration_deadline") ? String(formData.get("registration_deadline")) : null;
+    const publicationStatus = String(formData.get("exam_session_publication_status") || "published");
+    const publishAtRaw = formData.get("exam_session_publish_at") ? String(formData.get("exam_session_publish_at")) : null;
+
+    const payload: Record<string, unknown> = {
+      date,
+      shift,
+      capacity,
+      fee,
+      registration_deadline: regDeadlineRaw ? new Date(regDeadlineRaw).toISOString() : null,
+      exam_session_publication_status: publicationStatus,
+    };
+    if (publicationStatus === "scheduled" && publishAtRaw) {
+      payload.exam_session_publish_at = new Date(publishAtRaw).toISOString();
+    }
+    body = JSON.stringify(payload);
+  } else if (intent === "close-session-registration" && sessionId) {
+    endpoint = `/api/v1/admin/exam-sessions/${sessionId}/close-registration`;
+    method = "POST";
+    const reason = String(formData.get("reason") ?? "");
+    body = JSON.stringify({ reason });
   } else if (intent === "clear-cache") {
     endpoint = "/api/v1/admin/exam-sessions/clear-cache";
   } else {
@@ -442,14 +699,36 @@ export async function action({ request }: Route.ActionArgs) {
     | null;
 
   if (!response.ok) {
-    return {
-      error:
-        (json &&
-          "error" in json &&
-          typeof json.error === "string" &&
-          json.error) ||
-        "Thao tác không thành công. Vui lòng thử lại sau.",
-    } satisfies SessionAction;
+    let errMsg = "Thao tác không thành công. Vui lòng thử lại sau.";
+    if (response.status === 409) {
+      errMsg =
+        (json && "error" in json && typeof json.error === "string" && json.error) ||
+        "Xung đột dữ liệu (HTTP 409): Không thể thay đổi ngày thi trực tiếp của đợt thi đã phát hành. Vui lòng sử dụng tính năng 'Dời lịch thi (Bất khả kháng)'.";
+    } else if (json && "error" in json && typeof json.error === "string") {
+      errMsg = json.error;
+    } else if (json && "message" in json && typeof json.message === "string") {
+      errMsg = json.message;
+    }
+    return { error: errMsg } satisfies SessionAction;
+  }
+
+  // Tự động xóa bộ nhớ đệm ca thi & đợt thi trên Redis
+  if (
+    intent === "update-publication-status" ||
+    intent === "cancel" ||
+    intent === "create" ||
+    intent === "create-period" ||
+    intent === "update-period" ||
+    intent === "duplicate-period" ||
+    intent === "reschedule-period" ||
+    intent === "close-period-registration" ||
+    intent === "update-session" ||
+    intent === "close-session-registration"
+  ) {
+    fetch(`${API_BASE_URL}/api/v1/admin/exam-sessions/clear-cache`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch((err) => console.warn("[action] Lỗi khi tự động xóa cache Redis:", err));
   }
 
   return {
@@ -459,19 +738,35 @@ export async function action({ request }: Route.ActionArgs) {
         ? "Đã tạo ca thi mới thành công."
         : intent === "cancel"
           ? "Đã hủy ca thi thành công."
-          : intent === "clear-cache"
-            ? (json && "data" in json && typeof (json.data as any)?.message === "string"
-                ? (json.data as any).message
-                : "Đã làm mới bộ nhớ đệm ca thi trên Redis thành công.")
-            : "Cập nhật trạng thái phát hành thành công.",
+          : intent === "create-period"
+            ? "Đã tạo đợt thi mới thành công."
+            : intent === "update-period"
+              ? "Cập nhật thông tin đợt thi thành công."
+              : intent === "duplicate-period"
+                ? "Nhân bản đợt thi (ACID) thành công. Các ca thi con đã được khởi tạo ở trạng thái bản nháp an toàn."
+                : intent === "reschedule-period"
+                  ? "Đã dời lịch thi bất khả kháng thành công. Các ca thi con và thí sinh đã được cập nhật."
+                  : intent === "close-period-registration"
+                    ? "Đã đóng đăng ký sớm cho đợt thi thành công."
+                    : intent === "update-session"
+                      ? "Cập nhật ca thi thành công."
+                      : intent === "close-session-registration"
+                        ? "Đã đóng đăng ký sớm cho ca thi thành công."
+                        : intent === "clear-cache"
+                          ? (json && "data" in json && typeof (json.data as { message?: string })?.message === "string"
+                              ? (json.data as { message?: string }).message
+                              : "Đã làm mới bộ nhớ đệm thành công.")
+                          : "Cập nhật trạng thái phát hành thành công.",
   } satisfies SessionAction;
 }
 
 // ─── Modal Dialog: Tạo Ca Thi Mới ───────────────────────────────────────────
 function SessionCreateDialog({
   examTypes,
+  periods,
 }: {
   examTypes: ExamType[];
+  periods?: ExamPeriod[];
 }) {
   const fetcher = useFetcher<SessionAction>();
   const [open, setOpen] = React.useState(false);
@@ -510,6 +805,7 @@ function SessionCreateDialog({
     fetcher.submit(
       {
         ...values,
+        period_id: values.period_id ? String(values.period_id) : "",
         fee: String(values.fee),
         intent: "create",
       },
@@ -646,6 +942,65 @@ function SessionCreateDialog({
                   </p>
                 )}
               </div>
+
+              {/* Thuộc Đợt thi (Tùy chọn) */}
+              {periods && periods.length > 0 && (
+                <div className="flex flex-col gap-1.5 sm:col-span-2">
+                  <Label
+                    htmlFor="period_id"
+                    className="text-xs font-semibold text-foreground flex items-center gap-1"
+                  >
+                    <span>Thuộc Đợt thi</span>
+                    <span className="text-[11px] text-muted-foreground font-normal">(Tùy chọn theo mô hình 2 tầng)</span>
+                  </Label>
+                  <Select
+                    name="period_id"
+                    value={
+                      form.watch("period_id")
+                        ? String(form.watch("period_id"))
+                        : "none"
+                    }
+                    onValueChange={(val) => {
+                      form.setValue(
+                        "period_id",
+                        val === "none" ? undefined : Number(val)
+                      );
+                    }}
+                  >
+                    <SelectTrigger
+                      id="period_id"
+                      className="w-full h-9 rounded-full px-3 text-xs sm:text-sm cursor-pointer"
+                    >
+                      <SelectValue placeholder="Không gắn đợt thi cụ thể">
+                        {(val) => {
+                          const current = val ?? form.watch("period_id");
+                          if (!current || current === "none") return "Không gắn đợt thi cụ thể";
+                          const matched = periods.find(
+                            (p) => String(p.id) === String(current)
+                          );
+                          return matched ? `${matched.code} - ${matched.name}` : "Không gắn đợt thi cụ thể";
+                        }}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent className="rounded-xl max-h-60">
+                      <SelectGroup>
+                        <SelectItem value="none" className="cursor-pointer text-xs sm:text-sm">
+                          Không gắn đợt thi cụ thể
+                        </SelectItem>
+                        {periods.map((p) => (
+                          <SelectItem
+                            key={p.id}
+                            value={String(p.id)}
+                            className="cursor-pointer text-xs sm:text-sm"
+                          >
+                            <span className="font-semibold">{p.code}</span> — {p.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
               {/* Ngày thi */}
               <div className="flex flex-col gap-1.5">
@@ -1130,6 +1485,7 @@ function SessionDetailDialog({
                 <div className="flex items-center justify-between gap-1">
                   <p className="text-muted-foreground text-xs">Thời gian công khai</p>
                   {!isExpired &&
+                    session.status !== "cancelled" &&
                     (session.exam_session_publication_status === "draft" ||
                     session.exam_session_publication_status === "scheduled") &&
                     onOpenPublishSchedule && (
@@ -1284,6 +1640,15 @@ function PublishScheduleDialog({
 
   React.useEffect(() => {
     if (open && session) {
+      if (session.exam_session_publication_status === "published") {
+        toast.add({
+          type: "error",
+          title: "Không thể chỉnh sửa lịch",
+          description: "Ca thi đã được công khai trên hệ thống, không thể lên lịch lại.",
+        });
+        onOpenChange(false);
+        return;
+      }
       const currentPubStatus =
         session.exam_session_publication_status === "draft" ? "draft" : "scheduled";
       form.reset({
@@ -1291,7 +1656,7 @@ function PublishScheduleDialog({
         publish_at: toDateTimeLocalInput(session.exam_session_publish_at),
       });
     }
-  }, [open, session, form]);
+  }, [open, session, form, onOpenChange]);
 
   React.useEffect(() => {
     if (fetcher.data?.success) {
@@ -1310,14 +1675,23 @@ function PublishScheduleDialog({
     }
   }, [fetcher.data, onOpenChange]);
 
-  if (!session) return null;
+  if (!session || session.exam_session_publication_status === "published") return null;
   const isExpired = isSessionExpired(session);
 
   const onSubmit = (values: UpdatePublishScheduleValues) => {
+    if (session.exam_session_publication_status === "published") {
+      toast.add({
+        type: "error",
+        title: "Thao tác bị chặn",
+        description: "Ca thi đã công khai, không thể lên lịch lại.",
+      });
+      return;
+    }
     fetcher.submit(
       {
         intent: "update-publication-status",
         session_id: String(session.id),
+        current_publication_status: session.exam_session_publication_status || "",
         publication_status: values.publication_status,
         publish_at: values.publish_at || "",
       },
@@ -1547,37 +1921,70 @@ export const meta: Route.MetaFunction = () => [
 
 // ─── Main Route Component ───────────────────────────────────────────────────
 export default function QuanLyKyThiCaThiPage() {
-  const { sessions, examTypes } = useLoaderData<typeof loader>();
+  const { periods, sessions, examTypes } = useLoaderData<typeof loader>();
   const revalidator = useRevalidator();
   const actionFetcher = useFetcher<SessionAction>();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // Search & Filters state
+  // Active Subtab: "periods" | "sessions"
+  const activeTab = (searchParams.get("tab") as "periods" | "sessions") || "periods";
+
+  // Common Search & Page state
   const query = searchParams.get("q") ?? "";
   const page = Math.max(1, Number(searchParams.get("page") ?? "1"));
+
+  // Period Filters state
+  const periodStatusFilter = searchParams.get("period_status") ?? "all";
+
+  // Session Filters state
   const examTypeFilter = searchParams.get("exam_type_id") ?? "all";
+  const periodFilter = searchParams.get("period_id") ?? "all";
   const statusFilter = searchParams.get("status") ?? "all";
   const shiftFilter = searchParams.get("shift") ?? "all";
   const pubStatusFilter = searchParams.get("pub_status") ?? "all";
 
-  // Detail & Action Dialogs state
+  // Period Action & Dialogs state
+  const [isCreatePeriodOpen, setIsCreatePeriodOpen] = React.useState(false);
+  const [periodToEdit, setPeriodToEdit] = React.useState<ExamPeriod | null>(null);
+  const [periodToDuplicate, setPeriodToDuplicate] = React.useState<ExamPeriod | null>(null);
+  const [periodToReschedule, setPeriodToReschedule] = React.useState<ExamPeriod | null>(null);
+  const [selectedPeriodIdForDetail, setSelectedPeriodIdForDetail] = React.useState<number | null>(null);
+
+  // Session Detail & Action Dialogs state
   const [selectedSessionForDetail, setSelectedSessionForDetail] =
     React.useState<ExamSession | null>(null);
   const [isDetailOpen, setIsDetailOpen] = React.useState(false);
-
-  const [sessionToCancel, setSessionToCancel] =
-    React.useState<ExamSession | null>(null);
+  const [sessionToEdit, setSessionToEdit] = React.useState<ExamSession | null>(null);
+  const [sessionToCancel, setSessionToCancel] = React.useState<ExamSession | null>(null);
   const [isCancelAlertOpen, setIsCancelAlertOpen] = React.useState(false);
-
-  // Publish confirmation alert state
-  const [sessionToPublish, setSessionToPublish] =
-    React.useState<ExamSession | null>(null);
+  const [sessionToPublish, setSessionToPublish] = React.useState<ExamSession | null>(null);
   const [isPublishAlertOpen, setIsPublishAlertOpen] = React.useState(false);
-
-  // Publish schedule view & edit dialog state
   const [sessionForPublishSchedule, setSessionForPublishSchedule] =
     React.useState<ExamSession | null>(null);
   const [isPublishScheduleOpen, setIsPublishScheduleOpen] = React.useState(false);
+
+  // Shared Early Close Registration AlertDialog state (for period or session)
+  const [closeRegTarget, setCloseRegTarget] = React.useState<CloseRegistrationTarget | null>(null);
+
+  // Filtered periods
+  const filteredPeriods = React.useMemo(() => {
+    return periods.filter((period) => {
+      const haystack = `${period.code} ${period.name} ${period.description ?? ""}`.toLowerCase();
+      const matchesQuery = !query.trim() || haystack.includes(query.toLowerCase().trim());
+      const matchesStatus =
+        periodStatusFilter === "all" || period.status === periodStatusFilter;
+      return matchesQuery && matchesStatus;
+    });
+  }, [periods, query, periodStatusFilter]);
+
+  const totalPeriodPages = Math.max(1, Math.ceil(filteredPeriods.length / PAGE_SIZE));
+  const currentPeriodPage = Math.min(page, totalPeriodPages);
+  const visiblePeriods = React.useMemo(() => {
+    return filteredPeriods.slice(
+      (currentPeriodPage - 1) * PAGE_SIZE,
+      currentPeriodPage * PAGE_SIZE
+    );
+  }, [filteredPeriods, currentPeriodPage]);
 
   // Filtered sessions
   const filteredSessions = React.useMemo(() => {
@@ -1589,6 +1996,9 @@ export default function QuanLyKyThiCaThiPage() {
       const matchesType =
         examTypeFilter === "all" ||
         String(session.exam_type_id) === examTypeFilter;
+      const matchesPeriod =
+        periodFilter === "all" ||
+        String(session.period_id) === periodFilter;
       const isExpired = isSessionExpired(session);
       const matchesStatus =
         statusFilter === "all" ||
@@ -1602,21 +2012,31 @@ export default function QuanLyKyThiCaThiPage() {
         pubStatusFilter === "all" ||
         (session.exam_session_publication_status ?? "published") === pubStatusFilter;
 
-      return matchesQuery && matchesType && matchesStatus && matchesShift && matchesPubStatus;
+      return matchesQuery && matchesType && matchesPeriod && matchesStatus && matchesShift && matchesPubStatus;
     });
-  }, [sessions, examTypes, query, examTypeFilter, statusFilter, shiftFilter, pubStatusFilter]);
+  }, [sessions, examTypes, query, examTypeFilter, periodFilter, statusFilter, shiftFilter, pubStatusFilter]);
 
-  // Pagination calculation
-  const totalPages = Math.max(1, Math.ceil(filteredSessions.length / PAGE_SIZE));
-  const currentPage = Math.min(page, totalPages);
+  // Session Pagination calculation
+  const totalSessionPages = Math.max(1, Math.ceil(filteredSessions.length / PAGE_SIZE));
+  const currentSessionPage = Math.min(page, totalSessionPages);
   const visibleSessions = React.useMemo(() => {
     return filteredSessions.slice(
-      (currentPage - 1) * PAGE_SIZE,
-      currentPage * PAGE_SIZE
+      (currentSessionPage - 1) * PAGE_SIZE,
+      currentSessionPage * PAGE_SIZE
     );
-  }, [filteredSessions, currentPage]);
+  }, [filteredSessions, currentSessionPage]);
 
-  // Metrics summary (Đang mở chỉ tính ca thi còn hạn và đã phát hành công khai)
+  // Period Metrics summary
+  const periodOpenRegCount = periods.filter((p) => p.status === "registration_open").length;
+  const periodPublishedCount = periods.filter((p) => p.status === "published").length;
+  const periodDraftCount = periods.filter((p) => p.status === "draft").length;
+  const periodClosedCount = periods.filter((p) => p.status === "registration_closed").length;
+  const periodRescheduledCount = periods.filter((p) => p.status === "rescheduled").length;
+  const periodCompletedOrCancelledCount = periods.filter(
+    (p) => p.status === "completed" || p.status === "cancelled"
+  ).length;
+
+  // Session Metrics summary
   const openCount = sessions.filter(
     (s) =>
       s.status === "open" &&
@@ -1647,15 +2067,20 @@ export default function QuanLyKyThiCaThiPage() {
 
   const handleResetFilters = () => {
     const next = new URLSearchParams();
+    if (activeTab) next.set("tab", activeTab);
     setSearchParams(next);
   };
 
-  const hasActiveFilters =
+  const hasActiveSessionFilters =
     Boolean(query) ||
     examTypeFilter !== "all" ||
+    periodFilter !== "all" ||
     statusFilter !== "all" ||
     shiftFilter !== "all" ||
     pubStatusFilter !== "all";
+
+  const hasActivePeriodFilters =
+    Boolean(query) || periodStatusFilter !== "all";
 
   const [isRefreshing, setIsRefreshing] = React.useState(false);
   const handleRefresh = async () => {
@@ -1676,7 +2101,7 @@ export default function QuanLyKyThiCaThiPage() {
   };
 
   // Notifications from actionFetcher (guarded against revalidation loops)
-  const lastHandledActionRef = React.useRef<any>(null);
+  const lastHandledActionRef = React.useRef<SessionAction | null>(null);
   React.useEffect(() => {
     if (actionFetcher.data && actionFetcher.data !== lastHandledActionRef.current) {
       lastHandledActionRef.current = actionFetcher.data;
@@ -1692,6 +2117,13 @@ export default function QuanLyKyThiCaThiPage() {
         setIsPublishAlertOpen(false);
         setSessionForPublishSchedule(null);
         setIsPublishScheduleOpen(false);
+        setIsCreatePeriodOpen(false);
+        setPeriodToEdit(null);
+        setPeriodToDuplicate(null);
+        setPeriodToReschedule(null);
+        setSelectedPeriodIdForDetail(null);
+        setSessionToEdit(null);
+        setCloseRegTarget(null);
       } else if (actionFetcher.data.error) {
         toast.add({
           type: "error",
@@ -1716,6 +2148,22 @@ export default function QuanLyKyThiCaThiPage() {
   };
 
   const handleOpenPublishSchedule = (session: ExamSession) => {
+    if (session.exam_session_publication_status === "published") {
+      toast.add({
+        type: "error",
+        title: "Không thể lên lịch",
+        description: "Ca thi đã được công khai trên hệ thống, không thể lên lịch lại.",
+      });
+      return;
+    }
+    if (session.status === "cancelled") {
+      toast.add({
+        type: "error",
+        title: "Thao tác không khả dụng",
+        description: "Ca thi đã bị hủy, không thể lên lịch phát hành.",
+      });
+      return;
+    }
     setSessionForPublishSchedule(session);
     setIsPublishScheduleOpen(true);
   };
@@ -1726,6 +2174,7 @@ export default function QuanLyKyThiCaThiPage() {
       {
         intent: "update-publication-status",
         session_id: String(sessionToPublish.id),
+        current_publication_status: sessionToPublish.exam_session_publication_status || "",
         publication_status: "published",
       },
       { method: "post" }
@@ -1748,14 +2197,14 @@ export default function QuanLyKyThiCaThiPage() {
             <span className="text-xs text-muted-foreground">Đại học Vinh</span>
             <span className="text-muted-foreground/60 text-xs">•</span>
             <Badge variant="outline" className="rounded-full px-2 py-0.5 text-[10px] font-mono border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5">
-              Redis Cache: 10m (±35% Jitter)
+              Mô hình 2 tầng
             </Badge>
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
             Kỳ thi & Ca thi
           </h1>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-            Quản lý lịch mở đăng ký, điều phối ca thi và phát hành ca thi HSK máy tính.
+            Quản lý đợt thi theo mô hình 2 tầng, điều phối ca thi con, dời lịch thi và theo dõi chỉ số lấp đầy.
           </p>
         </div>
 
@@ -1772,30 +2221,666 @@ export default function QuanLyKyThiCaThiPage() {
             {isRefreshing || revalidator.state === "loading" ? "Đang đồng bộ..." : "Làm mới dữ liệu"}
           </Button>
 
-          <SessionCreateDialog examTypes={examTypes} />
+          {activeTab === "periods" ? (
+            <Button
+              onClick={() => setIsCreatePeriodOpen(true)}
+              className="rounded-full cursor-pointer hover:bg-primary/90 shadow-2xs font-medium text-xs sm:text-sm"
+            >
+              <PlusIcon className="size-4 mr-1.5" />
+              Tạo đợt thi mới
+            </Button>
+          ) : (
+            <SessionCreateDialog examTypes={examTypes} periods={periods} />
+          )}
         </div>
       </div>
 
-      {/* ── Metric / Stat Cards ────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        {/* Card 1: Tổng ca thi */}
-        <Card
-          onClick={handleResetFilters}
-          className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-primary/40 ${!hasActiveFilters ? "ring-1 ring-primary/30 border-primary/40 bg-primary/5" : ""
-            }`}
+      {/* ── Subtab Switcher: Đợt thi vs Ca thi (Mô hình 2 tầng) ─────────────── */}
+      <div className="flex items-center gap-1.5 p-1 bg-muted/60 dark:bg-muted/30 rounded-2xl border w-fit">
+        <button
+          type="button"
+          onClick={() => updateParams({ tab: "periods", page: null, q: null })}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+            activeTab === "periods"
+              ? "bg-background text-foreground shadow-xs border border-border/60"
+              : "text-muted-foreground hover:text-foreground hover:bg-background/50"
+          }`}
         >
-          <CardContent className="p-3.5 flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-primary/10 text-primary shrink-0">
-              <CalendarDaysIcon className="size-4" />
+          <LayersIcon className="size-4 text-primary" />
+          <span>Quản lý Đợt thi</span>
+          <Badge
+            variant={activeTab === "periods" ? "default" : "secondary"}
+            className="ml-1 rounded-full px-2 py-0 text-[10px] font-bold"
+          >
+            {periods.length}
+          </Badge>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => updateParams({ tab: "sessions", page: null, q: null })}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+            activeTab === "sessions"
+              ? "bg-background text-foreground shadow-xs border border-border/60"
+              : "text-muted-foreground hover:text-foreground hover:bg-background/50"
+          }`}
+        >
+          <ClockIcon className="size-4 text-sky-600 dark:text-sky-400" />
+          <span>Quản lý Ca thi</span>
+          <Badge
+            variant={activeTab === "sessions" ? "default" : "secondary"}
+            className="ml-1 rounded-full px-2 py-0 text-[10px] font-bold"
+          >
+            {sessions.length}
+          </Badge>
+        </button>
+      </div>
+
+      {activeTab === "periods" ? (
+        <>
+          {/* ── Metric / Stat Cards cho Đợt thi ──────────────────────────────── */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {/* Card 1: Tổng đợt thi */}
+            <Card
+              onClick={handleResetFilters}
+              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-primary/40 ${
+                !hasActivePeriodFilters ? "ring-1 ring-primary/30 border-primary/40 bg-primary/5" : ""
+              }`}
+            >
+              <CardContent className="p-3.5 flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-primary/10 text-primary shrink-0">
+                  <LayersIcon className="size-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted-foreground truncate">Tổng đợt thi</p>
+                  <p className="text-xl font-bold tracking-tight text-foreground">
+                    {periods.length}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Card 2: Đang mở đăng ký */}
+            <Card
+              onClick={() =>
+                updateParams({
+                  period_status: periodStatusFilter === "registration_open" ? null : "registration_open",
+                  page: null,
+                })
+              }
+              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-emerald-500/40 ${
+                periodStatusFilter === "registration_open"
+                  ? "ring-1 ring-emerald-500/40 border-emerald-500/40 bg-emerald-500/5"
+                  : ""
+              }`}
+            >
+              <CardContent className="p-3.5 flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">
+                  <CheckCircle2Icon className="size-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted-foreground truncate">Đang mở ĐK</p>
+                  <p className="text-xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
+                    {periodOpenRegCount}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Card 3: Đã công bố */}
+            <Card
+              onClick={() =>
+                updateParams({
+                  period_status: periodStatusFilter === "published" ? null : "published",
+                  page: null,
+                })
+              }
+              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-sky-500/40 ${
+                periodStatusFilter === "published"
+                  ? "ring-1 ring-sky-500/40 border-sky-500/40 bg-sky-500/5"
+                  : ""
+              }`}
+            >
+              <CardContent className="p-3.5 flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-sky-500/10 text-sky-600 dark:text-sky-400 shrink-0">
+                  <GlobeIcon className="size-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted-foreground truncate">Đã công bố</p>
+                  <p className="text-xl font-bold tracking-tight text-foreground">
+                    {periodPublishedCount}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Card 4: Bản nháp */}
+            <Card
+              onClick={() =>
+                updateParams({
+                  period_status: periodStatusFilter === "draft" ? null : "draft",
+                  page: null,
+                })
+              }
+              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-amber-500/40 ${
+                periodStatusFilter === "draft"
+                  ? "ring-1 ring-amber-500/40 border-amber-500/40 bg-amber-500/5"
+                  : ""
+              }`}
+            >
+              <CardContent className="p-3.5 flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
+                  <FileTextIcon className="size-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted-foreground truncate">Bản nháp</p>
+                  <p className="text-xl font-bold tracking-tight text-foreground">
+                    {periodDraftCount}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Card 5: Đã dời lịch */}
+            <Card
+              onClick={() =>
+                updateParams({
+                  period_status: periodStatusFilter === "rescheduled" ? null : "rescheduled",
+                  page: null,
+                })
+              }
+              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-purple-500/40 ${
+                periodStatusFilter === "rescheduled"
+                  ? "ring-1 ring-purple-500/40 border-purple-500/40 bg-purple-500/5"
+                  : ""
+              }`}
+            >
+              <CardContent className="p-3.5 flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 shrink-0">
+                  <CalendarClockIcon className="size-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted-foreground truncate">Đã dời lịch</p>
+                  <p className="text-xl font-bold tracking-tight text-purple-600 dark:text-purple-400">
+                    {periodRescheduledCount}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Card 6: Đã đóng / Hủy */}
+            <Card
+              onClick={() =>
+                updateParams({
+                  period_status: periodStatusFilter === "registration_closed" ? null : "registration_closed",
+                  page: null,
+                })
+              }
+              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-muted-foreground/40 ${
+                periodStatusFilter === "registration_closed"
+                  ? "ring-1 ring-muted-foreground/40 border-muted-foreground/40 bg-muted/20"
+                  : ""
+              }`}
+            >
+              <CardContent className="p-3.5 flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400 shrink-0">
+                  <LockIcon className="size-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted-foreground truncate">Đóng / Hết hạn</p>
+                  <p className="text-xl font-bold tracking-tight text-foreground">
+                    {periodClosedCount + periodCompletedOrCancelledCount}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* ── Bảng Dữ liệu Đợt thi ─────────────────────────────────────────── */}
+          <Card className="min-w-0 overflow-hidden rounded-2xl border shadow-2xs">
+            <CardHeader className="gap-3.5 border-b bg-card/50 p-4 sm:p-5">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <CardTitle className="text-base sm:text-lg font-bold text-foreground">
+                      Danh sách Đợt thi HSK
+                    </CardTitle>
+                    <Badge
+                      variant="secondary"
+                      className="rounded-full px-2.5 py-0.5 text-[11px] font-semibold bg-muted text-muted-foreground"
+                    >
+                      {filteredPeriods.length} đợt thi
+                    </Badge>
+                  </div>
+                  <CardDescription className="text-xs text-muted-foreground mt-0.5">
+                    Mô hình 2 tầng: Mỗi đợt thi bao gồm nhiều ca thi con tương ứng với từng cấp độ thi.
+                  </CardDescription>
+                </div>
+
+                <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-full w-fit overflow-x-auto max-w-full">
+                  <button
+                    type="button"
+                    onClick={() => updateParams({ period_status: null, page: null })}
+                    className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 ${
+                      periodStatusFilter === "all"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Tất cả ({periods.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateParams({ period_status: "registration_open", page: null })}
+                    className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${
+                      periodStatusFilter === "registration_open"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    Đang mở ĐK ({periodOpenRegCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateParams({ period_status: "published", page: null })}
+                    className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${
+                      periodStatusFilter === "published"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <GlobeIcon className="size-3 text-sky-600 dark:text-sky-400" />
+                    Đã công bố ({periodPublishedCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateParams({ period_status: "draft", page: null })}
+                    className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${
+                      periodStatusFilter === "draft"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <FileTextIcon className="size-3 text-amber-600 dark:text-amber-400" />
+                    Bản nháp ({periodDraftCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateParams({ period_status: "rescheduled", page: null })}
+                    className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${
+                      periodStatusFilter === "rescheduled"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <CalendarClockIcon className="size-3 text-purple-600 dark:text-purple-400" />
+                    Đã dời lịch ({periodRescheduledCount})
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-2 border-t border-border/50">
+                <div className="relative flex-1 min-w-[200px]">
+                  <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={query}
+                    onChange={(event) => updateParams({ q: event.target.value, page: null })}
+                    placeholder="Tìm mã đợt thi (HSK-2026-T06), tên đợt thi..."
+                    className="h-9 rounded-full pl-8.5 pr-8 text-xs placeholder:text-xs bg-background"
+                    aria-label="Tìm kiếm đợt thi"
+                  />
+                  {query && (
+                    <button
+                      type="button"
+                      onClick={() => updateParams({ q: null, page: null })}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+                      aria-label="Xóa từ khóa tìm kiếm"
+                    >
+                      <XIcon className="size-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {hasActivePeriodFilters && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleResetFilters}
+                    className="h-9 rounded-full px-3 text-xs text-muted-foreground hover:text-foreground cursor-pointer hover:bg-muted shrink-0"
+                  >
+                    <RotateCcwIcon className="size-3.5 mr-1" />
+                    Đặt lại
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/30 hover:bg-muted/30 border-b">
+                    <TableHead className="w-[120px] py-3 text-xs font-semibold text-muted-foreground pl-5">
+                      Mã đợt
+                    </TableHead>
+                    <TableHead className="min-w-[220px] py-3 text-xs font-semibold text-muted-foreground">
+                      Tên đợt thi
+                    </TableHead>
+                    <TableHead className="min-w-[190px] py-3 text-xs font-semibold text-muted-foreground">
+                      Thời gian tổ chức
+                    </TableHead>
+                    <TableHead className="min-w-[170px] py-3 text-xs font-semibold text-muted-foreground">
+                      Hạn chót đăng ký
+                    </TableHead>
+                    <TableHead className="min-w-[100px] py-3 text-xs font-semibold text-muted-foreground text-center">
+                      Số ca thi
+                    </TableHead>
+                    <TableHead className="min-w-[130px] py-3 text-xs font-semibold text-muted-foreground">
+                      Trạng thái
+                    </TableHead>
+                    <TableHead className="w-[90px] py-3 text-xs font-semibold text-muted-foreground text-right pr-5">
+                      Thao tác
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {visiblePeriods.map((period) => {
+                    const statusInfo = getPeriodStatusDetails(period.status);
+                    const canCloseEarly =
+                      period.status === "published" || period.status === "registration_open";
+
+                    return (
+                      <TableRow key={period.id} className="hover:bg-muted/40 transition-colors">
+                        <TableCell className="pl-5">
+                          <div className="flex flex-col">
+                            <span className="font-mono text-xs font-bold text-foreground">
+                              {period.code}
+                            </span>
+                            <span className="font-mono text-[11px] text-muted-foreground">
+                              #{period.id}
+                            </span>
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="flex flex-col gap-0.5">
+                            <span className="font-semibold text-foreground text-xs sm:text-sm">
+                              {period.name}
+                            </span>
+                            {period.description && (
+                              <span className="text-[11px] text-muted-foreground line-clamp-1">
+                                {period.description}
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="flex items-center gap-1.5 text-xs text-foreground">
+                            <CalendarDaysIcon className="size-3.5 text-primary shrink-0" />
+                            <span>
+                              {formatDateOnly(period.start_date)}
+                              {period.end_date && period.end_date !== period.start_date && (
+                                <> - {formatDateOnly(period.end_date)}</>
+                              )}
+                            </span>
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="flex items-center gap-1.5 text-xs text-foreground">
+                            <ClockIcon className="size-3.5 text-muted-foreground shrink-0" />
+                            <span>{formatDateTime(period.registration_deadline)}</span>
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="text-center">
+                          <Badge
+                            variant="outline"
+                            onClick={() => setSelectedPeriodIdForDetail(period.id)}
+                            className="rounded-full px-2.5 py-0.5 text-xs font-medium cursor-pointer hover:bg-muted"
+                            title="Bấm để xem danh sách ca thi con"
+                          >
+                            <LayersIcon className="size-3 mr-1 text-primary" />
+                            {period.session_count ?? 0} ca
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell>
+                          <Badge
+                            className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium border inline-flex items-center gap-1.5 w-fit ${statusInfo.badgeClass}`}
+                          >
+                            <span
+                              className={`size-1.5 rounded-full ${statusInfo.dotClass} ${
+                                statusInfo.pulse ? "animate-pulse" : ""
+                              }`}
+                            />
+                            {statusInfo.label}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell className="text-right pr-5">
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              className="rounded-full cursor-pointer hover:bg-muted text-muted-foreground hover:text-foreground"
+                              title="Xem chi tiết đợt thi & ca thi"
+                              onClick={() => setSelectedPeriodIdForDetail(period.id)}
+                            >
+                              <EyeIcon className="size-3.5" />
+                              <span className="sr-only">Xem chi tiết</span>
+                            </Button>
+
+                            <DropdownMenu>
+                              <DropdownMenuTrigger
+                                render={
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    className="rounded-full cursor-pointer hover:bg-muted text-muted-foreground hover:text-foreground"
+                                    aria-label={`Thao tác đợt ${period.code}`}
+                                  />
+                                }
+                              >
+                                <MoreHorizontalIcon className="size-4" />
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-60 rounded-xl p-1.5 shadow-lg border">
+                                <DropdownMenuLabel className="text-xs text-muted-foreground font-semibold px-2 py-1.5 truncate">
+                                  Đợt thi: {period.code}
+                                </DropdownMenuLabel>
+                                <DropdownMenuGroup>
+                                  <DropdownMenuItem
+                                    className="cursor-pointer text-xs rounded-lg font-medium"
+                                    onClick={() => setSelectedPeriodIdForDetail(period.id)}
+                                  >
+                                    <EyeIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                    Xem chi tiết & ca thi con
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    className="cursor-pointer text-xs rounded-lg font-medium"
+                                    onClick={() =>
+                                      navigator.clipboard?.writeText(period.code).then(() =>
+                                        toast.add({
+                                          type: "info",
+                                          title: "Đã sao chép mã đợt thi",
+                                          description: `Mã: ${period.code}`,
+                                        })
+                                      )
+                                    }
+                                  >
+                                    <CopyIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                    Sao chép mã đợt thi
+                                  </DropdownMenuItem>
+                                </DropdownMenuGroup>
+
+                                <DropdownMenuSeparator className="my-1" />
+                                <DropdownMenuLabel className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider px-2 py-1">
+                                  Quản lý & Cấu hình
+                                </DropdownMenuLabel>
+                                <DropdownMenuGroup>
+                                  <DropdownMenuItem
+                                    className="cursor-pointer text-xs rounded-lg font-medium"
+                                    onClick={() => setPeriodToEdit(period)}
+                                  >
+                                    <EditIcon className="size-3.5 mr-2 text-primary" />
+                                    Chỉnh sửa thông tin
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    className="cursor-pointer text-xs rounded-lg font-medium text-purple-700 dark:text-purple-400 focus:text-purple-700 focus:bg-purple-50 dark:focus:bg-purple-950/40"
+                                    onClick={() => setPeriodToReschedule(period)}
+                                  >
+                                    <CalendarClockIcon className="size-3.5 mr-2" />
+                                    Dời lịch thi (Bất khả kháng)
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    className="cursor-pointer text-xs rounded-lg font-medium"
+                                    onClick={() => setPeriodToDuplicate(period)}
+                                  >
+                                    <CopyIcon className="size-3.5 mr-2 text-sky-600 dark:text-sky-400" />
+                                    Nhân bản đợt thi (ACID)
+                                  </DropdownMenuItem>
+                                </DropdownMenuGroup>
+
+                                {canCloseEarly && (
+                                  <>
+                                    <DropdownMenuSeparator className="my-1" />
+                                    <DropdownMenuGroup>
+                                      <DropdownMenuItem
+                                        variant="destructive"
+                                        className="cursor-pointer text-xs rounded-lg font-medium text-amber-700 dark:text-amber-400 focus:text-amber-700 focus:bg-amber-50 dark:focus:bg-amber-950/40"
+                                        onClick={() =>
+                                          setCloseRegTarget({
+                                            type: "period",
+                                            id: period.id,
+                                            title: period.name,
+                                          })
+                                        }
+                                      >
+                                        <LockIcon className="size-3.5 mr-2" />
+                                        Đóng đăng ký sớm
+                                      </DropdownMenuItem>
+                                    </DropdownMenuGroup>
+                                  </>
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+
+                  {visiblePeriods.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={7} className="py-12 text-center">
+                        <div className="flex flex-col items-center justify-center max-w-sm mx-auto text-center gap-2">
+                          <div className="size-12 rounded-full bg-muted/80 flex items-center justify-center text-muted-foreground mb-1">
+                            <LayersIcon className="size-6" />
+                          </div>
+                          <p className="text-base font-semibold text-foreground">
+                            Không tìm thấy đợt thi phù hợp
+                          </p>
+                          <p className="text-xs text-muted-foreground leading-relaxed">
+                            Không có đợt thi nào khớp với từ khóa tìm kiếm hoặc trạng thái đã chọn.
+                          </p>
+                          {hasActivePeriodFilters && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleResetFilters}
+                              className="rounded-full cursor-pointer mt-2 hover:bg-muted text-xs"
+                            >
+                              <RotateCcwIcon className="size-3.5 mr-1.5" />
+                              Xóa bộ lọc tìm kiếm
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
             </div>
-            <div className="min-w-0">
-              <p className="text-[11px] text-muted-foreground truncate">Tổng ca thi</p>
-              <p className="text-xl font-bold tracking-tight text-foreground">
-                {sessions.length}
+
+            {/* Period Pagination */}
+            <div className="flex flex-col items-center justify-between gap-3 border-t bg-card/30 p-4 sm:flex-row">
+              <p className="text-xs text-muted-foreground">
+                {filteredPeriods.length > 0 ? (
+                  <>
+                    Hiển thị{" "}
+                    <span className="font-semibold text-foreground">
+                      {(currentPeriodPage - 1) * PAGE_SIZE + 1}
+                    </span>{" "}
+                    -{" "}
+                    <span className="font-semibold text-foreground">
+                      {Math.min(currentPeriodPage * PAGE_SIZE, filteredPeriods.length)}
+                    </span>{" "}
+                    trên tổng số{" "}
+                    <span className="font-semibold text-foreground">
+                      {filteredPeriods.length}
+                    </span>{" "}
+                    đợt thi
+                  </>
+                ) : (
+                  "Không có dữ liệu hiển thị"
+                )}
               </p>
+
+              {totalPeriodPages > 1 && (
+                <Pagination className="mx-0 w-auto">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        disabled={currentPeriodPage <= 1}
+                        onClick={() => updateParams({ page: String(currentPeriodPage - 1) })}
+                      />
+                    </PaginationItem>
+                    {Array.from({ length: totalPeriodPages }, (_, index) => index + 1).map((item) => (
+                      <PaginationItem key={item}>
+                        <PaginationButton
+                          isActive={item === currentPeriodPage}
+                          onClick={() => updateParams({ page: String(item) })}
+                        >
+                          {item}
+                        </PaginationButton>
+                      </PaginationItem>
+                    ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        disabled={currentPeriodPage >= totalPeriodPages}
+                        onClick={() => updateParams({ page: String(currentPeriodPage + 1) })}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              )}
             </div>
-          </CardContent>
-        </Card>
+          </Card>
+        </>
+      ) : (
+        <>
+          {/* ── Metric / Stat Cards ────────────────────────────────────────────── */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {/* Card 1: Tổng ca thi */}
+            <Card
+              onClick={handleResetFilters}
+              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-primary/40 ${
+                !hasActiveSessionFilters ? "ring-1 ring-primary/30 border-primary/40 bg-primary/5" : ""
+              }`}
+            >
+              <CardContent className="p-3.5 flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-primary/10 text-primary shrink-0">
+                  <CalendarDaysIcon className="size-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted-foreground truncate">Tổng ca thi</p>
+                  <p className="text-xl font-bold tracking-tight text-foreground">
+                    {sessions.length}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
 
         {/* Card 2: Đang mở đăng ký */}
         <Card
@@ -1936,7 +3021,7 @@ export default function QuanLyKyThiCaThiPage() {
               </div>
               <CardDescription className="text-xs text-muted-foreground mt-0.5">
                 Hiển thị {filteredSessions.length} kết quả
-                {hasActiveFilters && sessions.length !== filteredSessions.length
+                {hasActiveSessionFilters && sessions.length !== filteredSessions.length
                   ? ''
                   : ""}
                 {" · "}
@@ -2063,6 +3148,45 @@ export default function QuanLyKyThiCaThiPage() {
                 </SelectContent>
               </Select>
 
+              {/* Lọc Đợt thi */}
+              {periods && periods.length > 0 && (
+                <Select
+                  value={periodFilter}
+                  onValueChange={(value) =>
+                    updateParams({ period_id: value, page: null })
+                  }
+                >
+                  <SelectTrigger className="h-9 w-full sm:w-44 rounded-full px-3 text-xs cursor-pointer truncate">
+                    <SelectValue placeholder="Mọi đợt thi">
+                      {(val) => {
+                        const current = val ?? periodFilter;
+                        if (!current || current === "all") return "Mọi đợt thi";
+                        const matched = periods.find(
+                          (p) => String(p.id) === String(current)
+                        );
+                        return matched ? matched.code : "Mọi đợt thi";
+                      }}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent className="rounded-xl max-h-64">
+                    <SelectGroup>
+                      <SelectItem value="all" className="cursor-pointer text-xs">
+                        Mọi đợt thi
+                      </SelectItem>
+                      {periods.map((p) => (
+                        <SelectItem
+                          key={p.id}
+                          value={String(p.id)}
+                          className="cursor-pointer text-xs"
+                        >
+                          <span className="font-semibold">{p.code}</span> — {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              )}
+
               {/* Lọc Trạng thái */}
               <Select
                 value={statusFilter}
@@ -2138,7 +3262,7 @@ export default function QuanLyKyThiCaThiPage() {
               </Select>
 
               {/* Nút Xóa lọc nếu có lọc */}
-              {hasActiveFilters && (
+              {hasActiveSessionFilters && (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -2331,13 +3455,19 @@ export default function QuanLyKyThiCaThiPage() {
                           <span className="sr-only">Xem chi tiết</span>
                         </Button>
 
-                        {!isExpired && (session.exam_session_publication_status === "draft" ||
-                          session.exam_session_publication_status === "scheduled") && (
+                        {!isExpired &&
+                          session.status !== "cancelled" &&
+                          (session.exam_session_publication_status === "draft" ||
+                            session.exam_session_publication_status === "scheduled") && (
                             <Button
                               variant="ghost"
                               size="icon-sm"
                               className="rounded-full cursor-pointer hover:bg-sky-50 text-sky-600 dark:text-sky-400 hover:text-sky-700"
-                              title="Xem & chỉnh sửa lịch công khai"
+                              title={
+                                session.exam_session_publication_status === "draft"
+                                  ? "Lên lịch công khai ca thi"
+                                  : "Chỉnh sửa lịch hẹn công khai"
+                              }
                               onClick={() => handleOpenPublishSchedule(session)}
                             >
                               <CalendarClockIcon className="size-3.5" />
@@ -2358,23 +3488,23 @@ export default function QuanLyKyThiCaThiPage() {
                           >
                             <MoreHorizontalIcon className="size-4" />
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-52 rounded-xl">
-                            <DropdownMenuLabel className="text-xs text-muted-foreground">
+                          <DropdownMenuContent align="end" className="w-56 rounded-xl p-1.5 shadow-lg border">
+                            <DropdownMenuLabel className="text-xs text-muted-foreground font-semibold px-2 py-1.5 truncate">
                               Ca thi #{session.id}
                             </DropdownMenuLabel>
                             <DropdownMenuGroup>
                               <DropdownMenuItem
-                                className="cursor-pointer text-xs"
+                                className="cursor-pointer text-xs rounded-lg font-medium"
                                 onClick={() => {
                                   setSelectedSessionForDetail(session);
                                   setIsDetailOpen(true);
                                 }}
                               >
-                                <EyeIcon className="size-3.5 mr-2" />
-                                Xem chi tiết
+                                <EyeIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                Xem chi tiết ca thi
                               </DropdownMenuItem>
                               <DropdownMenuItem
-                                className="cursor-pointer text-xs"
+                                className="cursor-pointer text-xs rounded-lg font-medium"
                                 onClick={() =>
                                   navigator.clipboard
                                     ?.writeText(String(session.id))
@@ -2382,72 +3512,138 @@ export default function QuanLyKyThiCaThiPage() {
                                       toast.add({
                                         type: "info",
                                         title: "Đã sao chép mã ca thi",
+                                        description: `Mã ca: #${session.id}`,
                                       })
                                     )
                                 }
                               >
-                                <CopyIcon className="size-3.5 mr-2" />
-                                Sao chép mã ca
+                                <CopyIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                Sao chép mã ca thi
                               </DropdownMenuItem>
                             </DropdownMenuGroup>
 
-                            {/* Publication status quick actions */}
-                            {!isExpired &&
-                              session.status !== "cancelled" && (
-                                <>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase tracking-wider">
-                                    Phát hành & Lịch
-                                  </DropdownMenuLabel>
-                                  <DropdownMenuItem
-                                    className="cursor-pointer text-xs"
-                                    onClick={() => handleOpenPublishSchedule(session)}
-                                  >
-                                    <CalendarClockIcon className="size-3.5 mr-2 text-sky-600" />
-                                    Xem & chỉnh sửa lịch
-                                  </DropdownMenuItem>
-                                  {session.exam_session_publication_status === "draft" && (
-                                    <DropdownMenuItem
-                                      className="cursor-pointer text-xs"
-                                      onClick={() => handleOpenPublishConfirm(session)}
-                                    >
-                                      <GlobeIcon className="size-3.5 mr-2 text-emerald-600" />
-                                      Công khai ca thi
-                                    </DropdownMenuItem>
-                                  )}
-                                  {session.exam_session_publication_status === "scheduled" && (
-                                    <DropdownMenuItem
-                                      className="cursor-pointer text-xs"
-                                      onClick={() => handleOpenPublishConfirm(session)}
-                                    >
-                                      <GlobeIcon className="size-3.5 mr-2 text-emerald-600" />
-                                      Công khai ngay
-                                    </DropdownMenuItem>
-                                  )}
-                                </>
+                            <DropdownMenuSeparator className="my-1" />
+                            <DropdownMenuLabel className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider px-2 py-1">
+                              Chỉnh sửa & Điều chỉnh
+                            </DropdownMenuLabel>
+                            <DropdownMenuGroup>
+                              <DropdownMenuItem
+                                className="cursor-pointer text-xs rounded-lg font-medium"
+                                onClick={() => setSessionToEdit(session)}
+                              >
+                                <EditIcon className="size-3.5 mr-2 text-primary" />
+                                Chỉnh sửa ca thi
+                              </DropdownMenuItem>
+                              {!isExpired && session.status === "open" && (
+                                <DropdownMenuItem
+                                  className="cursor-pointer text-xs rounded-lg font-medium text-amber-700 dark:text-amber-400 focus:text-amber-700 focus:bg-amber-50 dark:focus:bg-amber-950/40"
+                                  onClick={() =>
+                                    setCloseRegTarget({
+                                      type: "session",
+                                      id: session.id,
+                                      title: `Ca thi #${session.id}`,
+                                    })
+                                  }
+                                >
+                                  <LockIcon className="size-3.5 mr-2" />
+                                  Đóng đăng ký sớm
+                                </DropdownMenuItem>
                               )}
+                            </DropdownMenuGroup>
 
+                            {/* Khối Phát hành & Lịch: Chỉ hiển thị khi ca thi chưa hết hạn và chưa bị hủy */}
                             {!isExpired && session.status !== "cancelled" && (
                               <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  variant="destructive"
-                                  className="cursor-pointer text-xs text-destructive"
-                                  onClick={() => {
-                                    setSessionToCancel(session);
-                                    setIsCancelAlertOpen(true);
-                                  }}
-                                >
-                                  <XCircleIcon className="size-3.5 mr-2" />
-                                  Hủy ca thi
+                                <DropdownMenuSeparator className="my-1" />
+                                <DropdownMenuLabel className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider px-2 py-1">
+                                  Phát hành & Công khai
+                                </DropdownMenuLabel>
+                                <DropdownMenuGroup>
+                                  {session.exam_session_publication_status === "draft" && (
+                                    <>
+                                      <DropdownMenuItem
+                                        className="cursor-pointer text-xs rounded-lg font-medium text-sky-700 dark:text-sky-400 focus:text-sky-700 focus:bg-sky-50 dark:focus:bg-sky-950/40"
+                                        onClick={() => handleOpenPublishSchedule(session)}
+                                      >
+                                        <CalendarClockIcon className="size-3.5 mr-2" />
+                                        Lên lịch công khai
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        className="cursor-pointer text-xs rounded-lg font-medium text-emerald-700 dark:text-emerald-400 focus:text-emerald-700 focus:bg-emerald-50 dark:focus:bg-emerald-950/40"
+                                        onClick={() => handleOpenPublishConfirm(session)}
+                                      >
+                                        <GlobeIcon className="size-3.5 mr-2" />
+                                        Công khai ca thi
+                                      </DropdownMenuItem>
+                                    </>
+                                  )}
+
+                                  {session.exam_session_publication_status === "scheduled" && (
+                                    <>
+                                      <DropdownMenuItem
+                                        className="cursor-pointer text-xs rounded-lg font-medium text-sky-700 dark:text-sky-400 focus:text-sky-700 focus:bg-sky-50 dark:focus:bg-sky-950/40"
+                                        onClick={() => handleOpenPublishSchedule(session)}
+                                      >
+                                        <CalendarClockIcon className="size-3.5 mr-2" />
+                                        Chỉnh sửa lịch hẹn
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        className="cursor-pointer text-xs rounded-lg font-medium text-emerald-700 dark:text-emerald-400 focus:text-emerald-700 focus:bg-emerald-50 dark:focus:bg-emerald-950/40"
+                                        onClick={() => handleOpenPublishConfirm(session)}
+                                      >
+                                        <GlobeIcon className="size-3.5 mr-2" />
+                                        Công khai ngay
+                                      </DropdownMenuItem>
+                                    </>
+                                  )}
+
+                                  {session.exam_session_publication_status === "published" && (
+                                    <DropdownMenuItem
+                                      disabled
+                                      className="text-xs rounded-lg font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/20 cursor-default opacity-90 select-none"
+                                    >
+                                      <CheckCircle2Icon className="size-3.5 mr-2 text-emerald-600 dark:text-emerald-400" />
+                                      Đang công khai trên hệ thống
+                                    </DropdownMenuItem>
+                                  )}
+                                </DropdownMenuGroup>
+                              </>
+                            )}
+
+                            {/* Khối Vùng nguy hiểm: Hủy ca thi */}
+                            {!isExpired && session.status !== "cancelled" && (
+                              <>
+                                <DropdownMenuSeparator className="my-1" />
+                                <DropdownMenuGroup>
+                                  <DropdownMenuItem
+                                    variant="destructive"
+                                    className="cursor-pointer text-xs rounded-lg font-medium text-destructive focus:text-destructive focus:bg-destructive/10"
+                                    onClick={() => {
+                                      setSessionToCancel(session);
+                                      setIsCancelAlertOpen(true);
+                                    }}
+                                  >
+                                    <XCircleIcon className="size-3.5 mr-2" />
+                                    Hủy ca thi
+                                  </DropdownMenuItem>
+                                </DropdownMenuGroup>
+                              </>
+                            )}
+
+                            {session.status === "cancelled" && (
+                              <>
+                                <DropdownMenuSeparator className="my-1" />
+                                <DropdownMenuItem disabled className="text-xs text-muted-foreground flex items-center gap-1.5 cursor-not-allowed select-none">
+                                  <XCircleIcon className="size-3.5 text-muted-foreground" />
+                                  Ca thi đã bị hủy
                                 </DropdownMenuItem>
                               </>
                             )}
 
-                            {isExpired && (
+                            {isExpired && session.status !== "cancelled" && (
                               <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem disabled className="text-xs text-muted-foreground flex items-center gap-1.5 cursor-not-allowed">
+                                <DropdownMenuSeparator className="my-1" />
+                                <DropdownMenuItem disabled className="text-xs text-muted-foreground flex items-center gap-1.5 cursor-not-allowed select-none">
                                   <LockIcon className="size-3.5 text-muted-foreground" />
                                   Ca thi đã khóa (Hết hạn)
                                 </DropdownMenuItem>
@@ -2475,7 +3671,7 @@ export default function QuanLyKyThiCaThiPage() {
                       <p className="text-xs text-muted-foreground leading-relaxed">
                         Không có ca thi nào khớp với từ khóa tìm kiếm hoặc các tiêu chí bộ lọc đã chọn.
                       </p>
-                      {hasActiveFilters && (
+                      {hasActiveSessionFilters && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -2501,11 +3697,11 @@ export default function QuanLyKyThiCaThiPage() {
               <>
                 Hiển thị{" "}
                 <span className="font-semibold text-foreground">
-                  {(currentPage - 1) * PAGE_SIZE + 1}
+                  {(currentSessionPage - 1) * PAGE_SIZE + 1}
                 </span>{" "}
                 -{" "}
                 <span className="font-semibold text-foreground">
-                  {Math.min(currentPage * PAGE_SIZE, filteredSessions.length)}
+                  {Math.min(currentSessionPage * PAGE_SIZE, filteredSessions.length)}
                 </span>{" "}
                 trên tổng số{" "}
                 <span className="font-semibold text-foreground">
@@ -2518,25 +3714,25 @@ export default function QuanLyKyThiCaThiPage() {
             )}
           </p>
 
-          {totalPages > 1 && (
+          {totalSessionPages > 1 && (
             <Pagination className="mx-0 w-auto">
               <PaginationContent>
                 <PaginationItem>
                   <PaginationPrevious
-                    disabled={currentPage <= 1}
-                    onClick={() => updateParams({ page: String(currentPage - 1) })}
+                    disabled={currentSessionPage <= 1}
+                    onClick={() => updateParams({ page: String(currentSessionPage - 1) })}
                   />
                 </PaginationItem>
 
-                {Array.from({ length: totalPages }, (_, index) => index + 1).map(
+                {Array.from({ length: totalSessionPages }, (_, index) => index + 1).map(
                   (item) => {
                     // Logic hiển thị trang thông minh
                     const isFirst = item === 1;
-                    const isLast = item === totalPages;
-                    const isNearCurrent = Math.abs(item - currentPage) <= 1;
+                    const isLast = item === totalSessionPages;
+                    const isNearCurrent = Math.abs(item - currentSessionPage) <= 1;
 
                     if (!isFirst && !isLast && !isNearCurrent) {
-                      if (item === 2 && currentPage > 3) {
+                      if (item === 2 && currentSessionPage > 3) {
                         return (
                           <PaginationItem key="ellipsis-start">
                             <PaginationEllipsis />
@@ -2544,8 +3740,8 @@ export default function QuanLyKyThiCaThiPage() {
                         );
                       }
                       if (
-                        item === totalPages - 1 &&
-                        currentPage < totalPages - 2
+                        item === totalSessionPages - 1 &&
+                        currentSessionPage < totalSessionPages - 2
                       ) {
                         return (
                           <PaginationItem key="ellipsis-end">
@@ -2559,7 +3755,7 @@ export default function QuanLyKyThiCaThiPage() {
                     return (
                       <PaginationItem key={item}>
                         <PaginationButton
-                          isActive={item === currentPage}
+                          isActive={item === currentSessionPage}
                           onClick={() => updateParams({ page: String(item) })}
                         >
                           {item}
@@ -2571,8 +3767,8 @@ export default function QuanLyKyThiCaThiPage() {
 
                 <PaginationItem>
                   <PaginationNext
-                    disabled={currentPage >= totalPages}
-                    onClick={() => updateParams({ page: String(currentPage + 1) })}
+                    disabled={currentSessionPage >= totalSessionPages}
+                    onClick={() => updateParams({ page: String(currentSessionPage + 1) })}
                   />
                 </PaginationItem>
               </PaginationContent>
@@ -2580,12 +3776,14 @@ export default function QuanLyKyThiCaThiPage() {
           )}
         </div>
       </Card>
+        </>
+      )}
 
       {/* Thông tin hỗ trợ */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground/80 px-1">
         <InfoIcon className="size-3.5 shrink-0 text-muted-foreground/60" />
         <span>
-          Dữ liệu ca thi được đồng bộ trực tiếp từ máy chủ API. Nhấn "Làm mới dữ liệu" để cập nhật tình trạng mới nhất.
+          Dữ liệu đợt thi & ca thi được đồng bộ trực tiếp từ máy chủ API. Nhấn "Làm mới dữ liệu" để cập nhật tình trạng mới nhất.
         </span>
       </div>
 
@@ -2705,6 +3903,64 @@ export default function QuanLyKyThiCaThiPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ── Dialog Tạo Đợt Thi Mới ────────────────────────────────────────── */}
+      <CreatePeriodDialog
+        open={isCreatePeriodOpen}
+        onOpenChange={setIsCreatePeriodOpen}
+      />
+
+      {/* ── Dialog Chỉnh Sửa Đợt Thi ──────────────────────────────────────── */}
+      <EditPeriodDialog
+        period={periodToEdit}
+        open={!!periodToEdit}
+        onOpenChange={(open) => !open && setPeriodToEdit(null)}
+        onOpenReschedule={(period) => {
+          setPeriodToEdit(null);
+          setPeriodToReschedule(period);
+        }}
+      />
+
+      {/* ── Dialog Nhân Bản Đợt Thi ACID ──────────────────────────────────── */}
+      <DuplicatePeriodDialog
+        period={periodToDuplicate}
+        open={!!periodToDuplicate}
+        onOpenChange={(open) => !open && setPeriodToDuplicate(null)}
+      />
+
+      {/* ── Dialog Dời Lịch Thi (Bất Khả Kháng) ────────────────────────────── */}
+      <ReschedulePeriodDialog
+        period={periodToReschedule}
+        open={!!periodToReschedule}
+        onOpenChange={(open) => !open && setPeriodToReschedule(null)}
+      />
+
+      {/* ── Dialog Xem Chi Tiết Đợt Thi & Danh Sách Ca Thi Con ────────────── */}
+      <PeriodDetailDialog
+        periodId={selectedPeriodIdForDetail}
+        examTypes={examTypes}
+        open={selectedPeriodIdForDetail !== null}
+        onOpenChange={(open) => !open && setSelectedPeriodIdForDetail(null)}
+        onEditPeriod={(period) => setPeriodToEdit(period)}
+        onDuplicatePeriod={(period) => setPeriodToDuplicate(period)}
+        onReschedulePeriod={(period) => setPeriodToReschedule(period)}
+        onEditSession={(session: ExamSession) => setSessionToEdit(session)}
+      />
+
+      {/* ── Dialog Chỉnh Sửa Ca Thi ───────────────────────────────────────── */}
+      <EditSessionDialog
+        session={sessionToEdit}
+        examTypes={examTypes}
+        open={!!sessionToEdit}
+        onOpenChange={(open) => !open && setSessionToEdit(null)}
+      />
+
+      {/* ── AlertDialog Đóng Đăng Ký Sớm (Đợt thi / Ca thi) ────────────────── */}
+      <CloseRegistrationAlertDialog
+        target={closeRegTarget}
+        open={!!closeRegTarget}
+        onOpenChange={(open) => !open && setCloseRegTarget(null)}
+      />
     </div>
   );
 }

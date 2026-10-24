@@ -654,6 +654,7 @@ const RegistrationContent = React.memo(function RegistrationContent({
   const batches = React.useMemo(() => {
     const map = new Map<string, ExamSessionWithSlots[]>();
     for (const s of sessions) {
+      if (!s.date) continue;
       if (!map.has(s.date)) map.set(s.date, []);
       map.get(s.date)!.push(s);
     }
@@ -666,7 +667,7 @@ const RegistrationContent = React.memo(function RegistrationContent({
   React.useEffect(() => {
     if (!selectedBatchDate && batches.length > 0) {
       const firstAvailableBatch = batches.find(([, batchSessions]) =>
-        batchSessions.some((s) => new Date(s.registration_deadline) >= new Date())
+        batchSessions.some((s) => s.registration_deadline && new Date(s.registration_deadline) >= new Date())
       );
       setSelectedBatchDate(firstAvailableBatch ? firstAvailableBatch[0] : batches[0][0]);
     }
@@ -813,7 +814,7 @@ const RegistrationContent = React.memo(function RegistrationContent({
               {batches.map(([date, batchSessions]) => {
                 const isSelected = date === selectedBatchDate;
                 const isDeadlinePassed = batchSessions.every(
-                  (s) => new Date(s.registration_deadline) < new Date()
+                  (s) => s.registration_deadline ? new Date(s.registration_deadline) < new Date() : false
                 );
                 return (
                   <button

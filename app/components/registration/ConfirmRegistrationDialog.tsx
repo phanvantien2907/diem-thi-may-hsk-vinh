@@ -59,7 +59,7 @@ export function ConfirmRegistrationDialog({
 
             <dt className="text-muted-foreground">Ngày thi</dt>
             <dd className="font-medium text-foreground">
-              {formatDate(session.date)}
+              {session.date ? formatDate(session.date) : "—"}
             </dd>
 
             <dt className="text-muted-foreground">Ca thi</dt>

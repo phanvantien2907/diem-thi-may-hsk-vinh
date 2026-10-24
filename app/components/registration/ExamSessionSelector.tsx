@@ -22,7 +22,8 @@ function shiftLabel(shift: string): string {
 }
 
 /** Format ngày thi đẹp (ví dụ: "15/10/2026") */
-function formatDate(dateStr: string): string {
+function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
   try {
     const d = new Date(dateStr);
     return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" });
@@ -37,7 +38,8 @@ function formatCurrency(amount: number): string {
 }
 
 /** Format hạn đăng ký */
-function formatDeadline(dateStr: string): string {
+function formatDeadline(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
   try {
     const d = new Date(dateStr);
     return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" });
@@ -93,7 +95,9 @@ export const ExamSessionSelector = React.memo(function ExamSessionSelector({
       {sessions.map((session) => {
         const isSelected = selectedSessionId === session.id;
         const isFull = session.available_slots <= 0;
-        const isDeadlinePassed = new Date(session.registration_deadline) < new Date();
+        const isDeadlinePassed = session.registration_deadline
+          ? new Date(session.registration_deadline) < new Date()
+          : false;
         const isDisabled = isFull || isDeadlinePassed || session.status !== "open";
         const isHighlighted = highlightLevel && session.exam_type_name?.includes(`Cấp độ ${highlightLevel}`);
 

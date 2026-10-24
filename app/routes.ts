@@ -33,6 +33,7 @@ export default [
   route("internal/admin/candidates/duplicates", "routes/internal.admin.candidates.duplicates.ts"),
   route("internal/admin/candidates/export", "routes/internal.admin.candidates.export.ts"),
   route("internal/admin/candidates/:id", "routes/internal.admin.candidates.$id.ts"),
+  route("internal/admin/exam-periods/:id", "routes/internal.admin.exam-periods.$id.ts"),
 
   // ── Catch-all 404 route ───────────────────────────────────────────────────
   route("*", "routes/$.tsx"),

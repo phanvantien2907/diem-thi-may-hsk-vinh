@@ -3,10 +3,18 @@
 > **Base URL:** `http://<host>:<port>/api/v1`
 > **Content-Type:** `application/json`
 > **Ngôn ngữ lỗi:** Tiếng Việt (tất cả thông báo lỗi trả về bằng Tiếng Việt)
-> **Phiên bản:** v1.2.2
-> **Cập nhật lần cuối:** 2026-10-17
+> **Phiên bản:** v1.2.3
+> **Cập nhật lần cuối:** 2026-10-24
 
 ## Changelog
+
+### v1.2.3 (2026-10-24)
+- 🚀 **Quản lý Đợt thi (Exam Period) & Nhân bản Kỳ thi định kỳ (Duplicate Exam Period)**:
+  - Triển khai mô hình phân cấp quản lý 2 tầng: **Đợt thi (`exam_periods`)** chứa nhiều **Ca thi (`exam_sessions`)**.
+  - **Nhân bản đợt thi (`POST /api/v1/admin/exam-periods/:id/duplicate`)**: Nhân bản toàn bộ cấu hình kỳ thi (phòng thi, lệ phí, loại chứng chỉ HSK, ca sáng/chiều, sức chứa...) từ đợt thi trước đó trong **duy nhất 1 database transaction (ACID)**. Đợt thi mới và toàn bộ ca thi con được khởi tạo ở trạng thái `draft`, đặt ngày thi và hạn đăng ký về `NULL` (buộc quản trị viên phải nhập ngày thi mới, triệt tiêu nguy cơ phát hành nhầm ca thi với ngày cũ), tuyệt đối **KHÔNG sao chép hồ sơ đăng ký hoặc thí sinh** (0 registrations/candidates copied).
+  - **Ràng buộc chỉnh sửa đợt thi (`PUT /api/v1/admin/exam-periods/:id`)**: Chỉ cho phép chỉnh sửa tự do không giới hạn khi đợt thi ở trạng thái `draft`. Khi đợt thi đã chuyển sang `published` hoặc `registration_open`: chỉ cho phép chỉnh sửa các trường an toàn (`name`, `description`, `instructions`). Mọi hành vi cố tình sửa ngày thi (`start_date`, `end_date`, `registration_deadline`) bị chặn ngay với HTTP 409 Conflict và bắt buộc chuyển sang quy trình Dời lịch thi (`Reschedule`).
+  - **Dời lịch thi cấp đợt thi (`POST /api/v1/admin/exam-periods/:id/reschedule`)**: Hỗ trợ xử lý bất khả kháng (thiên tai, dịch bệnh). Cập nhật cascade đồng bộ ngày thi và hạn nộp cho toàn bộ ca thi con thuộc đợt thi; **giữ nguyên toàn bộ hồ sơ đăng ký của thí sinh**; tự động gửi thông báo hàng loạt (bulk notifications) cho tất cả thí sinh đã đăng ký; bắt buộc ghi nhận lý do dời lịch vào hệ thống nhật ký kiểm toán (Audit Log).
+  - **Đóng đăng ký sớm (`close-registration`)**: Cho phép quản trị viên chủ động đóng đăng ký thủ công trước hạn chót khi các địa điểm thi đã kín chỗ, áp dụng linh hoạt ở cả cấp Đợt thi (`POST /api/v1/admin/exam-periods/:id/close-registration`) và cấp Ca thi đơn lẻ (`POST /api/v1/admin/exam-sessions/:id/close-registration`).
 
 ### v1.2.2 (2026-10-17)
 - 🚀 **Tối ưu hóa Docker Image & Chuẩn đóng gói Container (< 100MB)**:
@@ -1833,6 +1841,382 @@ xóa `exam_session_publish_at`. Không thể cập nhật trạng thái phát h�
 
 ---
 
+### 4.10. [Admin] Danh sách Đợt thi (List Exam Periods)
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/exam-periods` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Admin xem danh sách các đợt thi (kèm thống kê số lượng ca thi con trong từng đợt), có thể lọc theo trạng thái và khoảng thời gian |
+
+**Query Params (tất cả tùy chọn):**
+
+| Param | Kiểu | Validate | Mô tả |
+|---|---|---|---|
+| `status` | `string` | `draft`, `published`, `registration_open`, `registration_closed`, `rescheduled`, `cancelled`, `completed` | Lọc theo trạng thái đợt thi |
+| `from` | `string` | Format: `YYYY-MM-DD` | Lọc từ ngày bắt đầu |
+| `to` | `string` | Format: `YYYY-MM-DD` | Lọc đến ngày kết thúc |
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "name": "Đợt thi HSK ngày 13/12/2026",
+      "code": "HSK-2026-12-13",
+      "description": "Kỳ thi năng lực HSK đợt tháng 12/2026",
+      "instructions": "Thí sinh có mặt trước giờ thi 30 phút",
+      "start_date": "2026-12-13",
+      "end_date": "2026-12-13",
+      "registration_start": "2026-10-01T08:00:00Z",
+      "registration_deadline": "2026-11-23T23:59:59Z",
+      "status": "published",
+      "session_count": 4,
+      "created_at": "2026-10-24T08:56:33Z",
+      "updated_at": "2026-10-24T08:56:33Z"
+    }
+  ],
+  "error": null,
+  "meta": null
+}
+```
+
+---
+
+### 4.11. [Admin] Chi tiết Đợt thi kèm danh sách Ca con (Get Exam Period Details)
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/exam-periods/:id` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Admin xem thông tin chi tiết đợt thi và danh sách toàn bộ các ca thi con (`exam_sessions`) thuộc đợt |
+
+**Path Params:** `id` — ID đợt thi (`integer`)
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "name": "Đợt thi HSK ngày 13/12/2026",
+    "code": "HSK-2026-12-13",
+    "description": "Kỳ thi năng lực HSK đợt tháng 12/2026",
+    "instructions": "Thí sinh có mặt trước giờ thi 30 phút",
+    "start_date": "2026-12-13",
+    "end_date": "2026-12-13",
+    "registration_start": "2026-10-01T08:00:00Z",
+    "registration_deadline": "2026-11-23T23:59:59Z",
+    "status": "published",
+    "session_count": 4,
+    "sessions": [
+      {
+        "id": 3,
+        "period_id": 1,
+        "exam_type_id": 1,
+        "date": "2026-12-13T00:00:00Z",
+        "shift": "morning",
+        "capacity": 40,
+        "fee": 1330000,
+        "registration_deadline": "2026-11-23T23:59:59Z",
+        "status": "open",
+        "exam_session_publication_status": "published"
+      }
+    ],
+    "created_at": "2026-10-24T08:56:33Z",
+    "updated_at": "2026-10-24T08:56:33Z"
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+---
+
+### 4.12. [Admin] Tạo mới Đợt thi (Create Exam Period)
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-periods` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Tạo đợt thi mới ở trạng thái mặc định `draft` |
+
+**Request Body:**
+
+```json
+{
+  "name": "Đợt thi HSK Tháng 03/2027",
+  "code": "HSK-2027-03",
+  "description": "Đợt thi năng lực HSK đầu năm",
+  "instructions": "Yêu cầu mang theo CCCD bản gốc",
+  "start_date": "2027-03-15",
+  "end_date": "2027-03-15",
+  "registration_start": "2027-01-10T08:00:00Z",
+  "registration_deadline": "2027-02-28T23:59:59Z"
+}
+```
+
+| Field | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `name` | `string` | ✅ | Max 255 ký tự | Tên đợt thi |
+| `code` | `string` | ✅ | Max 50 ký tự, Unique | Mã đợt thi |
+| `description` | `string` | ❌ | — | Mô tả chi tiết đợt thi |
+| `instructions` | `string` | ❌ | — | Hướng dẫn cho thí sinh |
+| `start_date` | `string` | ❌ | Format `YYYY-MM-DD` | Ngày bắt đầu đợt thi |
+| `end_date` | `string` | ❌ | Format `YYYY-MM-DD` | Ngày kết thúc đợt thi |
+| `registration_start` | `string` | ❌ | RFC 3339 datetime | Thời điểm bắt đầu mở đăng ký |
+| `registration_deadline` | `string` | ❌ | RFC 3339 datetime | Hạn chót đóng đăng ký |
+
+**Response (201 Created):** Trả về `ExamPeriodResponseDTO` với trạng thái ban đầu là `draft`.
+
+---
+
+### 4.13. [Admin] Chỉnh sửa Đợt thi (Update Exam Period)
+
+| | |
+|---|---|
+| **Endpoint** | `PUT /api/v1/admin/exam-periods/:id` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Chỉnh sửa thông tin đợt thi với cơ chế bảo vệ trạng thái an toàn |
+
+> **⚠️ Ràng buộc cốt lõi (Business Invariant):**
+> - **Khi trạng thái là `draft`**: Cho phép tự do chỉnh sửa mọi trường thông tin (tên, mô tả, hướng dẫn, ngày bắt đầu, ngày kết thúc, thời gian mở/đóng đăng ký).
+> - **Từ khi đợt thi chuyển sang `published` hoặc `registration_open` trở đi**: Hệ thống **CHỈ cho phép sửa các trường an toàn** (`name`, `description`, `instructions`). Mọi hành vi cố tình thay đổi ngày thi (`start_date`, `end_date`) hoặc hạn nộp (`registration_start`, `registration_deadline`) sẽ bị chặn ngay lập tức với mã **HTTP 409 Conflict** và hướng dẫn quản trị viên chuyển sang quy trình **Dời lịch thi (Reschedule)** chuyên dụng nhằm cảnh báo và gửi thông báo tới thí sinh.
+
+**Request Body:**
+
+```json
+{
+  "name": "Đợt thi HSK Tháng 03/2027 (Điều chỉnh)",
+  "description": "Cập nhật mô tả: Phòng thi có trang bị điều hòa và máy tính mới.",
+  "instructions": "Vui lòng có mặt trước giờ thi 45 phút."
+}
+```
+
+**Response khi thành công (200 OK):** Trả về `ExamPeriodResponseDTO` đã cập nhật.
+
+**Response khi vi phạm sửa ngày ở trạng thái đã công khai (409 Conflict):**
+
+```json
+{
+  "statusCode": 409,
+  "timestamp": "2026-10-24T16:25:07+07:00",
+  "path": "/api/v1/admin/exam-periods/1",
+  "msg": "Kỳ thi đã mở đăng ký hoặc đã công khai. Không thể thay đổi trực tiếp ngày thi hoặc hạn đăng ký. Vui lòng sử dụng quy trình dời lịch (Reschedule) để cảnh báo và gửi thông báo tới thí sinh."
+}
+```
+
+---
+
+### 4.14. [Admin] Nhân bản Đợt thi (Duplicate Exam Period)
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-periods/:id/duplicate` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Trung tâm tổ chức kỳ thi gần như tương tự hàng tháng → sao chép toàn bộ cấu hình kỳ thi (phòng thi, lệ phí, loại chứng chỉ HSK, ca sáng/chiều, sức chứa...) từ đợt trước |
+
+> **⭐ Các lưu ý kỹ thuật bắt buộc:**
+> 1. **Giao dịch Transactional & Atomic**: Thao tác thực thi hoàn toàn trong **duy nhất 1 database transaction (ACID)** trên backend; không dựa vào việc frontend gửi nhiều request riêng lẻ. Nếu xảy ra bất kỳ lỗi nào, toàn bộ giao dịch sẽ tự động rollback.
+> 2. **Trạng thái an toàn chống phát hành nhầm**: 
+>    - Tạo mới một `exam_period` với trạng thái `draft`.
+>    - Sao chép toàn bộ các `exam_sessions` con thuộc đợt thi nguồn.
+>    - Toàn bộ ca thi con được **reset trạng thái phát hành về `draft`** và **đặt ngày thi (`exam_session_date`) cùng hạn đăng ký (`exam_session_registration_deadline`) về `NULL`**. Điều này bắt buộc Admin phải vào nhập ngày thi mới, loại bỏ hoàn toàn nguy cơ vô tình phát hành ca thi với ngày tháng cũ của tháng trước.
+> 3. **Bảo toàn dữ liệu thí sinh**: **TUYỆT ĐỐI KHÔNG sao chép** bất kỳ đơn đăng ký (`exam_registrations`) hay thí sinh (`candidates`) nào sang đợt mới. Đợt thi mới bắt đầu hoàn toàn sạch sẽ với 0 lượt đăng ký.
+
+**Path Params:** `id` — ID đợt thi cần nhân bản (`integer`)
+
+**Request Body (tùy chọn):**
+
+```json
+{
+  "name": "Đợt thi HSK Tháng 01/2027",
+  "code": "HSK-2027-01"
+}
+```
+*(Nếu không truyền `name` và `code`, backend sẽ tự động gán tên dạng `"[Tên cũ] (Bản sao)"` và mã duy nhất kèm timestamp).*
+
+**Response (201 Created):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "new_period_id": 7,
+    "duplicated_sessions": 4,
+    "period": {
+      "id": 7,
+      "name": "Đợt thi HSK Tháng 01/2027",
+      "code": "HSK-2027-01",
+      "status": "draft",
+      "session_count": 4,
+      "created_at": "2026-10-24T09:22:14Z",
+      "updated_at": "2026-10-24T09:22:14Z"
+    }
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+---
+
+### 4.15. [Admin] Dời lịch thi Đợt thi (Reschedule Exam Period)
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-periods/:id/reschedule` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Áp dụng khi gặp sự kiện bất khả kháng (thiên tai bão lũ, dịch bệnh, sự cố hội trường) cần dời ngày thi của toàn bộ đợt thi sang thời gian mới |
+
+> **⭐ Đặc điểm hành vi của quy trình Reschedule:**
+> 1. **Cascade đồng loạt**: Tự động cập nhật ngày thi mới và hạn nộp hồ sơ mới cho **TOÀN BỘ các ca thi con (`exam_sessions`)** thuộc đợt thi.
+> 2. **Giữ nguyên hồ sơ đăng ký**: Toàn bộ thí sinh đã đăng ký và nộp lệ phí vẫn được bảo toàn nguyên vẹn mã ghế và trạng thái đăng ký, chỉ cập nhật ngày thi mới.
+> 3. **Gửi thông báo hàng loạt (Bulk Notification) bắt buộc**: Hệ thống tự động tạo thông báo gửi tới tất cả các tài khoản thí sinh có đơn đăng ký đang hoạt động trong đợt thi đó.
+> 4. **Bắt buộc ghi nhận lý do vào Nhật ký kiểm toán (Audit Log)**: Trường `reason` là bắt buộc, được lưu trữ trong Audit Log để phục vụ thanh tra, kiểm toán hành chính.
+
+**Path Params:** `id` — ID đợt thi (`integer`)
+
+**Request Body:**
+
+```json
+{
+  "new_start_date": "2026-12-20",
+  "new_end_date": "2026-12-20",
+  "new_registration_deadline": "2026-11-30T23:59:59Z",
+  "reason": "Do ảnh hưởng bão số 6 gây ngập lụt diện rộng, hội đồng thi dời ngày thi sang 20/12/2026 để đảm bảo an toàn cho thí sinh.",
+  "send_notification": true
+}
+```
+
+| Field | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `new_start_date` | `string` | ✅ | Format `YYYY-MM-DD` | Ngày bắt đầu thi mới |
+| `new_end_date` | `string` | ❌ | Format `YYYY-MM-DD` | Ngày kết thúc thi mới |
+| `new_registration_deadline` | `string` | ❌ | RFC 3339 datetime | Hạn đăng ký mới sau khi dời lịch |
+| `reason` | `string` | ✅ | Không được rỗng | Lý do dời lịch thi (bắt buộc lưu audit log) |
+| `send_notification` | `boolean` | ❌ | Default: `true` | Gửi thông báo tự động tới các thí sinh đã đăng ký |
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "period_id": 1,
+    "updated_sessions": 4,
+    "candidates_alerted": 25,
+    "reason": "Do ảnh hưởng bão số 6 gây ngập lụt diện rộng, hội đồng thi dời ngày thi sang 20/12/2026 để đảm bảo an toàn cho thí sinh.",
+    "period": {
+      "id": 1,
+      "name": "Đợt thi HSK ngày 13/12/2026",
+      "code": "HSK-2026-12-13",
+      "start_date": "2026-12-20",
+      "end_date": "2026-12-20",
+      "registration_deadline": "2026-11-30T23:59:59Z",
+      "status": "rescheduled",
+      "session_count": 4,
+      "created_at": "2026-10-24T08:56:33Z",
+      "updated_at": "2026-10-24T09:25:33Z"
+    }
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+---
+
+### 4.16. [Admin] Đóng đăng ký sớm cấp Đợt thi (Close Exam Period Registration)
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-periods/:id/close-registration` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Đóng cổng đăng ký thủ công cho toàn bộ đợt thi trước hạn chót (ví dụ: tất cả phòng thi đã kín chỗ trên toàn bộ các ca) |
+
+**Path Params:** `id` — ID đợt thi (`integer`)
+
+**Request Body (tùy chọn):**
+
+```json
+{
+  "reason": "Tất cả các ca thi trong đợt đã kín chỗ trước thời hạn"
+}
+```
+
+**Response (200 OK):** Trả về `ExamPeriodResponseDTO` với trạng thái `registration_closed` và hạn đăng ký được cập nhật về thời điểm đóng hiện tại.
+
+---
+
+### 4.17. [Admin] Đóng đăng ký sớm cấp Ca thi (Close Exam Session Registration)
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-sessions/:id/close-registration` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Đóng cổng đăng ký thủ công cho một ca thi đơn lẻ trước hạn chót (ví dụ: ca sáng HSK 3 đã hết 100% chỗ) |
+
+**Path Params:** `id` — ID ca thi (`integer`)
+
+**Request Body (tùy chọn):**
+
+```json
+{
+  "reason": "Ca thi đã đủ số lượng thí sinh đăng ký sớm hơn dự kiến"
+}
+```
+
+**Response (200 OK):** Trả về `ExamSessionResponseDTO` với trạng thái `closed` và hạn đăng ký được cập nhật về thời điểm hiện tại.
+
+---
+
+### 4.18. [Admin] Chỉnh sửa Ca thi (Update Exam Session)
+
+| | |
+|---|---|
+| **Endpoint** | `PUT /api/v1/admin/exam-sessions/:id` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Admin tùy chỉnh ngày thi, ca thi (sáng/chiều), sức chứa, lệ phí thi, hạn nộp hồ sơ, hoặc giờ check-in của một ca thi cụ thể. Đây là API cốt lõi được frontend gọi khi Admin ở màn hình chỉnh sửa đợt thi mới nhân bản (Draft) để hoàn thiện ngày thi và lệ phí trước khi công khai |
+
+> **⚠️ Ràng buộc bảo vệ tính toàn vẹn (Safety Invariants):**
+> - **Khi ca thi ở trạng thái `draft`**: Cho phép tự do cập nhật ngày thi, ca thi, sức chứa, lệ phí và hạn nộp hồ sơ.
+> - **Khi ca thi đã chuyển sang `published` hoặc đã có thí sinh đăng ký**: Hệ thống **CHẶN can thiệp trực tiếp** vào ngày thi, sức chứa hoặc lệ phí thi (trả về mã **HTTP 409 Conflict**). Mọi thay đổi lịch thi khi đó bắt buộc phải đi qua quy trình **Dời lịch (Reschedule)** để đảm bảo an toàn quyền lợi thí sinh và phát thông báo đồng bộ.
+> - **Khi ca thi đã hủy (`cancelled`)**: Không thể chỉnh sửa (trả về HTTP 400).
+> - **Khóa DB ràng buộc**: Ràng buộc cơ sở dữ liệu `chk_exam_sessions_publish_requires_schedule` đảm bảo ca thi không bao giờ có thể chuyển sang trạng thái công khai (`published` / `scheduled`) khi ngày thi hoặc hạn đăng ký đang là `NULL`.
+
+**Path Params:** `id` — ID ca thi (`integer`)
+
+**Request Body (tất cả các trường đều tùy chọn - partial update):**
+
+```json
+{
+  "date": "2027-01-15",
+  "shift": "morning",
+  "capacity": 45,
+  "fee": 1400000,
+  "registration_deadline": "2027-01-05T23:59:59Z",
+  "exam_session_check_in_at": "2027-01-15T07:30:00Z"
+}
+```
+
+| Field | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `date` | `string` | ❌ | Format `YYYY-MM-DD` | Ngày tổ chức ca thi |
+| `shift` | `string` | ❌ | `morning`, `afternoon`, `evening` | Ca thi trong ngày |
+| `capacity` | `integer` | ❌ | Min 1 | Số lượng thí sinh tối đa |
+| `fee` | `integer` | ❌ | Min 0 (VND) | Lệ phí thi của ca này |
+| `registration_deadline` | `string` | ❌ | RFC 3339 datetime | Hạn chót nộp hồ sơ ca thi |
+| `exam_session_check_in_at` | `string` | ❌ | RFC 3339 datetime | Giờ tập trung làm thủ tục |
+
+**Response (200 OK):** Trả về `ExamSessionResponseDTO` với các trường đã cập nhật.
+
+---
+
 ## 5. Module Registration (Đăng ký thi)
 
 ### 5.1. Giữ chỗ / Đăng ký thi
@@ -2324,7 +2708,29 @@ xóa `exam_session_publish_at`. Không thể cập nhật trạng thái phát h�
 ```json
 {
   "success": true,
-  "data": [ /* mảng AdminPaymentResponseDTO */ ],
+  "data": [
+    {
+      "id": 101,
+      "exam_registration_id": 42,
+      "candidate_name": "Nguyễn Văn A",
+      "candidate_email": "nguyenvana@email.com",
+      "exam_type_name": "HSK 3 (Cấp độ 3 + HSKK sơ cấp)",
+      "amount": 500000,
+      "amount_received": 500000,
+      "method": "payos",
+      "gateway": "payos",
+      "transaction_ref": "101",
+      "gateway_trans_id": "FT26274494820346",
+      "content": "HSK-42",
+      "status": "success",
+      "evidence_urls": [],
+      "admin_note": null,
+      "is_top_up": false,
+      "paid_at": "2026-09-27T09:05:00+07:00",
+      "created_at": "2026-09-27T09:00:00+07:00",
+      "updated_at": "2026-09-27T09:05:00+07:00"
+    }
+  ],
   "error": null,
   "meta": {
     "page": 1,
@@ -3905,7 +4311,19 @@ transaction PostgreSQL. Không sử dụng Redis.
 | `afternoon` | Ca chiều |
 | `evening` | Ca tối |
 
-### 12.6. Exam Session Status
+### 12.6. Exam Period Status
+
+| Giá trị | Mô tả |
+|---|---|
+| `draft` | Bản nháp (cho phép chỉnh sửa tự do toàn bộ thông tin) |
+| `published` | Đã công khai thông tin kỳ thi (chỉ cho phép sửa thông tin an toàn) |
+| `registration_open` | Đang mở tiếp nhận đăng ký trực tuyến |
+| `registration_closed` | Đã đóng tiếp nhận đăng ký (hết hạn hoặc đóng sớm do kín chỗ) |
+| `rescheduled` | Đã dời lịch thi do sự kiện bất khả kháng (cascade ngày thi con, giữ nguyên thí sinh) |
+| `cancelled` | Đã hủy toàn bộ đợt thi |
+| `completed` | Đợt thi đã hoàn thành |
+
+### 12.7. Exam Session Status
 
 | Giá trị | Mô tả |
 |---|---|
@@ -4075,6 +4493,41 @@ transaction PostgreSQL. Không sử dụng Redis.
 - `booked` → `available`: Khi admin hủy payment success trước ngày thi hoặc hủy
   đăng ký đã xác nhận; không thực hiện sau ngày thi
 
+### 13.4. Đợt thi (Exam Period)
+
+```
+              ┌───────────────────────────┐
+              │           draft           │ ── (Nhân bản từ đợt cũ / Tạo mới)
+              │ (sửa tự do toàn bộ fields)│
+              └─────────────┬─────────────┘
+                            │ Phát hành / Mở đăng ký
+                            ▼
+              ┌───────────────────────────┐
+              │  published / reg_open     │ ── Chỉ sửa an toàn (name/desc/notes)
+              └──────┬──────────────┬─────┘
+                     │              │
+      Dời lịch (Force│              │ Đóng đăng ký sớm (hết chỗ)
+      Majeure)       │              │ hoặc hết hạn chót
+                     ▼              ▼
+           ┌──────────────┐   ┌───────────────────────┐
+           │ rescheduled  │   │  registration_closed  │
+           └──────┬───────┘   └───────────┬───────────┘
+                  │                       │
+                  └───────────┬───────────┘
+                              │ Tổ chức thi xong
+                              ▼
+                      ┌───────────────┐
+                      │   completed   │
+                      └───────────────┘
+```
+
+- `draft`: Trạng thái ban đầu sau khi tạo hoặc nhân bản. Toàn bộ thông tin được phép chỉnh sửa tự do.
+- `published` / `registration_open`: Công khai và mở tiếp nhận thí sinh. Khóa chặt các trường ngày thi và hạn đăng ký trực tiếp; mọi can thiệp thay đổi ngày thi bắt buộc chuyển qua quy trình `Reschedule`.
+- `rescheduled`: Khi dời lịch thi do sự cố bất khả kháng. Cập nhật cascade toàn bộ ca thi con, giữ nguyên hồ sơ thí sinh, gửi thông báo diện rộng tới thí sinh.
+- `registration_closed`: Đóng tiếp nhận hồ sơ (tự động khi đến hạn chót hoặc do Admin chủ động đóng sớm khi kín phòng).
+- `cancelled`: Khi hủy bỏ toàn bộ đợt thi.
+- `completed`: Khi kỳ thi đã diễn ra xong.
+
 ---
 
 ## Tổng hợp Endpoint nhanh
@@ -4117,7 +4570,16 @@ transaction PostgreSQL. Không sử dụng Redis.
 | 32 | `POST` | `/admin/exam-sessions/batch-create` | 🔐👑 | Exam |
 | 33 | `POST` | `/admin/exam-sessions/:id/seats/generate` | 🔐👑 | Exam |
 | 34 | `POST` | `/admin/exam-sessions/:id/cancel` | 🔐👑 | Exam |
-| 34 | `POST` | `/me/registrations` | 🔐 | Registration |
+| 35 | `GET` | `/admin/exam-periods` | 🔐👑 | Exam |
+| 36 | `POST` | `/admin/exam-periods` | 🔐👑 | Exam |
+| 37 | `GET` | `/admin/exam-periods/:id` | 🔐👑 | Exam |
+| 38 | `PUT` | `/admin/exam-periods/:id` | 🔐👑 | Exam |
+| 39 | `POST` | `/admin/exam-periods/:id/duplicate` | 🔐👑 | Exam |
+| 40 | `POST` | `/admin/exam-periods/:id/reschedule` | 🔐👑 | Exam |
+| 41 | `POST` | `/admin/exam-periods/:id/close-registration` | 🔐👑 | Exam |
+| 42 | `POST` | `/admin/exam-sessions/:id/close-registration` | 🔐👑 | Exam |
+| 43 | `PUT` | `/admin/exam-sessions/:id` | 🔐👑 | Exam |
+| 43 | `POST` | `/me/registrations` | 🔐 | Registration |
 | 35 | `GET` | `/me/registrations` | 🔐 | Registration |
 | 36 | `POST` | `/me/registrations/:id/payment-confirm` | 🔐 | Registration |
 | 37 | `POST` | `/me/registrations/:id/transfer` | 🔐 | Registration |
