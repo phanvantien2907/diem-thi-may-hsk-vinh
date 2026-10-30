@@ -11,9 +11,14 @@ import {
   GraduationCapIcon,
   LogOutIcon,
   ShieldCheckIcon,
+  AlertTriangleIcon,
+  LockIcon,
 } from "lucide-react";
 import { LogoutDialog } from "~/components/layout/logout-dialog";
 import { AppCommandMenu } from "~/components/layout/AppCommandMenu";
+import { Badge } from "~/components/ui/badge";
+import { toast } from "~/components/ui/toast";
+import type { CandidateStatusInfo } from "~/types/candidate";
 import { cn } from "~/lib/utils";
 
 import {
@@ -90,14 +95,16 @@ export interface SidebarUser {
 
 interface AppSidebarProps {
   user: SidebarUser;
+  candidateStatus?: CandidateStatusInfo;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
-export function AppSidebar({ user }: AppSidebarProps) {
+export function AppSidebar({ user, candidateStatus }: AppSidebarProps) {
   const location = useLocation();
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = React.useState(false);
   const [isCommandOpen, setIsCommandOpen] = React.useState(false);
   const [isMac, setIsMac] = React.useState(true);
+  const isProfileRejected = Boolean(candidateStatus?.isRejected);
 
   React.useEffect(() => {
     if (typeof window !== "undefined") {
@@ -178,16 +185,55 @@ export function AppSidebar({ user }: AppSidebarProps) {
             <SidebarMenu>
               {NAV_ITEMS.map((item) => {
                 const isActive = location.pathname.startsWith(item.href);
+                const isRegistrationBlocked = item.href === "/dang-ky-thi" && isProfileRejected;
+
                 return (
                   <SidebarMenuItem key={item.href}>
                     {/* Base UI: render prop thay vì asChild */}
                     <SidebarMenuButton
-                      render={<Link to={item.href} />}
+                      render={
+                        isRegistrationBlocked ? (
+                          <Link
+                            to="/thong-tin-thi-sinh?rejected=true"
+                            onClick={() => {
+                              toast.add({
+                                type: "error",
+                                title: "Hồ sơ đang bị từ chối",
+                                description:
+                                  candidateStatus?.rejectionReason ||
+                                  "Hồ sơ của bạn chưa đạt yêu cầu. Vui lòng cập nhật giấy tờ trước khi đăng ký thi.",
+                              });
+                            }}
+                          />
+                        ) : (
+                          <Link to={item.href} />
+                        )
+                      }
                       isActive={isActive}
-                      tooltip={item.label}
+                      tooltip={
+                        isRegistrationBlocked
+                          ? "Đăng ký thi (Bị khóa do hồ sơ bị từ chối)"
+                          : item.label
+                      }
+                      className={cn(
+                        isRegistrationBlocked &&
+                          "text-destructive hover:text-destructive hover:bg-destructive/10"
+                      )}
                     >
-                      <item.icon aria-hidden="true" />
-                      <span>{item.label}</span>
+                      {isRegistrationBlocked ? (
+                        <LockIcon className="size-4 text-destructive shrink-0" aria-hidden="true" />
+                      ) : (
+                        <item.icon aria-hidden="true" />
+                      )}
+                      <span className="flex-1 truncate">{item.label}</span>
+                      {isRegistrationBlocked && (
+                        <Badge
+                          variant="destructive"
+                          className="ml-auto text-[9px] px-1.5 py-0 h-4 font-bold uppercase tracking-wider group-data-[collapsible=icon]:hidden"
+                        >
+                          Bị từ chối
+                        </Badge>
+                      )}
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 );
@@ -284,15 +330,34 @@ export function AppSidebar({ user }: AppSidebarProps) {
                     </Link>
                   </DropdownMenuItem>
 
-                  {/* Thanh toán */}
+                  {/* Thanh toán / Đăng ký thi */}
                   <DropdownMenuItem className="cursor-pointer rounded-lg">
-                    <CreditCardIcon
-                      data-icon="inline-start"
-                      aria-hidden="true"
-                    />
-                    <Link to="/dang-ky-thi" className="flex-1">
-                      Đăng ký & Thanh toán
-                    </Link>
+                    {isProfileRejected ? (
+                      <LockIcon data-icon="inline-start" className="text-destructive" aria-hidden="true" />
+                    ) : (
+                      <CreditCardIcon data-icon="inline-start" aria-hidden="true" />
+                    )}
+                    {isProfileRejected ? (
+                      <Link
+                        to="/thong-tin-thi-sinh?rejected=true"
+                        className="flex-1 text-destructive font-medium"
+                        onClick={() => {
+                          toast.add({
+                            type: "error",
+                            title: "Hồ sơ đang bị từ chối",
+                            description:
+                              candidateStatus?.rejectionReason ||
+                              "Hồ sơ của bạn chưa đạt yêu cầu. Vui lòng cập nhật giấy tờ trước khi đăng ký thi.",
+                          });
+                        }}
+                      >
+                        Đăng ký thi (Bị khóa)
+                      </Link>
+                    ) : (
+                      <Link to="/dang-ky-thi" className="flex-1">
+                        Đăng ký & Thanh toán
+                      </Link>
+                    )}
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
 
@@ -322,6 +387,8 @@ export function AppSidebar({ user }: AppSidebarProps) {
         open={isCommandOpen}
         onOpenChange={setIsCommandOpen}
         onLogout={() => setIsLogoutDialogOpen(true)}
+        isProfileRejected={isProfileRejected}
+        rejectionReason={candidateStatus?.rejectionReason}
       />
     </Sidebar>
   );

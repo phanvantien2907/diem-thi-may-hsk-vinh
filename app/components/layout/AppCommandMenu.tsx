@@ -50,6 +50,8 @@ interface AppCommandMenuProps {
   onOpenChange: (open: boolean) => void;
   onLogout?: () => void;
   isAdmin?: boolean;
+  isProfileRejected?: boolean;
+  rejectionReason?: string | null;
 }
 
 export function AppCommandMenu({
@@ -57,6 +59,8 @@ export function AppCommandMenu({
   onOpenChange,
   onLogout,
   isAdmin = false,
+  isProfileRejected = false,
+  rejectionReason,
 }: AppCommandMenuProps) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -291,10 +295,28 @@ export function AppCommandMenu({
 
           <CommandItem
             value="Đăng ký thi máy HSK dang ky thi may ca thi slot phong thi"
-            onSelect={() => handleSelect(() => navigate("/dang-ky-thi"))}
+            onSelect={() =>
+              handleSelect(() => {
+                if (isProfileRejected) {
+                  toast.add({
+                    type: "error",
+                    title: "Hồ sơ đang bị từ chối",
+                    description:
+                      rejectionReason ||
+                      "Hồ sơ của bạn chưa đạt yêu cầu. Vui lòng cập nhật giấy tờ trước khi đăng ký thi.",
+                  });
+                  navigate("/thong-tin-thi-sinh?rejected=true");
+                } else {
+                  navigate("/dang-ky-thi");
+                }
+              })
+            }
           >
             <BookOpenCheckIcon className="size-4 text-primary" />
             <span>Đăng ký thi máy HSK</span>
+            {isProfileRejected && (
+              <span className="text-[10px] text-destructive font-semibold ml-2">(Bị khóa)</span>
+            )}
             <CommandShortcut>G D</CommandShortcut>
           </CommandItem>
 
@@ -338,10 +360,28 @@ export function AppCommandMenu({
             <CommandItem
               key={item.label}
               value={`${item.label} ${item.keywords}`}
-              onSelect={() => handleSelect(() => navigate(`/dang-ky-thi?level=${item.level}`))}
+              onSelect={() =>
+                handleSelect(() => {
+                  if (isProfileRejected) {
+                    toast.add({
+                      type: "error",
+                      title: "Hồ sơ đang bị từ chối",
+                      description:
+                        rejectionReason ||
+                        "Hồ sơ của bạn chưa đạt yêu cầu. Vui lòng cập nhật giấy tờ trước khi đăng ký thi.",
+                    });
+                    navigate("/thong-tin-thi-sinh?rejected=true");
+                  } else {
+                    navigate(`/dang-ky-thi?level=${item.level}`);
+                  }
+                })
+              }
             >
               <GraduationCapIcon className="size-4 text-amber-500" />
               <span>Đăng ký {item.label}</span>
+              {isProfileRejected && (
+                <span className="text-[10px] text-destructive font-semibold ml-1.5">(Bị khóa)</span>
+              )}
               <SparklesIcon className="size-3.5 text-muted-foreground ml-auto opacity-40" />
             </CommandItem>
           ))}

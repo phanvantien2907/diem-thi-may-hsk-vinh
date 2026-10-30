@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link, useNavigate, useRevalidator, useSearchParams, useOutletContext } from "react-router";
+import { Link, useNavigate, useRevalidator, useSearchParams, useOutletContext, redirect } from "react-router";
 import { cn } from "~/lib/utils";
 import { useWebSocket, type WSEvent } from "~/hooks/use-websocket";
 import type { Route } from "./+types/_app.dang-ky-thi";
@@ -17,7 +17,7 @@ import type {
   PaymentRecord,
   ApiResponse,
 } from "~/types/exam";
-import type { CandidateResponseDTO } from "~/types/candidate";
+import type { CandidateResponseDTO, DocumentResponseDTO, CandidateStatusInfo } from "~/types/candidate";
 import {
   Card,
   CardHeader,
@@ -75,10 +75,58 @@ interface LoaderData {
   profilePromise: Promise<CandidateResponseDTO | null>;
 }
 
-// ─── Loader (Server-side Streaming) ───────────────────────────────────────────
+// ─── Loader (Server-side Streaming with Strict Route Guard) ───────────────────
 export async function loader({ request }: Route.LoaderArgs) {
-  const { token } = await requireAuth(request);
+  const { user, token } = await requireAuth(request);
+  const isAdmin = user.rawRole === "admin" || user.role === "Quản trị viên" || user.role === "admin";
   const headers = { Authorization: `Bearer ${token}` };
+
+  // ─── STRICT ROUTE GUARD: Khóa thí sinh nếu hồ sơ bị từ chối hoặc chưa hoàn thiện ───
+  if (!isAdmin && token) {
+    try {
+      const [profileRes, docsRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/v1/me/candidate-profile`, { headers }).catch(() => null),
+        fetch(`${API_BASE_URL}/api/v1/me/candidate-profile/documents`, { headers }).catch(() => null),
+      ]);
+
+      // 1. Kiểm tra tồn tại hồ sơ thông tin cá nhân cơ bản
+      if (!profileRes || !profileRes.ok) {
+        return redirect("/thong-tin-thi-sinh?alert=no_profile");
+      }
+      const pJson = await profileRes.json().catch(() => null);
+      if (!pJson?.data?.id || !pJson?.data?.full_name) {
+        return redirect("/thong-tin-thi-sinh?alert=no_profile");
+      }
+
+      // 2. Kiểm tra giấy tờ tùy thân mới nhất
+      let latestDoc: DocumentResponseDTO | null = null;
+      if (docsRes && docsRes.ok) {
+        const dJson = await docsRes.json().catch(() => null);
+        const docs = Array.isArray(dJson?.data)
+          ? dJson.data
+          : dJson?.data
+            ? [dJson.data]
+            : [];
+        latestDoc = docs[0] ?? null;
+      }
+
+      // Nếu chưa nộp bất kỳ giấy tờ nào
+      if (!latestDoc) {
+        return redirect("/thong-tin-thi-sinh?alert=no_document");
+      }
+
+      // 3. KHÓA TOÀN DIỆN NẾU HỒ SƠ BỊ TỪ CHỐI (REJECTED STATE LOCKOUT)
+      if (latestDoc.verification_status?.toLowerCase() === "rejected") {
+        const reason =
+          latestDoc.rejection_reason ||
+          (latestDoc as any)?.reject_reason ||
+          "Ảnh chân dung hoặc giấy tờ chưa đạt tiêu chuẩn kiểm duyệt";
+        return redirect(`/thong-tin-thi-sinh?rejected=true&reason=${encodeURIComponent(reason)}`);
+      }
+    } catch (guardErr) {
+      console.error("[Route Guard] Lỗi kiểm tra trạng thái hồ sơ thí sinh:", guardErr);
+    }
+  }
 
   // Fetch tất cả song song, KHÔNG await — stream xuống client
   const examTypesPromise = fetch(`${API_BASE_URL}/api/v1/exam-types`)
@@ -377,8 +425,10 @@ const RegistrationContent = React.memo(function RegistrationContent({
   const revalidator = useRevalidator();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const outletContext = useOutletContext<{ isAdminPreview?: boolean }>() || {};
+  const outletContext = useOutletContext<{ isAdminPreview?: boolean; candidateStatus?: CandidateStatusInfo }>() || {};
   const isAdminPreview = Boolean(outletContext?.isAdminPreview);
+  const isProfileRejected = Boolean(outletContext?.candidateStatus?.isRejected);
+  const rejectionReason = outletContext?.candidateStatus?.rejectionReason;
 
   // Kiểm tra tài khoản đã cập nhật thông tin cá nhân chưa
   const hasProfile = Boolean(profile && profile.id && profile.full_name && profile.dob);
@@ -700,6 +750,16 @@ const RegistrationContent = React.memo(function RegistrationContent({
       });
       return;
     }
+    if (isProfileRejected) {
+      toast.add({
+        type: "error",
+        title: "Hồ sơ của bạn đang bị từ chối",
+        description:
+          rejectionReason || "Vui lòng cập nhật lại giấy tờ tùy thân trước khi đăng ký ca thi.",
+      });
+      navigate("/thong-tin-thi-sinh?rejected=true");
+      return;
+    }
     if (!hasProfile) {
       toast.add({
         type: "error",
@@ -713,7 +773,7 @@ const RegistrationContent = React.memo(function RegistrationContent({
       return;
     }
     setIsDialogOpen(true);
-  }, [hasProfile, selectedSession]);
+  }, [isAdminPreview, isProfileRejected, rejectionReason, navigate, hasProfile, selectedSession]);
 
   // Submit đăng ký thi
   const handleConfirmRegistration = React.useCallback(async () => {
@@ -723,6 +783,15 @@ const RegistrationContent = React.memo(function RegistrationContent({
         title: "Chế độ xem trước",
         description: "Thao tác gửi đăng ký bị chặn trong chế độ xem trước.",
       });
+      return;
+    }
+    if (isProfileRejected) {
+      toast.add({
+        type: "error",
+        title: "Hồ sơ của bạn đang bị từ chối",
+        description: "Thao tác đăng ký thi bị chặn do hồ sơ chưa đạt chuẩn kiểm duyệt.",
+      });
+      setIsDialogOpen(false);
       return;
     }
     if (!selectedSession) return;
@@ -771,8 +840,32 @@ const RegistrationContent = React.memo(function RegistrationContent({
 
   return (
     <div className="space-y-6">
+      {/* Banner cảnh báo hồ sơ bị từ chối kiểm duyệt */}
+      {isProfileRejected && (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-foreground">
+          <div className="flex items-start sm:items-center gap-2.5">
+            <AlertTriangleIcon className="size-5 shrink-0 text-destructive mt-0.5 sm:mt-0" aria-hidden="true" />
+            <div>
+              <p className="font-semibold text-destructive">Hồ sơ thí sinh đang bị từ chối kiểm duyệt</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {rejectionReason || "Giấy tờ hoặc ảnh chân dung của bạn chưa đạt yêu cầu. Toàn bộ chức năng đăng ký ca thi đang bị khóa."}
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/thong-tin-thi-sinh?rejected=true"
+            className={cn(
+              buttonVariants({ variant: "destructive", size: "sm" }),
+              "rounded-full cursor-pointer shrink-0 font-medium"
+            )}
+          >
+            Khắc phục hồ sơ ngay
+          </Link>
+        </div>
+      )}
+
       {/* Banner cảnh báo chưa cập nhật thông tin thí sinh */}
-      {!hasProfile && (
+      {!hasProfile && !isProfileRejected && (
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-foreground">
           <div className="flex items-center gap-2.5">
             <AlertTriangleIcon className="size-5 shrink-0 text-destructive" aria-hidden="true" />
@@ -869,7 +962,13 @@ const RegistrationContent = React.memo(function RegistrationContent({
                   Xem trước (Chỉ đọc)
                 </Badge>
               )}
-              {!hasProfile && !isAdminPreview && (
+              {isProfileRejected && !isAdminPreview && (
+                <div className="flex items-center gap-1.5 text-xs text-destructive font-medium">
+                  <AlertTriangleIcon className="size-4 shrink-0" aria-hidden="true" />
+                  <span>Hồ sơ đang bị từ chối: Vui lòng khắc phục để mở khóa đăng ký</span>
+                </div>
+              )}
+              {!hasProfile && !isAdminPreview && !isProfileRejected && (
                 <div className="flex items-center gap-1.5 text-xs text-destructive font-medium">
                   <AlertTriangleIcon className="size-4 shrink-0" aria-hidden="true" />
                   <span>Chưa cập nhật thông tin cá nhân</span>
@@ -877,14 +976,18 @@ const RegistrationContent = React.memo(function RegistrationContent({
               )}
               <Button
                 size="lg"
-                disabled={isAdminPreview || !hasProfile}
+                disabled={isAdminPreview || !hasProfile || isProfileRejected}
                 className={cn(
                   "rounded-full cursor-pointer hover:bg-primary/90",
-                  (!hasProfile || isAdminPreview) && "opacity-75 cursor-not-allowed"
+                  (!hasProfile || isAdminPreview || isProfileRejected) && "opacity-75 cursor-not-allowed"
                 )}
                 onClick={handleOpenConfirm}
               >
-                {isAdminPreview ? "Đăng ký thi (Xem trước)" : "Đăng ký thi"}
+                {isAdminPreview
+                  ? "Đăng ký thi (Xem trước)"
+                  : isProfileRejected
+                  ? "Đăng ký thi (Bị khóa)"
+                  : "Đăng ký thi"}
               </Button>
             </div>
           )}

@@ -58,7 +58,7 @@ export function SessionCompletionSafeguardDialog({
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="max-w-md sm:max-w-lg p-0 overflow-hidden border-rose-200 dark:border-rose-900/60 shadow-xl">
+      <AlertDialogContent className="data-[size=default]:max-w-md data-[size=default]:sm:max-w-lg w-[calc(100vw-2rem)] sm:w-full p-0 overflow-hidden border-rose-200 dark:border-rose-900/60 shadow-xl">
         {/* Header với dải màu cảnh báo cấp độ cao */}
         <div className="bg-gradient-to-r from-rose-500/10 via-amber-500/10 to-transparent p-6 pb-4 border-b border-border/60">
           <AlertDialogHeader className="space-y-3">
@@ -129,7 +129,7 @@ export function SessionCompletionSafeguardDialog({
           </AlertDialogHeader>
         </div>
 
-        <AlertDialogFooter className="p-4 bg-muted/30 border-t flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 shrink-0">
+        <AlertDialogFooter className="mx-0 mb-0 p-4 bg-muted/30 border-t flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 shrink-0">
           <AlertDialogCancel
             disabled={isSubmitting}
             className="rounded-full cursor-pointer hover:bg-muted text-xs h-9 w-full sm:w-auto"

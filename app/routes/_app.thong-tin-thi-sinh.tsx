@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useOutletContext } from "react-router";
+import { useOutletContext, useSearchParams, useRevalidator } from "react-router";
 import type { Route } from "./+types/_app.thong-tin-thi-sinh";
 import { requireAuth } from "~/lib/auth.server";
 import { API_BASE_URL, PUBLIC_API_BASE_URL } from "~/lib/env.server";
@@ -19,6 +19,7 @@ import { DocumentForm } from "~/components/candidate/DocumentForm";
 import { toast } from "~/components/ui/toast";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Card, CardHeader, CardContent } from "~/components/ui/card";
+import { AlertTriangleIcon } from "lucide-react";
 
 type ApiErrorPayload = {
   msg?: string;
@@ -193,9 +194,21 @@ function CandidateFormsWrapper({
   const resolvedProvinces = React.use(provincesPromise);
   const resolvedWards = React.use(wardsPromise);
 
+  const revalidator = useRevalidator();
+  const [searchParams] = useSearchParams();
+
   const [profile, setProfile] = React.useState(resolvedProfile);
   const [document, setDocument] = React.useState(resolvedDocument);
   const { isAdminPreview } = useOutletContext<{ isAdminPreview?: boolean }>() || {};
+
+  const isRejectedFromDoc = document?.verification_status?.toLowerCase() === "rejected";
+  const isRejectedFromQuery = searchParams.get("rejected") === "true";
+  const isRejected = isRejectedFromDoc || isRejectedFromQuery;
+  const rejectionReason =
+    document?.rejection_reason ||
+    (document as any)?.reject_reason ||
+    searchParams.get("reason") ||
+    null;
 
   async function handleProfileSubmit(
     data: CandidateProfileFormValues,
@@ -254,6 +267,17 @@ function CandidateFormsWrapper({
       }
 
       setProfile(payload.data);
+
+      // Xóa cache cá nhân trên Redis để đồng bộ ngay lập tức (Section 3.14 API documentation)
+      fetch(`${apiBaseUrl}/api/v1/me/candidate-profile/clear-cache`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => null);
+
+      if (revalidator.state === "idle") {
+        revalidator.revalidate();
+      }
+
       toast.add({
         type: "success",
         title: isNew ? "Tạo hồ sơ thành công!" : "Cập nhật thành công!",
@@ -318,6 +342,16 @@ function CandidateFormsWrapper({
       }
 
       setDocument(payload.data);
+
+      // Xóa cache cá nhân trên Redis để đồng bộ ngay lập tức (Section 3.14 API documentation)
+      fetch(`${apiBaseUrl}/api/v1/me/candidate-profile/clear-cache`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => null);
+
+      if (revalidator.state === "idle") {
+        revalidator.revalidate();
+      }
 
       // Hiển thị toast theo trạng thái verification từ backend
       const verificationStatus = payload.data.verification_status;
@@ -401,6 +435,27 @@ function CandidateFormsWrapper({
 
   return (
     <>
+      {/* ── Banner cảnh báo hồ sơ bị từ chối ── */}
+      {isRejected && (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 sm:p-5 text-destructive flex items-start gap-3.5 shadow-xs">
+          <AlertTriangleIcon className="size-5 shrink-0 mt-0.5 text-destructive" />
+          <div className="space-y-1.5 flex-1 text-left">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-bold text-sm">Hồ sơ thí sinh bị từ chối kiểm duyệt</span>
+              <span className="rounded-full bg-destructive/20 text-destructive text-[10px] font-bold px-2 py-0.5 uppercase tracking-wide">
+                Đăng ký thi đang bị khóa
+              </span>
+            </div>
+            <p className="text-xs text-foreground/90 font-medium leading-relaxed">
+              Lý do từ Ban kiểm định: &ldquo;{rejectionReason || "Ảnh chân dung hoặc giấy tờ tùy thân chưa đạt tiêu chuẩn kiểm duyệt."}&rdquo;
+            </p>
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              Toàn bộ các luồng chọn ca thi và nộp lệ phí sẽ bị tạm khóa cho đến khi bạn tải lại ảnh CCCD/Hộ chiếu hoặc ảnh chân dung đạt chuẩn bên dưới và nhấn &ldquo;Lưu giấy tờ&rdquo;.
+            </p>
+          </div>
+        </div>
+      )}
+
       <ProfileForm
         profile={profile}
         defaultFullName={userFullName}

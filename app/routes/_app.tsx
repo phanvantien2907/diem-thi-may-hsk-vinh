@@ -1,3 +1,4 @@
+import * as React from "react";
 import { redirect, Outlet, useLoaderData, useNavigation, Link } from "react-router";
 import type { Route } from "./+types/_app";
 
@@ -6,14 +7,74 @@ import { Separator } from "~/components/ui/separator";
 import { AppSidebar } from "~/components/layout/AppSidebar";
 import { DashboardSkeleton } from "~/components/layout/DashboardSkeleton";
 import { ContentSkeleton } from "~/components/layout/ContentSkeleton";
+import { ProfileRejectionWarningDialog } from "~/components/candidate/ProfileRejectionWarningDialog";
 import { EyeIcon, ShieldCheckIcon } from "lucide-react";
 
 import { requireAuth } from "~/lib/auth.server";
+import { API_BASE_URL } from "~/lib/env.server";
+import type { CandidateStatusInfo, CandidateResponseDTO, DocumentResponseDTO } from "~/types/candidate";
 
-// ─── Loader — AuthGuard ───────────────────────────────────────────────────────
+// ─── Loader — AuthGuard & Candidate Status ──────────────────────────────────
 export async function loader({ request }: Route.LoaderArgs) {
-  const { user } = await requireAuth(request);
-  return { user };
+  const { user, token } = await requireAuth(request);
+  const isAdmin = user.rawRole === "admin" || user.role === "Quản trị viên" || user.role === "admin";
+
+  let candidateStatus: CandidateStatusInfo = {
+    isRejected: false,
+    rejectionReason: null,
+    verificationStatus: null,
+    hasProfile: false,
+    hasDocument: false,
+    latestDocument: null,
+    profile: null,
+  };
+
+  if (!isAdmin && token) {
+    try {
+      const [profileRes, docsRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/v1/me/candidate-profile`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => null),
+        fetch(`${API_BASE_URL}/api/v1/me/candidate-profile/documents`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => null),
+      ]);
+
+      let profileData: CandidateResponseDTO | null = null;
+      if (profileRes && profileRes.ok) {
+        const pJson = await profileRes.json().catch(() => null);
+        profileData = pJson?.data ?? null;
+      }
+
+      let latestDoc: DocumentResponseDTO | null = null;
+      if (docsRes && docsRes.ok) {
+        const dJson = await docsRes.json().catch(() => null);
+        const docs = Array.isArray(dJson?.data)
+          ? dJson.data
+          : dJson?.data
+            ? [dJson.data]
+            : [];
+        latestDoc = docs[0] ?? null;
+      }
+
+      const isRejected = latestDoc?.verification_status?.toLowerCase() === "rejected";
+      const rejectionReason = latestDoc?.rejection_reason || (latestDoc as any)?.reject_reason || null;
+
+      candidateStatus = {
+        isRejected,
+        rejectionReason,
+        verificationStatus: latestDoc?.verification_status ?? null,
+        hasProfile: Boolean(profileData && profileData.id && profileData.full_name),
+        hasDocument: Boolean(latestDoc && latestDoc.id),
+        latestDocument: latestDoc,
+        profile: profileData,
+      };
+    } catch (err) {
+      console.error("[CandidateStatus] Error fetching status in layout:", err);
+    }
+  }
+
+  return { user, candidateStatus };
 }
 
 // ─── Meta ──────────────────────────────────────────────────────────────────────
@@ -32,15 +93,35 @@ export function HydrateFallback() {
 
 // ─── Layout Component ─────────────────────────────────────────────────────────────
 export default function AppLayout() {
-  const { user } = useLoaderData<typeof loader>();
+  const { user, candidateStatus } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const isNavigating = navigation.state === "loading";
   const isAdmin = user.rawRole === "admin" || user.role === "Quản trị viên" || user.role === "admin";
 
+  const [isRejectionDialogOpen, setIsRejectionDialogOpen] = React.useState(
+    Boolean(candidateStatus?.isRejected)
+  );
+
+  // Cập nhật trạng thái dialog nếu candidateStatus thay đổi khi revalidate
+  React.useEffect(() => {
+    if (candidateStatus?.isRejected) {
+      setIsRejectionDialogOpen(true);
+    }
+  }, [candidateStatus?.isRejected]);
+
   return (
     <SidebarProvider>
+      {/* Modal cảnh báo bắt buộc khi hồ sơ thí sinh bị từ chối */}
+      {candidateStatus?.isRejected && (
+        <ProfileRejectionWarningDialog
+          open={isRejectionDialogOpen}
+          onOpenChange={setIsRejectionDialogOpen}
+          rejectionReason={candidateStatus.rejectionReason}
+        />
+      )}
+
       {/* Sidebar — tự động collapse thành Sheet trên mobile */}
-      <AppSidebar user={user} />
+      <AppSidebar user={user} candidateStatus={candidateStatus} />
 
       {/* Main content area */}
       <SidebarInset className="min-w-0 overflow-hidden">
@@ -86,7 +167,7 @@ export default function AppLayout() {
           {isNavigating ? (
             <ContentSkeleton />
           ) : (
-            <Outlet context={{ isAdminPreview: isAdmin, user }} />
+            <Outlet context={{ isAdminPreview: isAdmin, user, candidateStatus }} />
           )}
         </main>
       </SidebarInset>

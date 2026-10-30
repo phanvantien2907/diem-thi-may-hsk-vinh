@@ -95,6 +95,16 @@ export interface ValidatePortraitResponseDTO {
   rejection_reason?: string;
 }
 
+export interface CandidateStatusInfo {
+  isRejected: boolean;
+  rejectionReason: string | null;
+  verificationStatus: VerificationStatus | null;
+  hasProfile: boolean;
+  hasDocument: boolean;
+  latestDocument?: DocumentResponseDTO | null;
+  profile?: CandidateResponseDTO | null;
+}
+
 // ─── Cloudinary Upload ────────────────────────────────────────────────────────
 
 /** Response từ GET /api/v1/me/candidate-profile/upload-signature */

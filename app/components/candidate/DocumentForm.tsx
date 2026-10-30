@@ -450,16 +450,16 @@ export const DocumentForm = React.memo(function DocumentForm({
             </p>
           </div>
         </div>
-      ) : document?.verification_status === "rejected" ? (
+      ) : document?.verification_status?.toLowerCase() === "rejected" ? (
         <div className="mx-6 mb-5 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-xs text-destructive flex items-start gap-3">
           <AlertCircle className="size-4 shrink-0 mt-0.5 text-destructive" />
           <div className="space-y-1 flex-1">
-            <p className="font-semibold text-sm">Ảnh chân dung hiện tại chưa đạt chuẩn</p>
+            <p className="font-semibold text-sm">Ảnh chân dung / Giấy tờ hiện tại chưa đạt chuẩn</p>
             <p className="leading-relaxed text-destructive/90">
-              {document.rejection_reason || "Ảnh chân dung chưa đáp ứng yêu cầu của hệ thống."}
+              {document.rejection_reason || (document as any).reject_reason || "Ảnh chân dung hoặc giấy tờ tùy thân chưa đáp ứng yêu cầu của hệ thống."}
             </p>
             <p className="text-[11px] text-muted-foreground mt-1">
-              Vui lòng tải lại ảnh chân dung đạt chuẩn (nền trắng, không đeo kính) theo hướng dẫn bên dưới và bấm &quot;Lưu giấy tờ&quot; để xác thực lại.
+              Vui lòng tải lại ảnh chân dung đạt chuẩn (nền trắng, không đeo kính) hoặc quét lại CCCD theo hướng dẫn bên dưới và bấm &quot;Lưu giấy tờ&quot; để xác thực lại.
             </p>
           </div>
         </div>
