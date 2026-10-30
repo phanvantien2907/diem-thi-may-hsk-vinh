@@ -14,7 +14,9 @@ import type {
   ExamSession,
   ExamSessionClosedReason,
   ExamSessionStatus,
+  ExamShift,
 } from "~/types/exam";
+import { SunIcon, SunsetIcon, MoonIcon } from "lucide-react";
 
 export type SessionActionType =
   | "view"
@@ -28,6 +30,7 @@ export type SessionActionType =
   | "reopen_registration"
   | "increase_capacity"
   | "decrease_capacity"
+  | "complete"
   | "cancel"
   | "delete";
 
@@ -140,6 +143,14 @@ export function canSession(
     case "increase_capacity":
     case "decrease_capacity":
       return status === "open" || status === "closed";
+
+    case "complete":
+      // Ca thi (Slot) chỉ có thể chuyển sang Hoàn tất ('completed') khi đang mở ('open') hoặc đã đóng ('closed').
+      // Không cho phép hoàn tất nếu ca thi là draft, scheduled, đã hoàn tất hoặc đã bị hủy.
+      if (status === "open" || status === "closed") {
+        return !isParentDraft && !isPeriodClosed;
+      }
+      return false;
 
     case "cancel":
       // Quy tắc nghiệp vụ mới: Ca thi (Slot) CHỈ có thể bị hủy nếu trạng thái hiện tại là 'open' (registration open).
@@ -358,6 +369,45 @@ export function getSessionStatusDetails(
         badgeClass: "bg-muted text-muted-foreground border-border",
         dotClass: "bg-muted-foreground",
         pulse: false,
+      };
+  }
+}
+
+/**
+ * Lấy nhãn, biểu tượng và kiểu hiển thị cho ca thi (sáng, chiều, tối).
+ */
+export function getShiftDetails(shift?: ExamShift | string | null) {
+  switch (shift) {
+    case "morning":
+      return {
+        label: "Ca Sáng",
+        timeRange: "08:30 - 11:30",
+        icon: SunIcon,
+        className:
+          "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/60",
+      };
+    case "afternoon":
+      return {
+        label: "Ca Chiều",
+        timeRange: "13:30 - 16:30",
+        icon: SunsetIcon,
+        className:
+          "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950/40 dark:text-orange-300 dark:border-orange-800/60",
+      };
+    case "evening":
+      return {
+        label: "Ca Tối",
+        timeRange: "18:00 - 21:00",
+        icon: MoonIcon,
+        className:
+          "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/60",
+      };
+    default:
+      return {
+        label: "Chưa chọn ca",
+        timeRange: "--:--",
+        icon: SunIcon,
+        className: "bg-muted text-muted-foreground border-border",
       };
   }
 }

@@ -44,10 +44,17 @@ Tên đầy đủ: **Vinh University HSK Computer-based Test Registration System
 - Sử dụng **100% component mặc định của shadcn/ui**: `<Dialog>`, `<AlertDialog>`, `<Toast>`, `<Toaster>`.
 - KHÔNG custom thêm style, class, hay animation vào các component này.
 - Giữ nguyên border-radius mặc định của shadcn (đã bo tròn theo theme).
-- **Quy chuẩn AlertDialog (Ví dụ: Đăng xuất, Xóa):** 
+- **BẮT BUỘC — Global Confirmation Policy & Action Safeguards (Chính sách xác nhận hành động toàn cục):**
+  - **MỌI HÀNH ĐỘNG THAY ĐỔI TRẠNG THÁI (state-mutating actions)** trong TOÀN BỘ hệ thống (như tạo mới, chỉnh sửa, xóa, hủy bỏ, hoàn tất, công bố, thu hồi công bố, đóng/mở đăng ký...) **BẮT BUỘC** phải được chặn và xác nhận thông qua `<AlertDialog>` hoặc Modal `<Dialog>` tương đương của shadcn/ui trước khi gửi request API.
+  - **TUYỆT ĐỐI KHÔNG** được phát lệnh API thay đổi trạng thái trực tiếp chỉ sau 1 cú click chuột (No one-click state transitions).
+  - Đối với các hành động **bất khả đảo ngược (IRREVERSIBLE)** (như Hoàn tất ca thi/đợt thi `complete`, Hủy `cancel`, Xóa `delete`):
+    - Bắt buộc phải có hộp thoại cảnh báo cấp độ cao (High-visibility safeguard dialog), giải thích rõ tính chất không thể hoàn tác của hành động.
+    - Hiển thị tóm tắt thông tin đối tượng bị tác động (Mã, Tên, Ngày thi, Sĩ số...).
+    - Nút xác nhận phải dùng `variant="destructive"` (với Hủy/Xóa) hoặc style xác nhận dứt khoát nổi bật (với Hoàn tất).
+- **Quy chuẩn AlertDialog (Ví dụ: Đăng xuất, Xóa, Hoàn tất, Hủy bỏ):** 
   - Phải dùng `<AlertDialog>` của shadcn để chặn tương tác nền.
   - Các nút hành động bên trong (`<AlertDialogCancel>`, `<AlertDialogAction>`) phải tuân thủ chuẩn Button: `rounded-full`, `cursor-pointer`, hover mượt.
-  - Nút xác nhận hành động nguy hiểm (như Đăng xuất) phải dùng `variant="destructive"`.
+  - Nút xác nhận hành động nguy hiểm (như Đăng xuất, Hủy, Xóa) phải dùng `variant="destructive"`.
 - **Quy tắc chuyển trang sau hành động quan trọng (ví dụ: Đăng ký thành công):** 
   - PHẢI hiển thị Toast thông báo thành công.
   - PHẢI chờ một khoảng thời gian (delay 3 - 5 giây bằng `setTimeout`) trước khi dùng `navigate` (client-side) để chuyển trang, giúp người dùng kịp đọc thông báo. Không dùng `redirect` trực tiếp từ server action nếu cần hiển thị Toast.

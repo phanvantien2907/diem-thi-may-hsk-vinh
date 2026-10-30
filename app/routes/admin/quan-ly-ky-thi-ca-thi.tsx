@@ -48,6 +48,11 @@ import {
   ReopenRegistrationDialog,
   type ReopenRegistrationTarget,
 } from "~/components/dashboard/ReopenRegistrationDialog";
+import { SessionCompletionSafeguardDialog } from "~/components/dashboard/SessionCompletionSafeguardDialog";
+import {
+  PeriodActionConfirmationDialog,
+  type PeriodConfirmationType,
+} from "~/components/dashboard/PeriodActionConfirmationDialog";
 import { EditSessionDialog } from "~/components/dashboard/EditSessionDialog";
 import { PeriodDetailDialog } from "~/components/dashboard/PeriodDetailDialog";
 import { useDebouncedCallback, useThrottledCallback } from "~/hooks/use-debounce";
@@ -716,6 +721,20 @@ export async function action({ request }: Route.ActionArgs) {
     method = "POST";
     const reason = String(formData.get("reason") ?? "");
     body = JSON.stringify({ reason });
+  } else if (intent === "complete-session" && sessionId) {
+    const sessionStatus = String(formData.get("session_status") ?? "");
+    if (sessionStatus === "completed") {
+      return {
+        error: "Ca thi đã ở trạng thái hoàn tất.",
+      } satisfies SessionAction;
+    }
+    if (sessionStatus !== "open" && sessionStatus !== "closed") {
+      return {
+        error: "Chỉ có thể hoàn tất ca thi đang mở đăng ký hoặc đã đóng đăng ký.",
+      } satisfies SessionAction;
+    }
+    endpoint = `/api/v1/admin/exam-sessions/${sessionId}/complete`;
+    method = "POST";
   } else if (intent === "clear-cache") {
     endpoint = "/api/v1/admin/exam-sessions/clear-cache";
   } else {
@@ -789,7 +808,9 @@ export async function action({ request }: Route.ActionArgs) {
                                   ? "Cập nhật ca thi thành công."
                                   : intent === "close-session-registration"
                                     ? "Đã đóng đăng ký sớm cho ca thi thành công."
-                                    : intent === "reopen-session-registration"
+                                    : intent === "complete-session"
+                                      ? "Đã hoàn tất ca thi thành công."
+                                      : intent === "reopen-session-registration"
                                       ? "Đã mở lại đăng ký ca thi thành công."
                                       : intent === "update-session-capacity"
                                         ? "Đã cập nhật sĩ số ca thi thành công."
@@ -1355,6 +1376,7 @@ function SessionDetailDialog({
   onCancelSession,
   onOpenPublishSchedule,
   onPublishNow,
+  onCompleteSession,
   parentPeriod,
 }: {
   session: ExamSession | null;
@@ -1365,6 +1387,7 @@ function SessionDetailDialog({
   onCancelSession: (session: ExamSession) => void;
   onOpenPublishSchedule?: (session: ExamSession) => void;
   onPublishNow?: (session: ExamSession) => void;
+  onCompleteSession?: (session: ExamSession) => void;
 }) {
   if (!session) return null;
 
@@ -1571,6 +1594,21 @@ function SessionDetailDialog({
             >
               Đóng
             </Button>
+            {canSession(session, "complete", parentPeriod) && onCompleteSession && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-full cursor-pointer text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800"
+                onClick={() => {
+                  onOpenChange(false);
+                  onCompleteSession(session);
+                }}
+              >
+                <CheckCircle2Icon className="size-3.5 mr-1 text-emerald-600" />
+                Hoàn tất ca thi
+              </Button>
+            )}
             {canSession(session, "cancel", parentPeriod) && (
               <Button
                 type="button"
@@ -2012,6 +2050,19 @@ export default function QuanLyKyThiCaThiPage() {
   // Shared Reopen Registration Dialog state (for period or session)
   const [reopenTarget, setReopenTarget] = React.useState<ReopenRegistrationTarget | null>(null);
 
+  // Period Action Confirmation Dialog state (publish, unpublish, complete)
+  const [periodForAction, setPeriodForAction] = React.useState<ExamPeriod | null>(null);
+  const [periodActionType, setPeriodActionType] = React.useState<PeriodConfirmationType | null>(null);
+  const [isPeriodActionAlertOpen, setIsPeriodActionAlertOpen] = React.useState(false);
+
+  // Session Completion Safeguard Dialog state
+  const [sessionToComplete, setSessionToComplete] = React.useState<ExamSession | null>(null);
+  const [isSessionCompleteAlertOpen, setIsSessionCompleteAlertOpen] = React.useState(false);
+
+  // Session Unpublish Confirmation AlertDialog state
+  const [sessionToUnpublish, setSessionToUnpublish] = React.useState<ExamSession | null>(null);
+  const [isSessionUnpublishAlertOpen, setIsSessionUnpublishAlertOpen] = React.useState(false);
+
   // Filtered periods
   const filteredPeriods = React.useMemo(() => {
     return periods.filter((period) => {
@@ -2310,6 +2361,49 @@ export default function QuanLyKyThiCaThiPage() {
         intent: "publish-session",
         session_id: String(sessionToPublish.id),
         session_status: sessionToPublish.status,
+      },
+      { method: "post" }
+    );
+  };
+
+  const handleConfirmPeriodAction = (period: ExamPeriod, actionType: PeriodConfirmationType) => {
+    setIsPeriodActionAlertOpen(false);
+    setPeriodForAction(null);
+    setPeriodActionType(null);
+    const intentMap: Record<PeriodConfirmationType, string> = {
+      publish: "publish-period",
+      unpublish: "unpublish-period",
+      complete: "complete-period",
+    };
+    actionFetcher.submit(
+      { intent: intentMap[actionType], period_id: String(period.id) },
+      { method: "post" }
+    );
+  };
+
+  const handleConfirmCompleteSession = (session: ExamSession) => {
+    setIsSessionCompleteAlertOpen(false);
+    setSessionToComplete(null);
+    actionFetcher.submit(
+      {
+        intent: "complete-session",
+        session_id: String(session.id),
+        session_status: session.status,
+      },
+      { method: "post" }
+    );
+  };
+
+  const handleConfirmUnpublishSession = () => {
+    if (!sessionToUnpublish) return;
+    setIsSessionUnpublishAlertOpen(false);
+    const target = sessionToUnpublish;
+    setSessionToUnpublish(null);
+    actionFetcher.submit(
+      {
+        intent: "unpublish-session",
+        session_id: String(target.id),
+        session_status: target.status,
       },
       { method: "post" }
     );
@@ -2811,10 +2905,9 @@ export default function QuanLyKyThiCaThiPage() {
                                   className="rounded-full cursor-pointer hover:bg-emerald-50 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700"
                                   title="Công bố đợt thi này"
                                   onClick={() => {
-                                    actionFetcher.submit(
-                                      { intent: "publish-period", period_id: String(period.id) },
-                                      { method: "post" }
-                                    );
+                                    setPeriodForAction(period);
+                                    setPeriodActionType("publish");
+                                    setIsPeriodActionAlertOpen(true);
                                   }}
                                 >
                                   <GlobeIcon className="size-3.5" />
@@ -2890,10 +2983,9 @@ export default function QuanLyKyThiCaThiPage() {
                                       <DropdownMenuItem
                                         className="cursor-pointer text-xs rounded-lg font-medium text-emerald-700 dark:text-emerald-400 focus:text-emerald-700 focus:bg-emerald-50 dark:focus:bg-emerald-950/40"
                                         onClick={() => {
-                                          actionFetcher.submit(
-                                            { intent: "publish-period", period_id: String(period.id) },
-                                            { method: "post" }
-                                          );
+                                          setPeriodForAction(period);
+                                          setPeriodActionType("publish");
+                                          setIsPeriodActionAlertOpen(true);
                                         }}
                                       >
                                         <GlobeIcon className="size-3.5 mr-2" />
@@ -2905,10 +2997,9 @@ export default function QuanLyKyThiCaThiPage() {
                                       <DropdownMenuItem
                                         className="cursor-pointer text-xs rounded-lg font-medium text-amber-700 dark:text-amber-400 focus:text-amber-700 focus:bg-amber-50 dark:focus:bg-amber-950/40"
                                         onClick={() => {
-                                          actionFetcher.submit(
-                                            { intent: "unpublish-period", period_id: String(period.id) },
-                                            { method: "post" }
-                                          );
+                                          setPeriodForAction(period);
+                                          setPeriodActionType("unpublish");
+                                          setIsPeriodActionAlertOpen(true);
                                         }}
                                       >
                                         <FileTextIcon className="size-3.5 mr-2" />
@@ -2939,10 +3030,9 @@ export default function QuanLyKyThiCaThiPage() {
                                       <DropdownMenuItem
                                         className="cursor-pointer text-xs rounded-lg font-medium text-slate-700 dark:text-slate-300 focus:bg-slate-100 dark:focus:bg-slate-800"
                                         onClick={() => {
-                                          actionFetcher.submit(
-                                            { intent: "complete-period", period_id: String(period.id) },
-                                            { method: "post" }
-                                          );
+                                          setPeriodForAction(period);
+                                          setPeriodActionType("complete");
+                                          setIsPeriodActionAlertOpen(true);
                                         }}
                                       >
                                         <CheckCircle2Icon className="size-3.5 mr-2" />
@@ -3877,6 +3967,19 @@ export default function QuanLyKyThiCaThiPage() {
                                         Mở lại cổng đăng ký
                                       </DropdownMenuItem>
                                     )}
+
+                                    {canSession(session, "complete", parentPeriod) && (
+                                      <DropdownMenuItem
+                                        className="cursor-pointer text-xs rounded-lg font-medium text-slate-700 dark:text-slate-300 focus:bg-slate-100 dark:focus:bg-slate-800"
+                                        onClick={() => {
+                                          setSessionToComplete(session);
+                                          setIsSessionCompleteAlertOpen(true);
+                                        }}
+                                      >
+                                        <CheckCircle2Icon className="size-3.5 mr-2" />
+                                        Hoàn tất ca thi
+                                      </DropdownMenuItem>
+                                    )}
                                   </DropdownMenuGroup>
 
                                   {/* Khối Phát hành & Lịch */}
@@ -3913,14 +4016,8 @@ export default function QuanLyKyThiCaThiPage() {
                                           <DropdownMenuItem
                                             className="cursor-pointer text-xs rounded-lg font-medium text-amber-700 dark:text-amber-400 focus:text-amber-700 focus:bg-amber-50 dark:focus:bg-amber-950/40"
                                             onClick={() => {
-                                              actionFetcher.submit(
-                                                {
-                                                  intent: "unpublish-session",
-                                                  session_id: String(session.id),
-                                                  session_status: session.status,
-                                                },
-                                                { method: "post" }
-                                              );
+                                              setSessionToUnpublish(session);
+                                              setIsSessionUnpublishAlertOpen(true);
                                             }}
                                           >
                                             <FileTextIcon className="size-3.5 mr-2" />
@@ -4169,6 +4266,10 @@ export default function QuanLyKyThiCaThiPage() {
         }}
         onOpenPublishSchedule={handleOpenPublishSchedule}
         onPublishNow={handleOpenPublishConfirm}
+        onCompleteSession={(session) => {
+          setSessionToComplete(session);
+          setIsSessionCompleteAlertOpen(true);
+        }}
         parentPeriod={
           selectedSessionForDetail?.period_id
             ? periods.find((item) => item.id === selectedSessionForDetail.period_id)
@@ -4378,10 +4479,9 @@ export default function QuanLyKyThiCaThiPage() {
         open={selectedPeriodIdForDetail !== null}
         onOpenChange={(open) => !open && setSelectedPeriodIdForDetail(null)}
         onPublishPeriod={(period) => {
-          actionFetcher.submit(
-            { intent: "publish-period", period_id: String(period.id) },
-            { method: "post" }
-          );
+          setPeriodForAction(period);
+          setPeriodActionType("publish");
+          setIsPeriodActionAlertOpen(true);
         }}
         onEditPeriod={(period) => setPeriodToEdit(period)}
         onDuplicatePeriod={(period) => setPeriodToDuplicate(period)}
@@ -4415,6 +4515,68 @@ export default function QuanLyKyThiCaThiPage() {
         open={!!reopenTarget}
         onOpenChange={(open) => !open && setReopenTarget(null)}
       />
+
+      {/* ── AlertDialog: Xác Nhận Thao Tác Đợt Thi (Công bố, Thu hồi, Hoàn tất) ── */}
+      <PeriodActionConfirmationDialog
+        period={periodForAction}
+        actionType={periodActionType}
+        open={isPeriodActionAlertOpen}
+        onOpenChange={(open) => {
+          setIsPeriodActionAlertOpen(open);
+          if (!open) {
+            setPeriodForAction(null);
+            setPeriodActionType(null);
+          }
+        }}
+        onConfirm={handleConfirmPeriodAction}
+      />
+
+      {/* ── AlertDialog: Session Completion Safeguard (Bất khả đảo ngược) ──── */}
+      <SessionCompletionSafeguardDialog
+        session={sessionToComplete}
+        examType={examTypes.find((t) => t.id === sessionToComplete?.exam_type_id)}
+        open={isSessionCompleteAlertOpen}
+        onOpenChange={(open) => {
+          setIsSessionCompleteAlertOpen(open);
+          if (!open) setSessionToComplete(null);
+        }}
+        onConfirm={handleConfirmCompleteSession}
+      />
+
+      {/* ── AlertDialog: Xác Nhận Hủy Công Bố Ca Thi Về Bản Nháp ───────────── */}
+      <AlertDialog
+        open={isSessionUnpublishAlertOpen}
+        onOpenChange={(open) => {
+          setIsSessionUnpublishAlertOpen(open);
+          if (!open) setSessionToUnpublish(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <div className="size-11 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto sm:mx-0 mb-1">
+              <FileTextIcon className="size-5" />
+            </div>
+            <AlertDialogTitle className="text-lg font-bold text-foreground">
+              Xác nhận hủy công bố ca thi #{sessionToUnpublish?.id}?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs text-muted-foreground leading-relaxed">
+              Ca thi sẽ được thu hồi lịch hẹn giờ công khai và quay trở về trạng thái{" "}
+              <strong>Bản nháp (Draft)</strong>. Ca thi sẽ không tự động phát hành cho thí sinh cho đến khi được công khai hoặc lên lịch lại.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-full cursor-pointer hover:bg-muted text-xs">
+              Hủy bỏ, giữ nguyên
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="rounded-full cursor-pointer bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium"
+              onClick={handleConfirmUnpublishSession}
+            >
+              Xác nhận về bản nháp
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
