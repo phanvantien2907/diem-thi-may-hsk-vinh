@@ -3,6 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useFetcher } from "react-router";
 import type { ExamPeriod } from "~/types/exam";
+import { getPeriodRescheduleBlockReason } from "~/lib/exam-status";
 import {
   Dialog,
   DialogContent,
@@ -106,7 +107,18 @@ export function ReschedulePeriodDialog({
 
   if (!period) return null;
 
+  const rescheduleBlockReason = getPeriodRescheduleBlockReason(period);
+  const isBlocked = rescheduleBlockReason !== null;
+
   const onSubmit = (data: RescheduleExamPeriodFormValues) => {
+    if (isBlocked) {
+      toast.add({
+        type: "error",
+        title: "Không thể dời lịch thi",
+        description: rescheduleBlockReason ?? "Đợt thi đang ở trạng thái không cho phép dời lịch.",
+      });
+      return;
+    }
     fetcher.submit(
       {
         intent: "reschedule-period",
@@ -145,6 +157,13 @@ export function ReschedulePeriodDialog({
 
         <form onSubmit={handleSubmit(onSubmit)}>
           <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
+            {isBlocked && (
+              <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 dark:bg-rose-950/40 dark:border-rose-900/60 dark:text-rose-300 text-xs">
+                <p className="font-semibold text-xs">Không thể dời lịch thi</p>
+                <p className="text-[11px] leading-relaxed mt-1">{rescheduleBlockReason}</p>
+              </div>
+            )}
+
             {/* Thông báo nghiệp vụ bắt buộc */}
             <div className="p-3.5 rounded-xl bg-indigo-50/70 border border-indigo-200 dark:bg-indigo-950/30 dark:border-indigo-800 text-xs text-indigo-950 dark:text-indigo-200 space-y-1.5 leading-relaxed">
               <div className="flex items-center gap-1.5 font-semibold text-indigo-800 dark:text-indigo-300">
@@ -276,7 +295,7 @@ export function ReschedulePeriodDialog({
             <Button
               type="submit"
               size="sm"
-              disabled={isSubmitting}
+              disabled={isSubmitting || isBlocked}
               className="rounded-full cursor-pointer bg-indigo-600 text-white hover:bg-indigo-700 text-xs font-medium h-9 w-full sm:w-auto shadow-2xs"
             >
               {isSubmitting ? (

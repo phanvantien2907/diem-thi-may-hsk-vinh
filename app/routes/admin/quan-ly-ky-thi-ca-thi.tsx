@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import {
   Form,
+  type ShouldRevalidateFunctionArgs,
   useFetcher,
   useLoaderData,
   useRevalidator,
@@ -12,6 +13,19 @@ import {
 import type { Route } from "./+types/quan-ly-ky-thi-ca-thi";
 import { requireAdminAuth } from "~/lib/auth.server";
 import { API_BASE_URL } from "~/lib/env.server";
+import {
+  canClosePeriodRegistration,
+  canCloseSessionRegistration,
+  canPeriod,
+  canSession,
+  getPeriodDuplicateBlockReason,
+  getPeriodLockReason,
+  getPeriodRescheduleBlockReason,
+  getPeriodStatusDetails,
+  getSessionLockReason,
+  getSessionStatusDetails,
+  isSessionExpired,
+} from "~/lib/exam-status";
 import type {
   ApiResponse,
   ExamPeriod,
@@ -30,8 +44,13 @@ import {
   CloseRegistrationAlertDialog,
   type CloseRegistrationTarget,
 } from "~/components/dashboard/CloseRegistrationAlertDialog";
+import {
+  ReopenRegistrationDialog,
+  type ReopenRegistrationTarget,
+} from "~/components/dashboard/ReopenRegistrationDialog";
 import { EditSessionDialog } from "~/components/dashboard/EditSessionDialog";
 import { PeriodDetailDialog } from "~/components/dashboard/PeriodDetailDialog";
+import { useDebouncedCallback, useThrottledCallback } from "~/hooks/use-debounce";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
@@ -130,6 +149,7 @@ import {
   DatabaseIcon,
   AlertTriangleIcon,
   LockIcon,
+  Trash2Icon,
 } from "lucide-react";
 
 const PAGE_SIZE = 10;
@@ -252,57 +272,13 @@ function getShiftDetails(shift: ExamShift) {
   }
 }
 
-export function isSessionExpired(session?: {
-  registration_deadline?: string | null;
-  date?: string | null;
-  status?: string | null;
-} | null): boolean {
-  if (!session) return false;
-  if (session.status === "cancelled") return false;
-  if (session.status === "closed") return true;
-  const now = Date.now();
-  if (session.registration_deadline) {
-    const deadline = new Date(session.registration_deadline).getTime();
-    if (!isNaN(deadline) && deadline < now) return true;
-  }
-  if (session.date) {
-    const examDate = new Date(session.date).getTime();
-    if (!isNaN(examDate) && examDate < now) return true;
-  }
-  return false;
-}
-
-function getStatusDetails(status: ExamSessionStatus, isExpired?: boolean) {
-  if (status === "cancelled") {
-    return {
-      label: "Đã hủy",
-      variant: "destructive" as const,
-      badgeClass:
-        "bg-destructive/10 text-destructive border-destructive/20 dark:bg-destructive/20",
-      dotClass: "bg-destructive",
-      pulse: false,
-    };
-  }
-  if (isExpired || status === "closed") {
-    return {
-      label: isExpired && status === "open" ? "Đã hết hạn" : "Đã đóng",
-      variant: "secondary" as const,
-      badgeClass:
-        isExpired && status === "open"
-          ? "bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800/60"
-          : "bg-muted text-muted-foreground border-border dark:bg-muted/60",
-      dotClass: isExpired && status === "open" ? "bg-rose-500" : "bg-muted-foreground",
-      pulse: false,
-    };
-  }
-  return {
-    label: "Đang mở",
-    variant: "default" as const,
-    badgeClass:
-      "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800/60",
-    dotClass: "bg-emerald-500",
-    pulse: true,
-  };
+function getStatusDetails(
+  status: ExamSessionStatus | string,
+  isExpired?: boolean,
+  closedReason?: string | null
+) {
+  const reason = isExpired ? "deadline" : closedReason;
+  return getSessionStatusDetails(status, reason);
 }
 
 function getPublicationStatusDetails(
@@ -330,81 +306,6 @@ function getPublicationStatusDetails(
         variant: "outline" as const,
         badgeClass:
           "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800/60",
-      };
-  }
-}
-
-function getPeriodStatusDetails(status?: ExamPeriodStatus | string | null) {
-  switch (status) {
-    case "draft":
-      return {
-        label: "Bản nháp",
-        variant: "secondary" as const,
-        badgeClass: "bg-muted text-muted-foreground border-border dark:bg-muted/60",
-        dotClass: "bg-muted-foreground",
-        pulse: false,
-      };
-    case "published":
-      return {
-        label: "Đã công bố",
-        variant: "outline" as const,
-        badgeClass:
-          "bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800/60",
-        dotClass: "bg-sky-500",
-        pulse: false,
-      };
-    case "registration_open":
-      return {
-        label: "Đang mở ĐK",
-        variant: "default" as const,
-        badgeClass:
-          "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800/60",
-        dotClass: "bg-emerald-500",
-        pulse: true,
-      };
-    case "registration_closed":
-      return {
-        label: "Đã đóng ĐK",
-        variant: "secondary" as const,
-        badgeClass:
-          "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800/60",
-        dotClass: "bg-amber-500",
-        pulse: false,
-      };
-    case "rescheduled":
-      return {
-        label: "Đã dời lịch",
-        variant: "outline" as const,
-        badgeClass:
-          "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/50 dark:text-purple-300 dark:border-purple-800/60",
-        dotClass: "bg-purple-500",
-        pulse: false,
-      };
-    case "cancelled":
-      return {
-        label: "Đã hủy",
-        variant: "destructive" as const,
-        badgeClass:
-          "bg-destructive/10 text-destructive border-destructive/20 dark:bg-destructive/20",
-        dotClass: "bg-destructive",
-        pulse: false,
-      };
-    case "completed":
-      return {
-        label: "Đã hoàn thành",
-        variant: "secondary" as const,
-        badgeClass:
-          "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300",
-        dotClass: "bg-slate-500",
-        pulse: false,
-      };
-    default:
-      return {
-        label: status || "Không xác định",
-        variant: "outline" as const,
-        badgeClass: "bg-muted text-muted-foreground border-border",
-        dotClass: "bg-muted-foreground",
-        pulse: false,
       };
   }
 }
@@ -453,6 +354,45 @@ export async function loader({ request }: Route.LoaderArgs) {
     sessions: getData(sessionsJson) ?? [],
     examTypes: getData(examTypesJson) ?? [],
   };
+}
+
+// ─── React Router v7 ShouldRevalidate (Tối ưu chuyển tab & lọc không reload) ──
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  formMethod,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  // Điều hướng sang trang hoặc route khác thì giữ nguyên hành vi mặc định
+  if (currentUrl.pathname !== nextUrl.pathname) {
+    return defaultShouldRevalidate;
+  }
+
+  // Luôn revalidate khi có thao tác Form/Action (POST, PUT, DELETE, PATCH)
+  if (formMethod && formMethod.toUpperCase() !== "GET") {
+    return true;
+  }
+
+  // Khi người dùng bấm nút làm mới thủ công (URL không đổi)
+  if (currentUrl.href === nextUrl.href) {
+    return defaultShouldRevalidate;
+  }
+
+  // Chỉ revalidate khi các query param tải dữ liệu từ máy chủ thay đổi
+  const curParams = currentUrl.searchParams;
+  const nextParams = nextUrl.searchParams;
+
+  if (
+    curParams.get("exam_type_id") !== nextParams.get("exam_type_id") ||
+    curParams.get("from") !== nextParams.get("from") ||
+    curParams.get("to") !== nextParams.get("to")
+  ) {
+    return true;
+  }
+
+  // Chuyển tab ("tab"), chuyển trang ("page"), tìm kiếm ("q"), lọc ("status", "period_status",...)
+  // xử lý hoàn toàn phía Client, không gửi request tải lại dữ liệu từ Backend
+  return false;
 }
 
 // ─── React Router v7 Action ─────────────────────────────────────────────────
@@ -515,54 +455,70 @@ export async function action({ request }: Route.ActionArgs) {
       sessions: [sessionPayload],
     });
   } else if (intent === "cancel" && sessionId) {
-    endpoint = `/api/v1/admin/exam-sessions/${sessionId}/cancel`;
-  } else if (intent === "update-publication-status" && sessionId) {
-    endpoint = `/api/v1/admin/exam-sessions/${sessionId}/publication-status`;
-    method = "PATCH";
+    const sessionStatus = String(formData.get("session_status") ?? "");
+    // Locking Rule: Tuyệt đối chặn hủy khi ca thi đã đóng đăng ký. Lịch thi là bất biến (immutable).
+    if (sessionStatus === "closed") {
+      return {
+        error:
+          "Ca thi đã đóng đăng ký; lịch thi và slot thi là bất biến (immutable), bị khóa hoàn toàn. Không thể hủy ca thi đã đóng.",
+      } satisfies SessionAction;
+    }
+    if (sessionStatus === "completed" || sessionStatus === "cancelled") {
+      return {
+        error: "Không thể hủy ca thi đã kết thúc hoặc đã bị hủy.",
+      } satisfies SessionAction;
+    }
+    if (sessionStatus === "draft" || sessionStatus === "scheduled") {
+      endpoint = `/api/v1/admin/exam-sessions/${sessionId}/draft`;
+      method = "DELETE";
+    } else if (sessionStatus === "open") {
+      // Cancellation Restriction: Ca thi chỉ có thể bị hủy nếu trạng thái hiện tại là registration open.
+      endpoint = `/api/v1/admin/exam-sessions/${sessionId}/cancel`;
+      method = "POST";
+    } else {
+      return {
+        error: "Chỉ có thể hủy ca thi khi đang ở trạng thái mở đăng ký (registration open).",
+      } satisfies SessionAction;
+    }
+  } else if (
+    (intent === "update-publication-status" ||
+      intent === "publish-session" ||
+      intent === "schedule-publish-session" ||
+      intent === "unpublish-session") &&
+    sessionId
+  ) {
     const pubStatus = String(formData.get("publication_status") || "published");
     const pubAt = formData.get("publish_at") ? String(formData.get("publish_at")) : "";
     const currentPubStatusClient = String(formData.get("current_publication_status") ?? "");
+    const sessionStatus = String(formData.get("session_status") ?? "");
 
-    // 1. Kiểm tra phòng thủ cấp độ 1: Dữ liệu gửi từ client
+    // Strict State Transition 1: Ca thi đang 'open' tuyệt đối không được hoàn tác về 'draft'.
+    if ((intent === "unpublish-session" || pubStatus === "draft") && sessionStatus === "open") {
+      return {
+        error: "Ca thi đang ở trạng thái mở đăng ký (registration open) không thể hoàn tác về bản nháp.",
+      } satisfies SessionAction;
+    }
+
+    // Strict State Transition 2: Chỉ ca thi đang ở trạng thái bản nháp (draft) mới có thể chuyển sang mở đăng ký.
+    if (
+      (intent === "publish-session" || (intent === "update-publication-status" && pubStatus === "published")) &&
+      sessionStatus &&
+      sessionStatus !== "draft"
+    ) {
+      return {
+        error: "Chỉ ca thi đang ở trạng thái bản nháp (draft) mới có thể chuyển sang mở đăng ký.",
+      } satisfies SessionAction;
+    }
+
     if (currentPubStatusClient === "published" && pubStatus === "scheduled") {
       return {
         error: "Ca thi đã được công khai trên hệ thống. Không thể lên lịch hẹn giờ cho ca thi đã công khai.",
       } satisfies SessionAction;
     }
 
-    // 2. Kiểm tra phòng thủ cấp độ 2: Kiểm tra trực tiếp trạng thái thực tế từ Backend API
-    try {
-      const checkRes = await fetch(`${API_BASE_URL}/api/v1/admin/exam-sessions`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (checkRes.ok) {
-        const checkJson = (await checkRes.json()) as ApiResponse<ExamSession[]>;
-        const currentSession = checkJson.data?.find((s) => s.id === Number(sessionId));
-        if (currentSession) {
-          if (currentSession.status === "cancelled") {
-            return {
-              error: "Không thể cập nhật trạng thái phát hành cho ca thi đã bị hủy.",
-            } satisfies SessionAction;
-          }
-          if (
-            currentSession.exam_session_publication_status === "published" &&
-            pubStatus === "scheduled"
-          ) {
-            return {
-              error: "Ca thi đã được công khai trên hệ thống. Không thể lên lịch hẹn giờ cho ca thi đã công khai.",
-            } satisfies SessionAction;
-          }
-        }
-      }
-    } catch (err) {
-      console.warn("[action] Không thể tải danh sách ca thi để đối soát:", err);
-    }
-
-    // 3. Kiểm tra tính hợp lệ của thời điểm công khai khi lên lịch
-    const sessionPayload: Record<string, string> = {
-      exam_session_publication_status: pubStatus,
-    };
-    if (pubStatus === "scheduled") {
+    if (pubStatus === "scheduled" || intent === "schedule-publish-session") {
+      endpoint = `/api/v1/admin/exam-sessions/${sessionId}/schedule-publish`;
+      method = "POST";
       if (!pubAt || pubAt.trim() === "") {
         return {
           error: "Vui lòng chọn thời điểm công khai khi lên lịch.",
@@ -574,10 +530,43 @@ export async function action({ request }: Route.ActionArgs) {
           error: "Thời điểm công khai phải ở tương lai.",
         } satisfies SessionAction;
       }
-      sessionPayload.exam_session_publish_at = new Date(pubAt).toISOString();
+      body = JSON.stringify({ publish_at: new Date(pubAt).toISOString() });
+    } else if (pubStatus === "draft" || intent === "unpublish-session") {
+      endpoint = `/api/v1/admin/exam-sessions/${sessionId}/unpublish`;
+      method = "POST";
+    } else {
+      endpoint = `/api/v1/admin/exam-sessions/${sessionId}/publish`;
+      method = "POST";
     }
+  } else if (intent === "reopen-session-registration" && sessionId) {
+    endpoint = `/api/v1/admin/exam-sessions/${sessionId}/reopen-registration`;
+    method = "POST";
+    const regDeadlineRaw = formData.get("registration_deadline");
+    const closedReason = String(formData.get("closed_reason") ?? "");
 
-    body = JSON.stringify(sessionPayload);
+    if (regDeadlineRaw && String(regDeadlineRaw).trim()) {
+      const parsed = new Date(String(regDeadlineRaw));
+      if (isNaN(parsed.getTime())) {
+        return { error: "Hạn đăng ký mới không hợp lệ." } satisfies SessionAction;
+      }
+      if (parsed.getTime() <= Date.now()) {
+        return { error: "Hạn đăng ký mới phải ở tương lai." } satisfies SessionAction;
+      }
+      body = JSON.stringify({ registration_deadline: parsed.toISOString() });
+    } else {
+      if (closedReason === "deadline") {
+        return {
+          error: "Ca thi đóng do hết hạn đăng ký, bắt buộc phải cung cấp hạn chót mới ở tương lai.",
+        } satisfies SessionAction;
+      }
+      body = JSON.stringify({});
+    }
+  } else if (intent === "update-session-capacity" && sessionId) {
+    endpoint = `/api/v1/admin/exam-sessions/${sessionId}/capacity`;
+    method = "POST";
+    const capacity = Number(formData.get("capacity"));
+    const reason = formData.get("reason") ? String(formData.get("reason")) : undefined;
+    body = JSON.stringify({ capacity, ...(reason ? { reason } : {}) });
   } else if (intent === "create-period") {
     endpoint = "/api/v1/admin/exam-periods";
     method = "POST";
@@ -626,6 +615,40 @@ export async function action({ request }: Route.ActionArgs) {
       instructions,
       ...(status ? { status } : {}),
     });
+  } else if (intent === "publish-period" && periodId) {
+    endpoint = `/api/v1/admin/exam-periods/${periodId}/publish`;
+    method = "POST";
+  } else if (intent === "unpublish-period" && periodId) {
+    endpoint = `/api/v1/admin/exam-periods/${periodId}/unpublish`;
+    method = "POST";
+  } else if (intent === "reopen-period-registration" && periodId) {
+    endpoint = `/api/v1/admin/exam-periods/${periodId}/reopen-registration`;
+    method = "POST";
+    const regDeadlineRaw = formData.get("registration_deadline");
+    if (!regDeadlineRaw || !String(regDeadlineRaw).trim()) {
+      return {
+        error: "Vui lòng nhập hạn chót đăng ký mới ở tương lai để mở lại đợt thi.",
+      } satisfies SessionAction;
+    }
+    const parsed = new Date(String(regDeadlineRaw));
+    if (isNaN(parsed.getTime())) {
+      return { error: "Hạn đăng ký mới không hợp lệ." } satisfies SessionAction;
+    }
+    if (parsed.getTime() <= Date.now()) {
+      return { error: "Hạn đăng ký mới phải ở tương lai." } satisfies SessionAction;
+    }
+    body = JSON.stringify({ registration_deadline: parsed.toISOString() });
+  } else if (intent === "complete-period" && periodId) {
+    endpoint = `/api/v1/admin/exam-periods/${periodId}/complete`;
+    method = "POST";
+  } else if (intent === "cancel-period" && periodId) {
+    endpoint = `/api/v1/admin/exam-periods/${periodId}/cancel`;
+    method = "POST";
+    const reason = formData.get("reason") ? String(formData.get("reason")) : "";
+    body = JSON.stringify({ reason });
+  } else if (intent === "delete-period" && periodId) {
+    endpoint = `/api/v1/admin/exam-periods/${periodId}`;
+    method = "DELETE";
   } else if (intent === "duplicate-period" && periodId) {
     endpoint = `/api/v1/admin/exam-periods/${periodId}/duplicate`;
     method = "POST";
@@ -635,18 +658,18 @@ export async function action({ request }: Route.ActionArgs) {
   } else if (intent === "reschedule-period" && periodId) {
     endpoint = `/api/v1/admin/exam-periods/${periodId}/reschedule`;
     method = "POST";
-    const startDate = String(formData.get("start_date") ?? "");
-    const endDate = String(formData.get("end_date") ?? "");
-    const regDeadline = String(formData.get("registration_deadline") ?? "");
+    const newStartDate = String(formData.get("new_start_date") ?? "");
+    const newEndDate = String(formData.get("new_end_date") ?? "");
+    const newRegDeadline = String(formData.get("new_registration_deadline") ?? "");
     const reason = String(formData.get("reason") ?? "");
-    const notifyCandidates = formData.get("notify_candidates") === "true";
+    const sendNotification = formData.get("send_notification") !== "false";
 
     body = JSON.stringify({
-      start_date: startDate,
-      end_date: endDate,
-      registration_deadline: new Date(regDeadline).toISOString(),
+      new_start_date: newStartDate,
+      ...(newEndDate ? { new_end_date: newEndDate } : {}),
+      ...(newRegDeadline ? { new_registration_deadline: newRegDeadline } : {}),
       reason,
-      notify_candidates: notifyCandidates,
+      send_notification: sendNotification,
     });
   } else if (intent === "close-period-registration" && periodId) {
     endpoint = `/api/v1/admin/exam-periods/${periodId}/close-registration`;
@@ -654,6 +677,18 @@ export async function action({ request }: Route.ActionArgs) {
     const reason = String(formData.get("reason") ?? "");
     body = JSON.stringify({ reason });
   } else if (intent === "update-session" && sessionId) {
+    const sessionStatus = String(formData.get("session_status") ?? "");
+    // Immutability: Một khi ở trạng thái closed, lịch thi và cấu hình là bất biến
+    if (sessionStatus === "closed") {
+      return {
+        error: "Ca thi đã đóng đăng ký; lịch thi và slot thi là bất biến (immutable), không thể chỉnh sửa.",
+      } satisfies SessionAction;
+    }
+    if (sessionStatus === "completed" || sessionStatus === "cancelled") {
+      return {
+        error: "Không thể chỉnh sửa ca thi đã kết thúc hoặc đã hủy.",
+      } satisfies SessionAction;
+    }
     endpoint = `/api/v1/admin/exam-sessions/${sessionId}`;
     method = "PUT";
     const date = formData.get("date") ? String(formData.get("date")) : null;
@@ -695,41 +730,31 @@ export async function action({ request }: Route.ActionArgs) {
 
   const json = (await response.json().catch(() => null)) as
     | ApiResponse<unknown>
-    | { message?: string; error?: string }
+    | { message?: string; error?: string; msg?: string; code?: string }
     | null;
 
   if (!response.ok) {
     let errMsg = "Thao tác không thành công. Vui lòng thử lại sau.";
-    if (response.status === 409) {
-      errMsg =
-        (json && "error" in json && typeof json.error === "string" && json.error) ||
-        "Xung đột dữ liệu (HTTP 409): Không thể thay đổi ngày thi trực tiếp của đợt thi đã phát hành. Vui lòng sử dụng tính năng 'Dời lịch thi (Bất khả kháng)'.";
-    } else if (json && "error" in json && typeof json.error === "string") {
+    if (json && "msg" in json && typeof json.msg === "string" && json.msg) {
+      errMsg = json.msg;
+    } else if (json && "error" in json && typeof json.error === "string" && json.error) {
       errMsg = json.error;
-    } else if (json && "message" in json && typeof json.message === "string") {
+    } else if (json && "message" in json && typeof json.message === "string" && json.message) {
       errMsg = json.message;
+    } else if (response.status === 409) {
+      errMsg =
+        intent === "update-session"
+          ? "Ca thi đã ở trạng thái đã công khai hoặc đã có thí sinh đăng ký; không thể thay đổi trực tiếp ngày thi hoặc cấu hình. Vui lòng sử dụng tính năng Dời lịch thi (Reschedule)."
+          : "Xung đột dữ liệu (HTTP 409): Không thể thực hiện chuyển đổi trạng thái này theo quy định nghiệp vụ.";
     }
     return { error: errMsg } satisfies SessionAction;
   }
 
   // Tự động xóa bộ nhớ đệm ca thi & đợt thi trên Redis
-  if (
-    intent === "update-publication-status" ||
-    intent === "cancel" ||
-    intent === "create" ||
-    intent === "create-period" ||
-    intent === "update-period" ||
-    intent === "duplicate-period" ||
-    intent === "reschedule-period" ||
-    intent === "close-period-registration" ||
-    intent === "update-session" ||
-    intent === "close-session-registration"
-  ) {
-    fetch(`${API_BASE_URL}/api/v1/admin/exam-sessions/clear-cache`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    }).catch((err) => console.warn("[action] Lỗi khi tự động xóa cache Redis:", err));
-  }
+  fetch(`${API_BASE_URL}/api/v1/admin/exam-sessions/clear-cache`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  }).catch((err) => console.warn("[action] Lỗi khi tự động xóa cache Redis:", err));
 
   return {
     success: true,
@@ -742,21 +767,37 @@ export async function action({ request }: Route.ActionArgs) {
             ? "Đã tạo đợt thi mới thành công."
             : intent === "update-period"
               ? "Cập nhật thông tin đợt thi thành công."
-              : intent === "duplicate-period"
-                ? "Nhân bản đợt thi (ACID) thành công. Các ca thi con đã được khởi tạo ở trạng thái bản nháp an toàn."
-                : intent === "reschedule-period"
-                  ? "Đã dời lịch thi bất khả kháng thành công. Các ca thi con và thí sinh đã được cập nhật."
-                  : intent === "close-period-registration"
-                    ? "Đã đóng đăng ký sớm cho đợt thi thành công."
-                    : intent === "update-session"
-                      ? "Cập nhật ca thi thành công."
-                      : intent === "close-session-registration"
-                        ? "Đã đóng đăng ký sớm cho ca thi thành công."
-                        : intent === "clear-cache"
-                          ? (json && "data" in json && typeof (json.data as { message?: string })?.message === "string"
-                              ? (json.data as { message?: string }).message
-                              : "Đã làm mới bộ nhớ đệm thành công.")
-                          : "Cập nhật trạng thái phát hành thành công.",
+              : intent === "publish-period"
+                ? "Đã công bố đợt thi thành công."
+                : intent === "unpublish-period"
+                  ? "Đã hủy công bố đợt thi về trạng thái nháp."
+                  : intent === "reopen-period-registration"
+                    ? "Đã mở lại đăng ký đợt thi thành công."
+                    : intent === "complete-period"
+                      ? "Đã hoàn tất đợt thi thành công."
+                      : intent === "cancel-period"
+                        ? "Đã hủy đợt thi thành công."
+                        : intent === "delete-period"
+                          ? "Đã xóa bản nháp đợt thi thành công."
+                          : intent === "duplicate-period"
+                            ? "Nhân bản đợt thi (ACID) thành công. Các ca thi con đã được khởi tạo ở trạng thái bản nháp an toàn."
+                            : intent === "reschedule-period"
+                              ? "Đã dời lịch thi bất khả kháng thành công. Các ca thi con và thí sinh đã được cập nhật."
+                              : intent === "close-period-registration"
+                                ? "Đã đóng đăng ký sớm cho đợt thi thành công."
+                                : intent === "update-session"
+                                  ? "Cập nhật ca thi thành công."
+                                  : intent === "close-session-registration"
+                                    ? "Đã đóng đăng ký sớm cho ca thi thành công."
+                                    : intent === "reopen-session-registration"
+                                      ? "Đã mở lại đăng ký ca thi thành công."
+                                      : intent === "update-session-capacity"
+                                        ? "Đã cập nhật sĩ số ca thi thành công."
+                                        : intent === "clear-cache"
+                                          ? (json && "data" in json && typeof (json.data as { message?: string })?.message === "string"
+                                            ? (json.data as { message?: string }).message
+                                            : "Đã làm mới bộ nhớ đệm thành công.")
+                                          : "Cập nhật trạng thái thành công.",
   } satisfies SessionAction;
 }
 
@@ -1292,6 +1333,19 @@ function SessionCreateDialog({
   );
 }
 
+// Kiểm tra ràng buộc khóa phát hành ck_exam_publish_needs_date_slots theo API v1.2.3 (§4.19)
+function canPublishSession(session: ExamSession | null | undefined): boolean {
+  if (!session) return false;
+  return Boolean(
+    session.date &&
+    session.date.trim() !== "" &&
+    session.registration_deadline &&
+    session.registration_deadline.trim() !== "" &&
+    session.capacity !== null &&
+    session.capacity > 0
+  );
+}
+
 // ─── Modal Dialog: Xem Chi Tiết Ca Thi ──────────────────────────────────────
 function SessionDetailDialog({
   session,
@@ -1301,8 +1355,10 @@ function SessionDetailDialog({
   onCancelSession,
   onOpenPublishSchedule,
   onPublishNow,
+  parentPeriod,
 }: {
   session: ExamSession | null;
+  parentPeriod?: ExamPeriod;
   examType?: ExamType;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1313,9 +1369,14 @@ function SessionDetailDialog({
   if (!session) return null;
 
   const isExpired = isSessionExpired(session);
+  const lockReason = getSessionLockReason(session, parentPeriod);
+  const isLocked = lockReason !== null;
   const shiftInfo = getShiftDetails(session.shift);
-  const statusInfo = getStatusDetails(session.status, isExpired);
-  const pubStatusInfo = getPublicationStatusDetails(session.exam_session_publication_status);
+  const statusInfo = getSessionStatusDetails(session.status, session.closed_reason);
+  const pubStatusInfo = getPublicationStatusDetails(
+    session.exam_session_publication_status ??
+    (session.status === "open" ? "published" : session.status)
+  );
   const ShiftIcon = shiftInfo.icon;
 
   const handleCopyId = () => {
@@ -1338,49 +1399,19 @@ function SessionDetailDialog({
             >
               Mã ca #{session.id}
             </Badge>
-            <span className="text-xs text-muted-foreground/60">•</span>
-            {session.status === "cancelled" ? (
-              <Badge
-                className={`rounded-full px-2.5 py-0.5 text-xs font-medium border flex items-center gap-1.5 ${statusInfo.badgeClass}`}
-              >
-                <span className={`size-1.5 rounded-full ${statusInfo.dotClass}`} />
-                {statusInfo.label}
-              </Badge>
-            ) : isExpired ? (
-              <Badge
-                className="rounded-full px-2.5 py-0.5 text-xs font-medium border flex items-center gap-1.5 bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800/60"
-              >
-                <LockIcon className="size-3 text-rose-500" />
-                Đã hết hạn
-              </Badge>
-            ) : session.exam_session_publication_status === "draft" ? (
-              <Badge
-                variant="secondary"
-                className="rounded-full px-2.5 py-0.5 text-xs font-medium border border-border inline-flex items-center gap-1.5 bg-muted text-muted-foreground"
-              >
-                <span className="size-1.5 rounded-full bg-muted-foreground" />
-                Bản nháp
-              </Badge>
-            ) : session.exam_session_publication_status === "scheduled" ? (
-              <Badge
-                variant="outline"
-                className="rounded-full px-2.5 py-0.5 text-xs font-medium border inline-flex items-center gap-1.5 bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800/60"
-              >
-                <span className="size-1.5 rounded-full bg-sky-500" />
-                Lên lịch
-              </Badge>
-            ) : (
-              <Badge
-                className={`rounded-full px-2.5 py-0.5 text-xs font-medium border flex items-center gap-1.5 ${statusInfo.badgeClass}`}
-              >
-                <span
-                  className={`size-1.5 rounded-full ${statusInfo.dotClass} ${
-                    statusInfo.pulse ? "animate-pulse" : ""
+            <Badge
+              className={`rounded-full px-2.5 py-0.5 text-xs font-medium border flex items-center gap-1.5 ${statusInfo.badgeClass}`}
+              title={lockReason ?? undefined}
+            >
+              <span
+                className={`size-1.5 rounded-full ${statusInfo.dotClass} ${statusInfo.pulse ? "animate-pulse" : ""
                   }`}
-                />
-                {statusInfo.label}
-              </Badge>
-            )}
+              />
+              {statusInfo.label}
+              {statusInfo.subLabel && (
+                <span className="text-[10px] opacity-80">({statusInfo.subLabel})</span>
+              )}
+            </Badge>
           </div>
           <DialogTitle className="text-xl font-bold text-foreground">
             {examType?.name ?? `Kỳ thi HSK #${session.exam_type_id}`}
@@ -1391,15 +1422,19 @@ function SessionDetailDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {isExpired && (
+        {isLocked && (
           <div className="mx-6 mt-4 p-3.5 rounded-xl border border-rose-200 bg-rose-50/70 text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300 flex items-start gap-2.5">
             <LockIcon className="size-4 shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
             <div>
               <p className="font-semibold text-rose-900 dark:text-rose-200">
-                Ca thi đã hết hạn tiếp nhận hồ sơ / Đã kết thúc
+                {session.status === "cancelled"
+                  ? "Ca thi đã bị hủy"
+                  : session.status === "closed"
+                    ? "Ca thi đã đóng đăng ký"
+                    : "Ca thi đã khóa chỉnh sửa"}
               </p>
               <p className="mt-0.5 text-xs text-rose-700/90 dark:text-rose-300/90 leading-relaxed">
-                Hạn chót đăng ký hoặc ngày thi của ca này đã qua. Hệ thống đã tự động khóa ca thi, không thể công khai lại hoặc điều chỉnh thông tin ca thi.
+                {lockReason} Hệ thống không cho phép công khai hoặc điều chỉnh thông tin ca thi ở trạng thái này.
               </p>
             </div>
           </div>
@@ -1475,41 +1510,39 @@ function SessionDetailDialog({
                 <div className="mt-1 flex items-center gap-1.5">
                   <Badge
                     variant="outline"
-                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium border ${pubStatusInfo.badgeClass}`}
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium border ${statusInfo.badgeClass}`}
                   >
-                    {pubStatusInfo.label}
+                    {statusInfo.label}
                   </Badge>
                 </div>
               </div>
               <div>
                 <div className="flex items-center justify-between gap-1">
                   <p className="text-muted-foreground text-xs">Thời gian công khai</p>
-                  {!isExpired &&
-                    session.status !== "cancelled" &&
-                    (session.exam_session_publication_status === "draft" ||
-                    session.exam_session_publication_status === "scheduled") &&
-                    onOpenPublishSchedule && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        className="rounded-full cursor-pointer hover:bg-muted text-[11px] h-5 px-1.5 font-normal text-primary hover:text-primary"
-                        onClick={() => {
-                          onOpenChange(false);
-                          onOpenPublishSchedule(session);
-                        }}
-                      >
-                        <CalendarClockIcon className="size-3 mr-1 text-primary" />
-                        Chỉnh sửa
-                      </Button>
-                    )}
+                  {canSession(session, "schedule_publish", parentPeriod) && onOpenPublishSchedule && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      className="rounded-full cursor-pointer hover:bg-muted text-[11px] h-5 px-1.5 font-normal text-primary hover:text-primary"
+                      onClick={() => {
+                        onOpenChange(false);
+                        onOpenPublishSchedule(session);
+                      }}
+                    >
+                      <CalendarClockIcon className="size-3 mr-1 text-primary" />
+                      Lên lịch
+                    </Button>
+                  )}
                 </div>
                 <p className="font-semibold text-foreground text-xs sm:text-sm mt-1">
                   {session.exam_session_publish_at
                     ? formatDateTime(session.exam_session_publish_at, false)
-                    : session.exam_session_publication_status === "draft"
+                    : session.status === "draft"
                       ? "Chưa lên lịch (Bản nháp)"
-                      : "Công khai ngay"}
+                      : session.status === "open"
+                        ? "Đang công khai"
+                        : "Theo lịch hệ thống"}
                 </p>
               </div>
             </div>
@@ -1538,7 +1571,7 @@ function SessionDetailDialog({
             >
               Đóng
             </Button>
-            {!isExpired && session.status !== "cancelled" && (
+            {canSession(session, "cancel", parentPeriod) && (
               <Button
                 type="button"
                 variant="outline"
@@ -1553,25 +1586,35 @@ function SessionDetailDialog({
                 Hủy ca thi
               </Button>
             )}
-            {!isExpired &&
-              session.status !== "cancelled" &&
-              session.exam_session_publication_status !== "published" &&
-              onPublishNow && (
-                <Button
-                  type="button"
-                  size="sm"
-                  className="rounded-full cursor-pointer text-xs font-medium"
-                  onClick={() => {
-                    onOpenChange(false);
-                    onPublishNow(session);
-                  }}
-                >
-                  <GlobeIcon className="size-3.5 mr-1" />
-                  {session.exam_session_publication_status === "draft"
-                    ? "Công khai ca thi"
-                    : "Công khai ngay"}
-                </Button>
-              )}
+            {canSession(session, "delete", parentPeriod) && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-full cursor-pointer text-xs text-destructive border-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => {
+                  onOpenChange(false);
+                  onCancelSession(session);
+                }}
+              >
+                <Trash2Icon className="size-3.5 mr-1" />
+                Xóa ca thi
+              </Button>
+            )}
+            {canSession(session, "publish", parentPeriod) && onPublishNow && (
+              <Button
+                type="button"
+                size="sm"
+                className="rounded-full cursor-pointer text-xs font-medium"
+                onClick={() => {
+                  onOpenChange(false);
+                  onPublishNow(session);
+                }}
+              >
+                <GlobeIcon className="size-3.5 mr-1" />
+                Công khai ca thi
+              </Button>
+            )}
           </div>
         </DialogFooter>
       </DialogContent>
@@ -1586,6 +1629,7 @@ interface PublishScheduleDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onPublishNow?: (session: ExamSession) => void;
+  parentPeriod?: ExamPeriod;
 }
 
 const updatePublishScheduleSchema = z
@@ -1619,10 +1663,18 @@ function PublishScheduleDialog({
   open,
   onOpenChange,
   onPublishNow,
+  parentPeriod,
 }: PublishScheduleDialogProps) {
   const fetcher = useFetcher<SessionAction>();
   const examType = examTypes.find((t) => t.id === session?.exam_type_id);
   const shiftInfo = session ? getShiftDetails(session.shift) : null;
+  const canSchedule = canSession(session, "schedule_publish", parentPeriod);
+  const publishLockReason = !canSchedule
+    ? session?.status === "open"
+      ? "Ca thi đã được công khai trên hệ thống nên không thể lên lịch lại."
+      : getSessionLockReason(session, parentPeriod) ?? "Ca thi không cho phép lên lịch ở trạng thái hiện tại."
+    : null;
+  const isPublishScheduleBlocked = publishLockReason !== null;
 
   const form = useForm<
     UpdatePublishScheduleInput,
@@ -1640,23 +1692,24 @@ function PublishScheduleDialog({
 
   React.useEffect(() => {
     if (open && session) {
-      if (session.exam_session_publication_status === "published") {
+      if (isPublishScheduleBlocked) {
         toast.add({
           type: "error",
           title: "Không thể chỉnh sửa lịch",
-          description: "Ca thi đã được công khai trên hệ thống, không thể lên lịch lại.",
+          description:
+            publishLockReason ??
+            "Ca thi đang ở trạng thái không cho phép lên lịch công khai.",
         });
         onOpenChange(false);
         return;
       }
-      const currentPubStatus =
-        session.exam_session_publication_status === "draft" ? "draft" : "scheduled";
+      const currentPubStatus = session.status === "scheduled" ? "scheduled" : "draft";
       form.reset({
         publication_status: currentPubStatus,
         publish_at: toDateTimeLocalInput(session.exam_session_publish_at),
       });
     }
-  }, [open, session, form, onOpenChange]);
+  }, [open, session, form, onOpenChange, isPublishScheduleBlocked, publishLockReason]);
 
   React.useEffect(() => {
     if (fetcher.data?.success) {
@@ -1675,15 +1728,16 @@ function PublishScheduleDialog({
     }
   }, [fetcher.data, onOpenChange]);
 
-  if (!session || session.exam_session_publication_status === "published") return null;
-  const isExpired = isSessionExpired(session);
+  if (!session || isPublishScheduleBlocked) return null;
 
   const onSubmit = (values: UpdatePublishScheduleValues) => {
-    if (session.exam_session_publication_status === "published") {
+    if (isPublishScheduleBlocked) {
       toast.add({
         type: "error",
         title: "Thao tác bị chặn",
-        description: "Ca thi đã công khai, không thể lên lịch lại.",
+        description:
+          publishLockReason ??
+          "Ca thi đang ở trạng thái không cho phép lên lịch công khai.",
       });
       return;
     }
@@ -1691,7 +1745,7 @@ function PublishScheduleDialog({
       {
         intent: "update-publication-status",
         session_id: String(session.id),
-        current_publication_status: session.exam_session_publication_status || "",
+        current_publication_status: session.status || "",
         publication_status: values.publication_status,
         publish_at: values.publish_at || "",
       },
@@ -1715,14 +1769,12 @@ function PublishScheduleDialog({
             <span className="text-xs text-muted-foreground/60">•</span>
             <Badge
               variant="outline"
-              className={`rounded-full px-2 py-0.5 text-[11px] font-medium border ${session.exam_session_publication_status === "scheduled"
+              className={`rounded-full px-2 py-0.5 text-[11px] font-medium border ${session.status === "scheduled"
                 ? "bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800/60"
                 : "bg-muted text-muted-foreground border-border dark:bg-muted/60"
                 }`}
             >
-              {session.exam_session_publication_status === "scheduled"
-                ? "Đã lên lịch"
-                : "Bản nháp"}
+              {session.status === "scheduled" ? "Đã lên lịch" : "Bản nháp"}
             </Badge>
           </div>
           <DialogTitle className="text-lg font-bold text-foreground">
@@ -1732,20 +1784,6 @@ function PublishScheduleDialog({
             Xem chi tiết ngày công khai và cập nhật lịch phát hành tự động cho ca thi.
           </DialogDescription>
         </DialogHeader>
-
-        {isExpired && (
-          <div className="mx-6 mt-4 p-3.5 rounded-xl border border-rose-200 bg-rose-50/70 text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300 flex items-start gap-2.5">
-            <LockIcon className="size-4 shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
-            <div>
-              <p className="font-semibold text-rose-900 dark:text-rose-200">
-                Ca thi đã hết hạn — Đã khóa toàn bộ thao tác
-              </p>
-              <p className="mt-0.5 text-xs text-rose-700/90 dark:text-rose-300/90 leading-relaxed">
-                Ca thi đã qua hạn chót nhận đăng ký ({formatDateTime(session.registration_deadline, false)}) hoặc đã qua ngày thi ({formatDateOnly(session.date)}). Không thể chỉnh sửa hoặc lưu lại cấu hình phát hành.
-              </p>
-            </div>
-          </div>
-        )}
 
         <form onSubmit={form.handleSubmit(onSubmit)}>
           <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
@@ -1795,7 +1833,7 @@ function PublishScheduleDialog({
                 >
                   <SelectTrigger
                     id="edit_pub_status"
-                    disabled={isExpired || isSubmitting}
+                    disabled={isSubmitting}
                     className="w-full h-9 rounded-full px-3 text-xs cursor-pointer"
                   >
                     <SelectValue placeholder="Chọn trạng thái">
@@ -1840,7 +1878,7 @@ function PublishScheduleDialog({
                   <Input
                     id="edit_publish_at"
                     type="datetime-local"
-                    disabled={isExpired || isSubmitting}
+                    disabled={isSubmitting}
                     className="h-9 rounded-full px-3 text-xs bg-background"
                     {...form.register("publish_at")}
                   />
@@ -1859,7 +1897,7 @@ function PublishScheduleDialog({
           </div>
 
           <DialogFooter>
-            {!isExpired && onPublishNow ? (
+            {onPublishNow ? (
               <Button
                 type="button"
                 variant="outline"
@@ -1884,23 +1922,21 @@ function PublishScheduleDialog({
               >
                 Đóng
               </Button>
-              {!isExpired && (
-                <Button
-                  type="submit"
-                  size="sm"
-                  className="rounded-full cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-medium"
-                  disabled={isSubmitting}
-                >
-                  {isSubmitting ? (
-                    <>
-                      <RefreshCwIcon className="size-3 mr-1.5 animate-spin" />
-                      Đang lưu...
-                    </>
-                  ) : (
-                    "Lưu thay đổi"
-                  )}
-                </Button>
-              )}
+              <Button
+                type="submit"
+                size="sm"
+                className="rounded-full cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-medium"
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <>
+                    <RefreshCwIcon className="size-3 mr-1.5 animate-spin" />
+                    Đang lưu...
+                  </>
+                ) : (
+                  "Lưu thay đổi"
+                )}
+              </Button>
             </div>
           </DialogFooter>
         </form>
@@ -1926,8 +1962,13 @@ export default function QuanLyKyThiCaThiPage() {
   const actionFetcher = useFetcher<SessionAction>();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // Active Subtab: "periods" | "sessions"
-  const activeTab = (searchParams.get("tab") as "periods" | "sessions") || "periods";
+  // Active Subtab: "periods" | "sessions" (đồng bộ mượt mà không delay)
+  const tabParam = (searchParams.get("tab") as "periods" | "sessions") || "periods";
+  const [activeTab, setActiveTab] = React.useState<"periods" | "sessions">(tabParam);
+
+  React.useEffect(() => {
+    setActiveTab(tabParam);
+  }, [tabParam]);
 
   // Common Search & Page state
   const query = searchParams.get("q") ?? "";
@@ -1949,6 +1990,8 @@ export default function QuanLyKyThiCaThiPage() {
   const [periodToDuplicate, setPeriodToDuplicate] = React.useState<ExamPeriod | null>(null);
   const [periodToReschedule, setPeriodToReschedule] = React.useState<ExamPeriod | null>(null);
   const [selectedPeriodIdForDetail, setSelectedPeriodIdForDetail] = React.useState<number | null>(null);
+  const [periodToCancel, setPeriodToCancel] = React.useState<ExamPeriod | null>(null);
+  const [isPeriodCancelAlertOpen, setIsPeriodCancelAlertOpen] = React.useState(false);
 
   // Session Detail & Action Dialogs state
   const [selectedSessionForDetail, setSelectedSessionForDetail] =
@@ -1965,6 +2008,9 @@ export default function QuanLyKyThiCaThiPage() {
 
   // Shared Early Close Registration AlertDialog state (for period or session)
   const [closeRegTarget, setCloseRegTarget] = React.useState<CloseRegistrationTarget | null>(null);
+
+  // Shared Reopen Registration Dialog state (for period or session)
+  const [reopenTarget, setReopenTarget] = React.useState<ReopenRegistrationTarget | null>(null);
 
   // Filtered periods
   const filteredPeriods = React.useMemo(() => {
@@ -1990,7 +2036,7 @@ export default function QuanLyKyThiCaThiPage() {
   const filteredSessions = React.useMemo(() => {
     return sessions.filter((session) => {
       const type = examTypes.find((item) => item.id === session.exam_type_id);
-      const haystack = `${session.id} ${type?.name ?? ""} ${type?.code ?? ""}`.toLowerCase();
+      const haystack = `${session.id} ${session.name ?? ""} ${type?.name ?? ""} ${type?.code ?? ""}`.toLowerCase();
 
       const matchesQuery = !query.trim() || haystack.includes(query.toLowerCase().trim());
       const matchesType =
@@ -2010,6 +2056,8 @@ export default function QuanLyKyThiCaThiPage() {
         shiftFilter === "all" || session.shift === shiftFilter;
       const matchesPubStatus =
         pubStatusFilter === "all" ||
+        session.status === pubStatusFilter ||
+        (pubStatusFilter === "published" && session.status === "open") ||
         (session.exam_session_publication_status ?? "published") === pubStatusFilter;
 
       return matchesQuery && matchesType && matchesPeriod && matchesStatus && matchesShift && matchesPubStatus;
@@ -2038,19 +2086,20 @@ export default function QuanLyKyThiCaThiPage() {
 
   // Session Metrics summary
   const openCount = sessions.filter(
-    (s) =>
-      s.status === "open" &&
-      !isSessionExpired(s) &&
-      (s.exam_session_publication_status ?? "published") === "published"
+    (s) => s.status === "open" && !isSessionExpired(s)
   ).length;
   const expiredCount = sessions.filter(
     (s) => s.status !== "cancelled" && isSessionExpired(s)
   ).length;
   const closedCount = sessions.filter((s) => s.status === "closed").length;
   const cancelledCount = sessions.filter((s) => s.status === "cancelled").length;
-  const totalCapacity = sessions.reduce((sum, s) => sum + s.capacity, 0);
-  const draftCount = sessions.filter((s) => (s.exam_session_publication_status ?? "published") === "draft").length;
-  const scheduledCount = sessions.filter((s) => (s.exam_session_publication_status ?? "published") === "scheduled").length;
+  const totalCapacity = sessions.reduce((sum, s) => sum + (s.capacity ?? 0), 0);
+  const draftCount = sessions.filter(
+    (s) => s.status === "draft" || s.exam_session_publication_status === "draft"
+  ).length;
+  const scheduledCount = sessions.filter(
+    (s) => s.status === "scheduled" || s.exam_session_publication_status === "scheduled"
+  ).length;
 
   // Helper cập nhật params (tuân thủ Rule 100: reset về trang 1 khi đổi lọc/tìm kiếm)
   const updateParams = (changes: Record<string, string | null>) => {
@@ -2062,13 +2111,58 @@ export default function QuanLyKyThiCaThiPage() {
         next.delete(key);
       }
     });
-    setSearchParams(next);
+    setSearchParams(next, { preventScrollReset: true });
+  };
+
+  // Local state cho ô tìm kiếm để người dùng gõ mượt mà 60fps không bị khựng
+  const [searchInput, setSearchInput] = React.useState(query);
+
+  // Đồng bộ search input khi URL query thay đổi từ ngoài (đổi tab, reset, forward/back)
+  React.useEffect(() => {
+    setSearchInput(query);
+  }, [query]);
+
+  // Debounce cập nhật URL params (350ms) để triệt tiêu spam query / revalidate theo từng phím
+  const debouncedUpdateSearch = useDebouncedCallback((val: string) => {
+    const trimmed = val.trim();
+    if (trimmed !== (query || "")) {
+      updateParams({ q: trimmed || null, page: null });
+    }
+  }, 350);
+
+  const handleSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const val = event.target.value;
+    setSearchInput(val);
+    debouncedUpdateSearch(val);
+  };
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      debouncedUpdateSearch.flush(searchInput);
+    }
+  };
+
+  const handleClearSearch = () => {
+    setSearchInput("");
+    debouncedUpdateSearch.cancel();
+    updateParams({ q: null, page: null });
   };
 
   const handleResetFilters = () => {
+    setSearchInput("");
+    debouncedUpdateSearch.cancel();
     const next = new URLSearchParams();
     if (activeTab) next.set("tab", activeTab);
-    setSearchParams(next);
+    setSearchParams(next, { preventScrollReset: true });
+  };
+
+  const handleTabChange = (nextTab: "periods" | "sessions") => {
+    if (nextTab === activeTab) return;
+    setActiveTab(nextTab);
+    setSearchInput("");
+    debouncedUpdateSearch.cancel();
+    updateParams({ tab: nextTab, page: null, q: null });
   };
 
   const hasActiveSessionFilters =
@@ -2083,7 +2177,8 @@ export default function QuanLyKyThiCaThiPage() {
     Boolean(query) || periodStatusFilter !== "all";
 
   const [isRefreshing, setIsRefreshing] = React.useState(false);
-  const handleRefresh = async () => {
+  // Throttled refresh (1000ms): Ngăn chặn spam click nút làm mới liên tục
+  const handleRefresh = useThrottledCallback(async () => {
     setIsRefreshing(true);
     try {
       await fetch("/internal/admin/system/clear-cache?target=exam-sessions", { method: "POST" });
@@ -2098,7 +2193,7 @@ export default function QuanLyKyThiCaThiPage() {
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, 1000);
 
   // Notifications from actionFetcher (guarded against revalidation loops)
   const lastHandledActionRef = React.useRef<SessionAction | null>(null);
@@ -2118,6 +2213,8 @@ export default function QuanLyKyThiCaThiPage() {
         setSessionForPublishSchedule(null);
         setIsPublishScheduleOpen(false);
         setIsCreatePeriodOpen(false);
+        setPeriodToCancel(null);
+        setIsPeriodCancelAlertOpen(false);
         setPeriodToEdit(null);
         setPeriodToDuplicate(null);
         setPeriodToReschedule(null);
@@ -2137,30 +2234,68 @@ export default function QuanLyKyThiCaThiPage() {
   const confirmCancelSession = () => {
     if (!sessionToCancel) return;
     actionFetcher.submit(
-      { intent: "cancel", session_id: String(sessionToCancel.id) },
+      {
+        intent: "cancel",
+        session_id: String(sessionToCancel.id),
+        session_status: sessionToCancel.status,
+      },
+      { method: "post" }
+    );
+  };
+
+  const confirmCancelPeriod = () => {
+    if (!periodToCancel) return;
+    const isDraft = periodToCancel.status === "draft";
+    actionFetcher.submit(
+      {
+        intent: isDraft ? "delete-period" : "cancel-period",
+        period_id: String(periodToCancel.id),
+      },
       { method: "post" }
     );
   };
 
   const handleOpenPublishConfirm = (session: ExamSession) => {
+    const parentPeriod = session.period_id ? periods.find((p) => p.id === session.period_id) : undefined;
+    if (parentPeriod?.status === "draft") {
+      toast.add({
+        type: "error",
+        title: "Đợt thi chưa được công bố",
+        description: `Đợt thi "${parentPeriod.name}" đang là Bản nháp. Vui lòng chuyển sang tab "Quản lý Đợt thi" để công bố đợt thi trước khi công khai ca thi con.`,
+      });
+      return;
+    }
+    if (!canSession(session, "publish", parentPeriod)) {
+      toast.add({
+        type: "error",
+        title: "Chưa đủ điều kiện công khai",
+        description:
+          getSessionLockReason(session, parentPeriod) ??
+          "Ca thi chưa được thiết lập Ngày thi, Hạn đăng ký hoặc Sức chứa (> 0) hoặc đợt thi cha chưa công bố/đã đóng.",
+      });
+      return;
+    }
     setSessionToPublish(session);
     setIsPublishAlertOpen(true);
   };
 
   const handleOpenPublishSchedule = (session: ExamSession) => {
-    if (session.exam_session_publication_status === "published") {
+    const parentPeriod = session.period_id ? periods.find((p) => p.id === session.period_id) : undefined;
+    if (parentPeriod?.status === "draft") {
       toast.add({
         type: "error",
-        title: "Không thể lên lịch",
-        description: "Ca thi đã được công khai trên hệ thống, không thể lên lịch lại.",
+        title: "Đợt thi chưa được công bố",
+        description: `Đợt thi "${parentPeriod.name}" đang là Bản nháp. Vui lòng công bố đợt thi trước khi lên lịch công khai ca thi con.`,
       });
       return;
     }
-    if (session.status === "cancelled") {
+    if (!canSession(session, "schedule_publish", parentPeriod)) {
       toast.add({
         type: "error",
-        title: "Thao tác không khả dụng",
-        description: "Ca thi đã bị hủy, không thể lên lịch phát hành.",
+        title: "Không thể lên lịch",
+        description:
+          getSessionLockReason(session, parentPeriod) ??
+          "Ca thi không cho phép lên lịch ở trạng thái hiện tại.",
       });
       return;
     }
@@ -2172,10 +2307,9 @@ export default function QuanLyKyThiCaThiPage() {
     if (!sessionToPublish) return;
     actionFetcher.submit(
       {
-        intent: "update-publication-status",
+        intent: "publish-session",
         session_id: String(sessionToPublish.id),
-        current_publication_status: sessionToPublish.exam_session_publication_status || "",
-        publication_status: "published",
+        session_status: sessionToPublish.status,
       },
       { method: "post" }
     );
@@ -2239,12 +2373,11 @@ export default function QuanLyKyThiCaThiPage() {
       <div className="flex items-center gap-1.5 p-1 bg-muted/60 dark:bg-muted/30 rounded-2xl border w-fit">
         <button
           type="button"
-          onClick={() => updateParams({ tab: "periods", page: null, q: null })}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-            activeTab === "periods"
-              ? "bg-background text-foreground shadow-xs border border-border/60"
-              : "text-muted-foreground hover:text-foreground hover:bg-background/50"
-          }`}
+          onClick={() => handleTabChange("periods")}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${activeTab === "periods"
+            ? "bg-background text-foreground shadow-xs border border-border/60"
+            : "text-muted-foreground hover:text-foreground hover:bg-background/50"
+            }`}
         >
           <LayersIcon className="size-4 text-primary" />
           <span>Quản lý Đợt thi</span>
@@ -2258,12 +2391,11 @@ export default function QuanLyKyThiCaThiPage() {
 
         <button
           type="button"
-          onClick={() => updateParams({ tab: "sessions", page: null, q: null })}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-            activeTab === "sessions"
-              ? "bg-background text-foreground shadow-xs border border-border/60"
-              : "text-muted-foreground hover:text-foreground hover:bg-background/50"
-          }`}
+          onClick={() => handleTabChange("sessions")}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${activeTab === "sessions"
+            ? "bg-background text-foreground shadow-xs border border-border/60"
+            : "text-muted-foreground hover:text-foreground hover:bg-background/50"
+            }`}
         >
           <ClockIcon className="size-4 text-sky-600 dark:text-sky-400" />
           <span>Quản lý Ca thi</span>
@@ -2276,1508 +2408,1744 @@ export default function QuanLyKyThiCaThiPage() {
         </button>
       </div>
 
-      {activeTab === "periods" ? (
-        <>
-          {/* ── Metric / Stat Cards cho Đợt thi ──────────────────────────────── */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            {/* Card 1: Tổng đợt thi */}
-            <Card
-              onClick={handleResetFilters}
-              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-primary/40 ${
-                !hasActivePeriodFilters ? "ring-1 ring-primary/30 border-primary/40 bg-primary/5" : ""
-              }`}
-            >
-              <CardContent className="p-3.5 flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-primary/10 text-primary shrink-0">
-                  <LayersIcon className="size-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[11px] text-muted-foreground truncate">Tổng đợt thi</p>
-                  <p className="text-xl font-bold tracking-tight text-foreground">
-                    {periods.length}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+      <div key={activeTab} className="animate-in fade-in-50 duration-200">
+        {activeTab === "periods" ? (
+          <>
+            {/* ── Metric / Stat Cards cho Đợt thi ──────────────────────────────── */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {/* Card 1: Tổng đợt thi */}
+              <Card
+                onClick={handleResetFilters}
+                className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-primary/40 ${!hasActivePeriodFilters ? "ring-1 ring-primary/30 border-primary/40 bg-primary/5" : ""
+                  }`}
+              >
+                <CardContent className="p-3.5 flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-primary/10 text-primary shrink-0">
+                    <LayersIcon className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted-foreground truncate">Tổng đợt thi</p>
+                    <p className="text-xl font-bold tracking-tight text-foreground">
+                      {periods.length}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
 
-            {/* Card 2: Đang mở đăng ký */}
-            <Card
-              onClick={() =>
-                updateParams({
-                  period_status: periodStatusFilter === "registration_open" ? null : "registration_open",
-                  page: null,
-                })
-              }
-              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-emerald-500/40 ${
-                periodStatusFilter === "registration_open"
+              {/* Card 2: Đang mở đăng ký */}
+              <Card
+                onClick={() =>
+                  updateParams({
+                    period_status: periodStatusFilter === "registration_open" ? null : "registration_open",
+                    page: null,
+                  })
+                }
+                className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-emerald-500/40 ${periodStatusFilter === "registration_open"
                   ? "ring-1 ring-emerald-500/40 border-emerald-500/40 bg-emerald-500/5"
                   : ""
-              }`}
-            >
-              <CardContent className="p-3.5 flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">
-                  <CheckCircle2Icon className="size-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[11px] text-muted-foreground truncate">Đang mở ĐK</p>
-                  <p className="text-xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
-                    {periodOpenRegCount}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+                  }`}
+              >
+                <CardContent className="p-3.5 flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">
+                    <CheckCircle2Icon className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted-foreground truncate">Đang mở ĐK</p>
+                    <p className="text-xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
+                      {periodOpenRegCount}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
 
-            {/* Card 3: Đã công bố */}
-            <Card
-              onClick={() =>
-                updateParams({
-                  period_status: periodStatusFilter === "published" ? null : "published",
-                  page: null,
-                })
-              }
-              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-sky-500/40 ${
-                periodStatusFilter === "published"
+              {/* Card 3: Đã công bố */}
+              <Card
+                onClick={() =>
+                  updateParams({
+                    period_status: periodStatusFilter === "published" ? null : "published",
+                    page: null,
+                  })
+                }
+                className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-sky-500/40 ${periodStatusFilter === "published"
                   ? "ring-1 ring-sky-500/40 border-sky-500/40 bg-sky-500/5"
                   : ""
-              }`}
-            >
-              <CardContent className="p-3.5 flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-sky-500/10 text-sky-600 dark:text-sky-400 shrink-0">
-                  <GlobeIcon className="size-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[11px] text-muted-foreground truncate">Đã công bố</p>
-                  <p className="text-xl font-bold tracking-tight text-foreground">
-                    {periodPublishedCount}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+                  }`}
+              >
+                <CardContent className="p-3.5 flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-sky-500/10 text-sky-600 dark:text-sky-400 shrink-0">
+                    <GlobeIcon className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted-foreground truncate">Đã công bố</p>
+                    <p className="text-xl font-bold tracking-tight text-foreground">
+                      {periodPublishedCount}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
 
-            {/* Card 4: Bản nháp */}
-            <Card
-              onClick={() =>
-                updateParams({
-                  period_status: periodStatusFilter === "draft" ? null : "draft",
-                  page: null,
-                })
-              }
-              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-amber-500/40 ${
-                periodStatusFilter === "draft"
+              {/* Card 4: Bản nháp */}
+              <Card
+                onClick={() =>
+                  updateParams({
+                    period_status: periodStatusFilter === "draft" ? null : "draft",
+                    page: null,
+                  })
+                }
+                className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-amber-500/40 ${periodStatusFilter === "draft"
                   ? "ring-1 ring-amber-500/40 border-amber-500/40 bg-amber-500/5"
                   : ""
-              }`}
-            >
-              <CardContent className="p-3.5 flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
-                  <FileTextIcon className="size-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[11px] text-muted-foreground truncate">Bản nháp</p>
-                  <p className="text-xl font-bold tracking-tight text-foreground">
-                    {periodDraftCount}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+                  }`}
+              >
+                <CardContent className="p-3.5 flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
+                    <FileTextIcon className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted-foreground truncate">Bản nháp</p>
+                    <p className="text-xl font-bold tracking-tight text-foreground">
+                      {periodDraftCount}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
 
-            {/* Card 5: Đã dời lịch */}
-            <Card
-              onClick={() =>
-                updateParams({
-                  period_status: periodStatusFilter === "rescheduled" ? null : "rescheduled",
-                  page: null,
-                })
-              }
-              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-purple-500/40 ${
-                periodStatusFilter === "rescheduled"
+              {/* Card 5: Đã dời lịch */}
+              <Card
+                onClick={() =>
+                  updateParams({
+                    period_status: periodStatusFilter === "rescheduled" ? null : "rescheduled",
+                    page: null,
+                  })
+                }
+                className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-purple-500/40 ${periodStatusFilter === "rescheduled"
                   ? "ring-1 ring-purple-500/40 border-purple-500/40 bg-purple-500/5"
                   : ""
-              }`}
-            >
-              <CardContent className="p-3.5 flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 shrink-0">
-                  <CalendarClockIcon className="size-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[11px] text-muted-foreground truncate">Đã dời lịch</p>
-                  <p className="text-xl font-bold tracking-tight text-purple-600 dark:text-purple-400">
-                    {periodRescheduledCount}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+                  }`}
+              >
+                <CardContent className="p-3.5 flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 shrink-0">
+                    <CalendarClockIcon className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted-foreground truncate">Đã dời lịch</p>
+                    <p className="text-xl font-bold tracking-tight text-purple-600 dark:text-purple-400">
+                      {periodRescheduledCount}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
 
-            {/* Card 6: Đã đóng / Hủy */}
-            <Card
-              onClick={() =>
-                updateParams({
-                  period_status: periodStatusFilter === "registration_closed" ? null : "registration_closed",
-                  page: null,
-                })
-              }
-              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-muted-foreground/40 ${
-                periodStatusFilter === "registration_closed"
+              {/* Card 6: Đã đóng / Hủy */}
+              <Card
+                onClick={() =>
+                  updateParams({
+                    period_status: periodStatusFilter === "registration_closed" ? null : "registration_closed",
+                    page: null,
+                  })
+                }
+                className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-muted-foreground/40 ${periodStatusFilter === "registration_closed"
                   ? "ring-1 ring-muted-foreground/40 border-muted-foreground/40 bg-muted/20"
                   : ""
-              }`}
-            >
-              <CardContent className="p-3.5 flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400 shrink-0">
-                  <LockIcon className="size-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[11px] text-muted-foreground truncate">Đóng / Hết hạn</p>
-                  <p className="text-xl font-bold tracking-tight text-foreground">
-                    {periodClosedCount + periodCompletedOrCancelledCount}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* ── Bảng Dữ liệu Đợt thi ─────────────────────────────────────────── */}
-          <Card className="min-w-0 overflow-hidden rounded-2xl border shadow-2xs">
-            <CardHeader className="gap-3.5 border-b bg-card/50 p-4 sm:p-5">
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <CardTitle className="text-base sm:text-lg font-bold text-foreground">
-                      Danh sách Đợt thi HSK
-                    </CardTitle>
-                    <Badge
-                      variant="secondary"
-                      className="rounded-full px-2.5 py-0.5 text-[11px] font-semibold bg-muted text-muted-foreground"
-                    >
-                      {filteredPeriods.length} đợt thi
-                    </Badge>
+                  }`}
+              >
+                <CardContent className="p-3.5 flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400 shrink-0">
+                    <LockIcon className="size-4" />
                   </div>
-                  <CardDescription className="text-xs text-muted-foreground mt-0.5">
-                    Mô hình 2 tầng: Mỗi đợt thi bao gồm nhiều ca thi con tương ứng với từng cấp độ thi.
-                  </CardDescription>
-                </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted-foreground truncate">Đóng / Hết hạn</p>
+                    <p className="text-xl font-bold tracking-tight text-foreground">
+                      {periodClosedCount + periodCompletedOrCancelledCount}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
 
-                <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-full w-fit overflow-x-auto max-w-full">
-                  <button
-                    type="button"
-                    onClick={() => updateParams({ period_status: null, page: null })}
-                    className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 ${
-                      periodStatusFilter === "all"
-                        ? "bg-background text-foreground shadow-2xs font-semibold"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    Tất cả ({periods.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => updateParams({ period_status: "registration_open", page: null })}
-                    className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${
-                      periodStatusFilter === "registration_open"
-                        ? "bg-background text-foreground shadow-2xs font-semibold"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    Đang mở ĐK ({periodOpenRegCount})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => updateParams({ period_status: "published", page: null })}
-                    className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${
-                      periodStatusFilter === "published"
-                        ? "bg-background text-foreground shadow-2xs font-semibold"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    <GlobeIcon className="size-3 text-sky-600 dark:text-sky-400" />
-                    Đã công bố ({periodPublishedCount})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => updateParams({ period_status: "draft", page: null })}
-                    className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${
-                      periodStatusFilter === "draft"
-                        ? "bg-background text-foreground shadow-2xs font-semibold"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    <FileTextIcon className="size-3 text-amber-600 dark:text-amber-400" />
-                    Bản nháp ({periodDraftCount})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => updateParams({ period_status: "rescheduled", page: null })}
-                    className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${
-                      periodStatusFilter === "rescheduled"
-                        ? "bg-background text-foreground shadow-2xs font-semibold"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    <CalendarClockIcon className="size-3 text-purple-600 dark:text-purple-400" />
-                    Đã dời lịch ({periodRescheduledCount})
-                  </button>
-                </div>
-              </div>
+            {/* ── Bảng Dữ liệu Đợt thi ─────────────────────────────────────────── */}
+            <Card className="min-w-0 overflow-hidden rounded-2xl border shadow-2xs">
+              <CardHeader className="gap-3.5 border-b bg-card/50 p-4 sm:p-5">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <CardTitle className="text-base sm:text-lg font-bold text-foreground">
+                        Danh sách Đợt thi HSK
+                      </CardTitle>
+                      <Badge
+                        variant="secondary"
+                        className="rounded-full px-2.5 py-0.5 text-[11px] font-semibold bg-muted text-muted-foreground"
+                      >
+                        {filteredPeriods.length} đợt thi
+                      </Badge>
+                    </div>
+                    <CardDescription className="text-xs text-muted-foreground mt-0.5">
+                      Mô hình 2 tầng: Mỗi đợt thi bao gồm nhiều ca thi con tương ứng với từng cấp độ thi.
+                    </CardDescription>
+                  </div>
 
-              <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-2 border-t border-border/50">
-                <div className="relative flex-1 min-w-[200px]">
-                  <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={query}
-                    onChange={(event) => updateParams({ q: event.target.value, page: null })}
-                    placeholder="Tìm mã đợt thi (HSK-2026-T06), tên đợt thi..."
-                    className="h-9 rounded-full pl-8.5 pr-8 text-xs placeholder:text-xs bg-background"
-                    aria-label="Tìm kiếm đợt thi"
-                  />
-                  {query && (
+                  <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-full w-fit overflow-x-auto max-w-full">
                     <button
                       type="button"
-                      onClick={() => updateParams({ q: null, page: null })}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
-                      aria-label="Xóa từ khóa tìm kiếm"
+                      onClick={() => updateParams({ period_status: null, page: null })}
+                      className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 ${periodStatusFilter === "all"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
                     >
-                      <XIcon className="size-3.5" />
+                      Tất cả ({periods.length})
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      onClick={() => updateParams({ period_status: "registration_open", page: null })}
+                      className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${periodStatusFilter === "registration_open"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      Đang mở ĐK ({periodOpenRegCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateParams({ period_status: "published", page: null })}
+                      className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${periodStatusFilter === "published"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      <GlobeIcon className="size-3 text-sky-600 dark:text-sky-400" />
+                      Đã công bố ({periodPublishedCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateParams({ period_status: "draft", page: null })}
+                      className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${periodStatusFilter === "draft"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      <FileTextIcon className="size-3 text-amber-600 dark:text-amber-400" />
+                      Bản nháp ({periodDraftCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateParams({ period_status: "rescheduled", page: null })}
+                      className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${periodStatusFilter === "rescheduled"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      <CalendarClockIcon className="size-3 text-purple-600 dark:text-purple-400" />
+                      Đã dời lịch ({periodRescheduledCount})
+                    </button>
+                  </div>
                 </div>
 
-                {hasActivePeriodFilters && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleResetFilters}
-                    className="h-9 rounded-full px-3 text-xs text-muted-foreground hover:text-foreground cursor-pointer hover:bg-muted shrink-0"
-                  >
-                    <RotateCcwIcon className="size-3.5 mr-1" />
-                    Đặt lại
-                  </Button>
-                )}
-              </div>
-            </CardHeader>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-2 border-t border-border/50">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={searchInput}
+                      onChange={handleSearchChange}
+                      onKeyDown={handleSearchKeyDown}
+                      placeholder="Tìm mã đợt thi (HSK-2026-T06), tên đợt thi..."
+                      className="h-9 rounded-full pl-8.5 pr-8 text-xs placeholder:text-xs bg-background"
+                      aria-label="Tìm kiếm đợt thi"
+                    />
+                    {searchInput && (
+                      <button
+                        type="button"
+                        onClick={handleClearSearch}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+                        aria-label="Xóa từ khóa tìm kiếm"
+                      >
+                        <XIcon className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
 
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/30 hover:bg-muted/30 border-b">
-                    <TableHead className="w-[120px] py-3 text-xs font-semibold text-muted-foreground pl-5">
-                      Mã đợt
-                    </TableHead>
-                    <TableHead className="min-w-[220px] py-3 text-xs font-semibold text-muted-foreground">
-                      Tên đợt thi
-                    </TableHead>
-                    <TableHead className="min-w-[190px] py-3 text-xs font-semibold text-muted-foreground">
-                      Thời gian tổ chức
-                    </TableHead>
-                    <TableHead className="min-w-[170px] py-3 text-xs font-semibold text-muted-foreground">
-                      Hạn chót đăng ký
-                    </TableHead>
-                    <TableHead className="min-w-[100px] py-3 text-xs font-semibold text-muted-foreground text-center">
-                      Số ca thi
-                    </TableHead>
-                    <TableHead className="min-w-[130px] py-3 text-xs font-semibold text-muted-foreground">
-                      Trạng thái
-                    </TableHead>
-                    <TableHead className="w-[90px] py-3 text-xs font-semibold text-muted-foreground text-right pr-5">
-                      Thao tác
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {visiblePeriods.map((period) => {
-                    const statusInfo = getPeriodStatusDetails(period.status);
-                    const canCloseEarly =
-                      period.status === "published" || period.status === "registration_open";
+                  {hasActivePeriodFilters && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleResetFilters}
+                      className="h-9 rounded-full px-3 text-xs text-muted-foreground hover:text-foreground cursor-pointer hover:bg-muted shrink-0"
+                    >
+                      <RotateCcwIcon className="size-3.5 mr-1" />
+                      Đặt lại
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
 
-                    return (
-                      <TableRow key={period.id} className="hover:bg-muted/40 transition-colors">
-                        <TableCell className="pl-5">
-                          <div className="flex flex-col">
-                            <span className="font-mono text-xs font-bold text-foreground">
-                              {period.code}
-                            </span>
-                            <span className="font-mono text-[11px] text-muted-foreground">
-                              #{period.id}
-                            </span>
-                          </div>
-                        </TableCell>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/30 hover:bg-muted/30 border-b">
+                      <TableHead className="w-[120px] py-3 text-xs font-semibold text-muted-foreground pl-5">
+                        Mã đợt
+                      </TableHead>
+                      <TableHead className="min-w-[220px] py-3 text-xs font-semibold text-muted-foreground">
+                        Tên đợt thi
+                      </TableHead>
+                      <TableHead className="min-w-[190px] py-3 text-xs font-semibold text-muted-foreground">
+                        Thời gian tổ chức
+                      </TableHead>
+                      <TableHead className="min-w-[170px] py-3 text-xs font-semibold text-muted-foreground">
+                        Hạn chót đăng ký
+                      </TableHead>
+                      <TableHead className="min-w-[100px] py-3 text-xs font-semibold text-muted-foreground text-center">
+                        Số ca thi
+                      </TableHead>
+                      <TableHead className="min-w-[130px] py-3 text-xs font-semibold text-muted-foreground">
+                        Trạng thái
+                      </TableHead>
+                      <TableHead className="w-[90px] py-3 text-xs font-semibold text-muted-foreground text-right pr-5">
+                        Thao tác
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {visiblePeriods.map((period) => {
+                      const statusInfo = getPeriodStatusDetails(period.status);
+                      const lockReason = getPeriodLockReason(period);
+                      const isLocked = lockReason !== null;
+                      const canEdit = canPeriod(period, "edit");
+                      const canPublish = canPeriod(period, "publish");
+                      const canUnpublish = canPeriod(period, "unpublish");
+                      const canReopenReg = canPeriod(period, "reopen_registration");
+                      const canComplete = canPeriod(period, "complete");
+                      const canCloseEarly = canClosePeriodRegistration(period);
+                      const canCancel = canPeriod(period, "cancel");
+                      const canDelete = canPeriod(period, "delete");
+                      const rescheduleBlockReason = getPeriodRescheduleBlockReason(period);
+                      const duplicateBlockReason = getPeriodDuplicateBlockReason(period);
 
-                        <TableCell>
-                          <div className="flex flex-col gap-0.5">
-                            <span className="font-semibold text-foreground text-xs sm:text-sm">
-                              {period.name}
-                            </span>
-                            {period.description && (
-                              <span className="text-[11px] text-muted-foreground line-clamp-1">
-                                {period.description}
+                      return (
+                        <TableRow key={period.id} className="hover:bg-muted/40 transition-colors">
+                          <TableCell className="pl-5">
+                            <div className="flex flex-col">
+                              <span className="font-mono text-xs font-bold text-foreground">
+                                {period.code}
                               </span>
-                            )}
-                          </div>
-                        </TableCell>
+                              <span className="font-mono text-[11px] text-muted-foreground">
+                                #{period.id}
+                              </span>
+                            </div>
+                          </TableCell>
 
-                        <TableCell>
-                          <div className="flex items-center gap-1.5 text-xs text-foreground">
-                            <CalendarDaysIcon className="size-3.5 text-primary shrink-0" />
-                            <span>
-                              {formatDateOnly(period.start_date)}
-                              {period.end_date && period.end_date !== period.start_date && (
-                                <> - {formatDateOnly(period.end_date)}</>
+                          <TableCell>
+                            <div className="flex flex-col gap-0.5">
+                              <span className="font-semibold text-foreground text-xs sm:text-sm">
+                                {period.name}
+                              </span>
+                              {period.description && (
+                                <span className="text-[11px] text-muted-foreground line-clamp-1">
+                                  {period.description}
+                                </span>
                               )}
-                            </span>
-                          </div>
-                        </TableCell>
+                            </div>
+                          </TableCell>
 
-                        <TableCell>
-                          <div className="flex items-center gap-1.5 text-xs text-foreground">
-                            <ClockIcon className="size-3.5 text-muted-foreground shrink-0" />
-                            <span>{formatDateTime(period.registration_deadline)}</span>
-                          </div>
-                        </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1.5 text-xs text-foreground">
+                              <CalendarDaysIcon className="size-3.5 text-primary shrink-0" />
+                              <span>
+                                {formatDateOnly(period.start_date)}
+                                {period.end_date && period.end_date !== period.start_date && (
+                                  <> - {formatDateOnly(period.end_date)}</>
+                                )}
+                              </span>
+                            </div>
+                          </TableCell>
 
-                        <TableCell className="text-center">
-                          <Badge
-                            variant="outline"
-                            onClick={() => setSelectedPeriodIdForDetail(period.id)}
-                            className="rounded-full px-2.5 py-0.5 text-xs font-medium cursor-pointer hover:bg-muted"
-                            title="Bấm để xem danh sách ca thi con"
-                          >
-                            <LayersIcon className="size-3 mr-1 text-primary" />
-                            {period.session_count ?? 0} ca
-                          </Badge>
-                        </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1.5 text-xs text-foreground">
+                              <ClockIcon className="size-3.5 text-muted-foreground shrink-0" />
+                              <span>{formatDateTime(period.registration_deadline)}</span>
+                            </div>
+                          </TableCell>
 
-                        <TableCell>
-                          <Badge
-                            className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium border inline-flex items-center gap-1.5 w-fit ${statusInfo.badgeClass}`}
-                          >
-                            <span
-                              className={`size-1.5 rounded-full ${statusInfo.dotClass} ${
-                                statusInfo.pulse ? "animate-pulse" : ""
-                              }`}
-                            />
-                            {statusInfo.label}
-                          </Badge>
-                        </TableCell>
-
-                        <TableCell className="text-right pr-5">
-                          <div className="flex items-center justify-end gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              className="rounded-full cursor-pointer hover:bg-muted text-muted-foreground hover:text-foreground"
-                              title="Xem chi tiết đợt thi & ca thi"
+                          <TableCell className="text-center">
+                            <Badge
+                              variant="outline"
                               onClick={() => setSelectedPeriodIdForDetail(period.id)}
+                              className="rounded-full px-2.5 py-0.5 text-xs font-medium cursor-pointer hover:bg-muted"
+                              title="Bấm để xem danh sách ca thi con"
                             >
-                              <EyeIcon className="size-3.5" />
-                              <span className="sr-only">Xem chi tiết</span>
-                            </Button>
+                              <LayersIcon className="size-3 mr-1 text-primary" />
+                              {period.session_count ?? 0} ca
+                            </Badge>
+                          </TableCell>
 
-                            <DropdownMenu>
-                              <DropdownMenuTrigger
-                                render={
-                                  <Button
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    className="rounded-full cursor-pointer hover:bg-muted text-muted-foreground hover:text-foreground"
-                                    aria-label={`Thao tác đợt ${period.code}`}
-                                  />
-                                }
+                          <TableCell>
+                            <Badge
+                              className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium border inline-flex items-center gap-1.5 w-fit ${statusInfo.badgeClass}`}
+                            >
+                              <span
+                                className={`size-1.5 rounded-full ${statusInfo.dotClass} ${statusInfo.pulse ? "animate-pulse" : ""
+                                  }`}
+                              />
+                              {statusInfo.label}
+                            </Badge>
+                          </TableCell>
+
+                          <TableCell className="text-right pr-5">
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                className="rounded-full cursor-pointer hover:bg-muted text-muted-foreground hover:text-foreground"
+                                title="Xem chi tiết đợt thi & ca thi"
+                                onClick={() => setSelectedPeriodIdForDetail(period.id)}
                               >
-                                <MoreHorizontalIcon className="size-4" />
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end" className="w-60 rounded-xl p-1.5 shadow-lg border">
-                                <DropdownMenuLabel className="text-xs text-muted-foreground font-semibold px-2 py-1.5 truncate">
-                                  Đợt thi: {period.code}
-                                </DropdownMenuLabel>
-                                <DropdownMenuGroup>
-                                  <DropdownMenuItem
-                                    className="cursor-pointer text-xs rounded-lg font-medium"
-                                    onClick={() => setSelectedPeriodIdForDetail(period.id)}
-                                  >
-                                    <EyeIcon className="size-3.5 mr-2 text-muted-foreground" />
-                                    Xem chi tiết & ca thi con
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    className="cursor-pointer text-xs rounded-lg font-medium"
-                                    onClick={() =>
-                                      navigator.clipboard?.writeText(period.code).then(() =>
-                                        toast.add({
-                                          type: "info",
-                                          title: "Đã sao chép mã đợt thi",
-                                          description: `Mã: ${period.code}`,
-                                        })
-                                      )
-                                    }
-                                  >
-                                    <CopyIcon className="size-3.5 mr-2 text-muted-foreground" />
-                                    Sao chép mã đợt thi
-                                  </DropdownMenuItem>
-                                </DropdownMenuGroup>
+                                <EyeIcon className="size-3.5" />
+                                <span className="sr-only">Xem chi tiết</span>
+                              </Button>
 
-                                <DropdownMenuSeparator className="my-1" />
-                                <DropdownMenuLabel className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider px-2 py-1">
-                                  Quản lý & Cấu hình
-                                </DropdownMenuLabel>
-                                <DropdownMenuGroup>
-                                  <DropdownMenuItem
-                                    className="cursor-pointer text-xs rounded-lg font-medium"
-                                    onClick={() => setPeriodToEdit(period)}
-                                  >
-                                    <EditIcon className="size-3.5 mr-2 text-primary" />
-                                    Chỉnh sửa thông tin
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    className="cursor-pointer text-xs rounded-lg font-medium text-purple-700 dark:text-purple-400 focus:text-purple-700 focus:bg-purple-50 dark:focus:bg-purple-950/40"
-                                    onClick={() => setPeriodToReschedule(period)}
-                                  >
-                                    <CalendarClockIcon className="size-3.5 mr-2" />
-                                    Dời lịch thi (Bất khả kháng)
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    className="cursor-pointer text-xs rounded-lg font-medium"
-                                    onClick={() => setPeriodToDuplicate(period)}
-                                  >
-                                    <CopyIcon className="size-3.5 mr-2 text-sky-600 dark:text-sky-400" />
-                                    Nhân bản đợt thi (ACID)
-                                  </DropdownMenuItem>
-                                </DropdownMenuGroup>
+                              {canPublish && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  className="rounded-full cursor-pointer hover:bg-emerald-50 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700"
+                                  title="Công bố đợt thi này"
+                                  onClick={() => {
+                                    actionFetcher.submit(
+                                      { intent: "publish-period", period_id: String(period.id) },
+                                      { method: "post" }
+                                    );
+                                  }}
+                                >
+                                  <GlobeIcon className="size-3.5" />
+                                  <span className="sr-only">Công bố đợt thi</span>
+                                </Button>
+                              )}
 
-                                {canCloseEarly && (
-                                  <>
-                                    <DropdownMenuSeparator className="my-1" />
-                                    <DropdownMenuGroup>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger
+                                  render={
+                                    <Button
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      className="rounded-full cursor-pointer hover:bg-muted text-muted-foreground hover:text-foreground"
+                                      aria-label={`Thao tác đợt ${period.code}`}
+                                    />
+                                  }
+                                >
+                                  <MoreHorizontalIcon className="size-4" />
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-60 rounded-xl p-1.5 shadow-lg border">
+                                  <DropdownMenuLabel className="text-xs text-muted-foreground font-semibold px-2 py-1.5 truncate">
+                                    Đợt thi: {period.code}
+                                  </DropdownMenuLabel>
+                                  <DropdownMenuGroup>
+                                    <DropdownMenuItem
+                                      className="cursor-pointer text-xs rounded-lg font-medium"
+                                      onClick={() => setSelectedPeriodIdForDetail(period.id)}
+                                    >
+                                      <EyeIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                      Xem chi tiết & ca thi con
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      className="cursor-pointer text-xs rounded-lg font-medium"
+                                      onClick={() =>
+                                        navigator.clipboard?.writeText(period.code).then(() =>
+                                          toast.add({
+                                            type: "info",
+                                            title: "Đã sao chép mã đợt thi",
+                                            description: `Mã: ${period.code}`,
+                                          })
+                                        )
+                                      }
+                                    >
+                                      <CopyIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                      Sao chép mã đợt thi
+                                    </DropdownMenuItem>
+                                  </DropdownMenuGroup>
+
+                                  <DropdownMenuSeparator className="my-1" />
+                                  <DropdownMenuLabel className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider px-2 py-1">
+                                    Quản lý & Cấu hình
+                                  </DropdownMenuLabel>
+                                  <DropdownMenuGroup>
+                                    <DropdownMenuItem
+                                      disabled={!canEdit || isLocked}
+                                      className="cursor-pointer text-xs rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                                      title={
+                                        lockReason
+                                          ? `${lockReason} Không thể chỉnh sửa.`
+                                          : "Chỉnh sửa thông tin đợt thi"
+                                      }
+                                      onClick={() => {
+                                        if (!canEdit || isLocked) return;
+                                        setPeriodToEdit(period);
+                                      }}
+                                    >
+                                      <EditIcon className="size-3.5 mr-2 text-primary" />
+                                      Chỉnh sửa thông tin
+                                    </DropdownMenuItem>
+
+                                    {canPublish && (
                                       <DropdownMenuItem
-                                        variant="destructive"
+                                        className="cursor-pointer text-xs rounded-lg font-medium text-emerald-700 dark:text-emerald-400 focus:text-emerald-700 focus:bg-emerald-50 dark:focus:bg-emerald-950/40"
+                                        onClick={() => {
+                                          actionFetcher.submit(
+                                            { intent: "publish-period", period_id: String(period.id) },
+                                            { method: "post" }
+                                          );
+                                        }}
+                                      >
+                                        <GlobeIcon className="size-3.5 mr-2" />
+                                        Công bố đợt thi
+                                      </DropdownMenuItem>
+                                    )}
+
+                                    {canUnpublish && (
+                                      <DropdownMenuItem
                                         className="cursor-pointer text-xs rounded-lg font-medium text-amber-700 dark:text-amber-400 focus:text-amber-700 focus:bg-amber-50 dark:focus:bg-amber-950/40"
-                                        onClick={() =>
-                                          setCloseRegTarget({
+                                        onClick={() => {
+                                          actionFetcher.submit(
+                                            { intent: "unpublish-period", period_id: String(period.id) },
+                                            { method: "post" }
+                                          );
+                                        }}
+                                      >
+                                        <FileTextIcon className="size-3.5 mr-2" />
+                                        Hủy công bố (Về bản nháp)
+                                      </DropdownMenuItem>
+                                    )}
+
+                                    {canReopenReg && (
+                                      <DropdownMenuItem
+                                        className="cursor-pointer text-xs rounded-lg font-medium text-emerald-700 dark:text-emerald-400 focus:text-emerald-700 focus:bg-emerald-50 dark:focus:bg-emerald-950/40"
+                                        onClick={() => {
+                                          setReopenTarget({
                                             type: "period",
                                             id: period.id,
                                             title: period.name,
+                                            code: period.code,
+                                            currentDeadline: period.registration_deadline,
+                                            startDate: period.start_date,
+                                          });
+                                        }}
+                                      >
+                                        <RotateCcwIcon className="size-3.5 mr-2" />
+                                        Mở lại cổng đăng ký
+                                      </DropdownMenuItem>
+                                    )}
+
+                                    {canComplete && (
+                                      <DropdownMenuItem
+                                        className="cursor-pointer text-xs rounded-lg font-medium text-slate-700 dark:text-slate-300 focus:bg-slate-100 dark:focus:bg-slate-800"
+                                        onClick={() => {
+                                          actionFetcher.submit(
+                                            { intent: "complete-period", period_id: String(period.id) },
+                                            { method: "post" }
+                                          );
+                                        }}
+                                      >
+                                        <CheckCircle2Icon className="size-3.5 mr-2" />
+                                        Hoàn tất đợt thi
+                                      </DropdownMenuItem>
+                                    )}
+
+                                    <DropdownMenuItem
+                                      disabled={rescheduleBlockReason !== null}
+                                      className="cursor-pointer text-xs rounded-lg font-medium text-purple-700 dark:text-purple-400 focus:text-purple-700 focus:bg-purple-50 dark:focus:bg-purple-950/40 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      title={
+                                        rescheduleBlockReason ??
+                                        "Dời lịch thi do sự kiện bất khả kháng (§4.15)"
+                                      }
+                                      onClick={() => {
+                                        if (rescheduleBlockReason !== null) return;
+                                        setPeriodToReschedule(period);
+                                      }}
+                                    >
+                                      <CalendarClockIcon className="size-3.5 mr-2" />
+                                      Dời lịch thi (Bất khả kháng)
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      disabled={duplicateBlockReason !== null}
+                                      className="cursor-pointer text-xs rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                                      title={
+                                        duplicateBlockReason ??
+                                        "Nhân bản toàn bộ cấu hình đợt thi (ACID) sang đợt mới"
+                                      }
+                                      onClick={() => {
+                                        if (duplicateBlockReason !== null) return;
+                                        setPeriodToDuplicate(period);
+                                      }}
+                                    >
+                                      <CopyIcon className="size-3.5 mr-2 text-sky-600 dark:text-sky-400" />
+                                      Nhân bản đợt thi (ACID)
+                                    </DropdownMenuItem>
+                                  </DropdownMenuGroup>
+
+                                  {isLocked && period.status !== "cancelled" && (
+                                    <>
+                                      <DropdownMenuSeparator className="my-1" />
+                                      <DropdownMenuItem
+                                        disabled
+                                        title={lockReason ?? undefined}
+                                        className="text-xs text-muted-foreground flex items-center gap-1.5 cursor-not-allowed select-none"
+                                      >
+                                        <LockIcon className="size-3.5 text-muted-foreground" />
+                                        {lockReason} (Khóa chỉnh sửa)
+                                      </DropdownMenuItem>
+                                    </>
+                                  )}
+
+                                  {canCloseEarly && (
+                                    <>
+                                      <DropdownMenuSeparator className="my-1" />
+                                      <DropdownMenuGroup>
+                                        <DropdownMenuItem
+                                          variant="destructive"
+                                          className="cursor-pointer text-xs rounded-lg font-medium text-amber-700 dark:text-amber-400 focus:text-amber-700 focus:bg-amber-50 dark:focus:bg-amber-950/40"
+                                          onClick={() =>
+                                            setCloseRegTarget({
+                                              type: "period",
+                                              id: period.id,
+                                              title: period.name,
+                                            })
+                                          }
+                                        >
+                                          <LockIcon className="size-3.5 mr-2" />
+                                          Đóng đăng ký sớm
+                                        </DropdownMenuItem>
+                                      </DropdownMenuGroup>
+                                    </>
+                                  )}
+
+                                  {(canCancel || canDelete) && (
+                                    <>
+                                      <DropdownMenuSeparator className="my-1" />
+                                      <DropdownMenuGroup>
+                                        {canCancel && (
+                                          <DropdownMenuItem
+                                            variant="destructive"
+                                            className="cursor-pointer text-xs rounded-lg font-medium text-destructive focus:text-destructive focus:bg-destructive/10"
+                                            onClick={() => {
+                                              setPeriodToCancel(period);
+                                              setIsPeriodCancelAlertOpen(true);
+                                            }}
+                                          >
+                                            <AlertTriangleIcon className="size-3.5 mr-2" />
+                                            Hủy đợt thi
+                                          </DropdownMenuItem>
+                                        )}
+                                        {canDelete && (
+                                          <DropdownMenuItem
+                                            variant="destructive"
+                                            className="cursor-pointer text-xs rounded-lg font-medium text-destructive focus:text-destructive focus:bg-destructive/10"
+                                            onClick={() => {
+                                              setPeriodToCancel(period);
+                                              setIsPeriodCancelAlertOpen(true);
+                                            }}
+                                          >
+                                            <Trash2Icon className="size-3.5 mr-2" />
+                                            Xóa bản nháp đợt thi
+                                          </DropdownMenuItem>
+                                        )}
+                                      </DropdownMenuGroup>
+                                    </>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+
+                    {visiblePeriods.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={7} className="py-12 text-center">
+                          <div className="flex flex-col items-center justify-center max-w-sm mx-auto text-center gap-2">
+                            <div className="size-12 rounded-full bg-muted/80 flex items-center justify-center text-muted-foreground mb-1">
+                              <LayersIcon className="size-6" />
+                            </div>
+                            <p className="text-base font-semibold text-foreground">
+                              Không tìm thấy đợt thi phù hợp
+                            </p>
+                            <p className="text-xs text-muted-foreground leading-relaxed">
+                              Không có đợt thi nào khớp với từ khóa tìm kiếm hoặc trạng thái đã chọn.
+                            </p>
+                            {hasActivePeriodFilters && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleResetFilters}
+                                className="rounded-full cursor-pointer mt-2 hover:bg-muted text-xs"
+                              >
+                                <RotateCcwIcon className="size-3.5 mr-1.5" />
+                                Xóa bộ lọc tìm kiếm
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Period Pagination */}
+              <div className="flex flex-col items-center justify-between gap-3 border-t bg-card/30 p-4 sm:flex-row">
+                <p className="text-xs text-muted-foreground">
+                  {filteredPeriods.length > 0 ? (
+                    <>
+                      Hiển thị{" "}
+                      <span className="font-semibold text-foreground">
+                        {(currentPeriodPage - 1) * PAGE_SIZE + 1}
+                      </span>{" "}
+                      -{" "}
+                      <span className="font-semibold text-foreground">
+                        {Math.min(currentPeriodPage * PAGE_SIZE, filteredPeriods.length)}
+                      </span>{" "}
+                      trên tổng số{" "}
+                      <span className="font-semibold text-foreground">
+                        {filteredPeriods.length}
+                      </span>{" "}
+                      đợt thi
+                    </>
+                  ) : (
+                    "Không có dữ liệu hiển thị"
+                  )}
+                </p>
+
+                {totalPeriodPages > 1 && (
+                  <Pagination className="mx-0 w-auto">
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          disabled={currentPeriodPage <= 1}
+                          onClick={() => updateParams({ page: String(currentPeriodPage - 1) })}
+                        />
+                      </PaginationItem>
+                      {Array.from({ length: totalPeriodPages }, (_, index) => index + 1).map((item) => (
+                        <PaginationItem key={item}>
+                          <PaginationButton
+                            isActive={item === currentPeriodPage}
+                            onClick={() => updateParams({ page: String(item) })}
+                          >
+                            {item}
+                          </PaginationButton>
+                        </PaginationItem>
+                      ))}
+                      <PaginationItem>
+                        <PaginationNext
+                          disabled={currentPeriodPage >= totalPeriodPages}
+                          onClick={() => updateParams({ page: String(currentPeriodPage + 1) })}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
+                )}
+              </div>
+            </Card>
+          </>
+        ) : (
+          <>
+            {/* ── Metric / Stat Cards ────────────────────────────────────────────── */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {/* Card 1: Tổng ca thi */}
+              <Card
+                onClick={handleResetFilters}
+                className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-primary/40 ${!hasActiveSessionFilters ? "ring-1 ring-primary/30 border-primary/40 bg-primary/5" : ""
+                  }`}
+              >
+                <CardContent className="p-3.5 flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-primary/10 text-primary shrink-0">
+                    <CalendarDaysIcon className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted-foreground truncate">Tổng ca thi</p>
+                    <p className="text-xl font-bold tracking-tight text-foreground">
+                      {sessions.length}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Card 2: Đang mở đăng ký */}
+              <Card
+                onClick={() =>
+                  updateParams({
+                    status: statusFilter === "open" ? null : "open",
+                    page: null,
+                  })
+                }
+                className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-emerald-500/40 ${statusFilter === "open"
+                  ? "ring-1 ring-emerald-500/40 border-emerald-500/40 bg-emerald-500/5"
+                  : ""
+                  }`}
+              >
+                <CardContent className="p-3.5 flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">
+                    <CheckCircle2Icon className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted-foreground truncate">Đang mở</p>
+                    <p className="text-xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
+                      {openCount}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Card 3: Bản nháp */}
+              <Card
+                onClick={() =>
+                  updateParams({
+                    pub_status: pubStatusFilter === "draft" ? null : "draft",
+                    page: null,
+                  })
+                }
+                className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-amber-500/40 ${pubStatusFilter === "draft"
+                  ? "ring-1 ring-amber-500/40 border-amber-500/40 bg-amber-500/5"
+                  : ""
+                  }`}
+              >
+                <CardContent className="p-3.5 flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
+                    <FileTextIcon className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted-foreground truncate">Bản nháp</p>
+                    <p className="text-xl font-bold tracking-tight text-foreground">
+                      {draftCount}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Card 4: Lên lịch */}
+              <Card
+                onClick={() =>
+                  updateParams({
+                    pub_status: pubStatusFilter === "scheduled" ? null : "scheduled",
+                    page: null,
+                  })
+                }
+                className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-sky-500/40 ${pubStatusFilter === "scheduled"
+                  ? "ring-1 ring-sky-500/40 border-sky-500/40 bg-sky-500/5"
+                  : ""
+                  }`}
+              >
+                <CardContent className="p-3.5 flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-sky-500/10 text-sky-600 dark:text-sky-400 shrink-0">
+                    <CalendarClockIcon className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted-foreground truncate">Lên lịch</p>
+                    <p className="text-xl font-bold tracking-tight text-sky-600 dark:text-sky-400">
+                      {scheduledCount}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Card 5: Đã đóng / Hủy */}
+              <Card
+                onClick={() =>
+                  updateParams({
+                    status: statusFilter === "closed" ? null : "closed",
+                    page: null,
+                  })
+                }
+                className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-muted-foreground/40 ${statusFilter === "closed"
+                  ? "ring-1 ring-muted-foreground/40 border-muted-foreground/40 bg-muted/20"
+                  : ""
+                  }`}
+              >
+                <CardContent className="p-3.5 flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
+                    <ClockIcon className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted-foreground truncate">Đóng / Hết hạn</p>
+                    <p className="text-xl font-bold tracking-tight text-foreground">
+                      {closedCount + expiredCount + cancelledCount}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Card 6: Tổng số slot thi */}
+              <Card className="rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all">
+                <CardContent className="p-3.5 flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 shrink-0">
+                    <UsersIcon className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted-foreground truncate">Tổng slot</p>
+                    <p className="text-xl font-bold tracking-tight text-foreground">
+                      {totalCapacity}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* ── Main Data Card: Filters & Table ─────────────────────────────────── */}
+            <Card className="min-w-0 overflow-hidden rounded-2xl border shadow-2xs">
+              <CardHeader className="gap-3.5 border-b bg-card/50 p-4 sm:p-5">
+                {/* Top Row: Title, Counter & Publication Status Tabs */}
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <CardTitle className="text-base sm:text-lg font-bold text-foreground">
+                        Danh sách ca thi HSK
+                      </CardTitle>
+                      <Badge
+                        variant="secondary"
+                        className="rounded-full px-2.5 py-0.5 text-[11px] font-semibold bg-muted text-muted-foreground"
+                      >
+                        {filteredSessions.length} ca thi
+                      </Badge>
+                    </div>
+                    <CardDescription className="text-xs text-muted-foreground mt-0.5">
+                      Hiển thị {filteredSessions.length} kết quả
+                      {hasActiveSessionFilters && sessions.length !== filteredSessions.length
+                        ? ''
+                        : ""}
+                      {" · "}
+                      {PAGE_SIZE} bản ghi mỗi trang
+                    </CardDescription>
+                  </div>
+
+                  {/* Quick Publication Status Tabs */}
+                  <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-full w-fit overflow-x-auto max-w-full">
+                    <button
+                      type="button"
+                      onClick={() => updateParams({ pub_status: null, page: null })}
+                      className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 ${pubStatusFilter === "all"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      Tất cả ({sessions.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateParams({ pub_status: "published", page: null })}
+                      className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${pubStatusFilter === "published"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      <GlobeIcon className="size-3 text-emerald-600 dark:text-emerald-400" />
+                      Công khai (
+                      {
+                        sessions.filter(
+                          (s) => s.status === "open" || (s.exam_session_publication_status ?? "published") === "published"
+                        ).length
+                      }
+                      )
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateParams({ pub_status: "draft", page: null })}
+                      className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${pubStatusFilter === "draft"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      <FileTextIcon className="size-3 text-amber-600 dark:text-amber-400" />
+                      Bản nháp ({draftCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateParams({ pub_status: "scheduled", page: null })}
+                      className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${pubStatusFilter === "scheduled"
+                        ? "bg-background text-foreground shadow-2xs font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      <CalendarClockIcon className="size-3 text-sky-600 dark:text-sky-400" />
+                      Lên lịch ({scheduledCount})
+                    </button>
+                  </div>
+                </div>
+
+                {/* Bottom Row: Search & Filters Toolbar */}
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-2 border-t border-border/50">
+                  {/* Search Input */}
+                  <div className="relative flex-1 min-w-[200px]">
+                    <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={searchInput}
+                      onChange={handleSearchChange}
+                      onKeyDown={handleSearchKeyDown}
+                      placeholder="Tìm mã ca thi, loại kỳ thi HSK..."
+                      className="h-9 rounded-full pl-8.5 pr-8 text-xs placeholder:text-xs bg-background"
+                      aria-label="Tìm kiếm ca thi"
+                    />
+                    {searchInput && (
+                      <button
+                        type="button"
+                        onClick={handleClearSearch}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+                        aria-label="Xóa từ khóa tìm kiếm"
+                      >
+                        <XIcon className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Filter Dropdowns Group */}
+                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                    {/* Lọc Loại kỳ thi */}
+                    <Select
+                      value={examTypeFilter}
+                      onValueChange={(value) =>
+                        updateParams({ exam_type_id: value, page: null })
+                      }
+                    >
+                      <SelectTrigger className="h-9 w-full sm:w-48 rounded-full px-3 text-xs cursor-pointer truncate">
+                        <SelectValue placeholder="Mọi loại kỳ thi">
+                          {(val) => {
+                            const current = val ?? examTypeFilter;
+                            if (!current || current === "all") return "Mọi loại kỳ thi";
+                            const matched = examTypes.find(
+                              (type) => String(type.id) === String(current)
+                            );
+                            return matched ? matched.name : "Mọi loại kỳ thi";
+                          }}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl max-h-64">
+                        <SelectGroup>
+                          <SelectItem value="all" className="cursor-pointer text-xs">
+                            Mọi loại kỳ thi
+                          </SelectItem>
+                          {examTypes.map((type) => (
+                            <SelectItem
+                              key={type.id}
+                              value={String(type.id)}
+                              className="cursor-pointer text-xs"
+                            >
+                              {type.name}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+
+                    {/* Lọc Đợt thi */}
+                    {periods && periods.length > 0 && (
+                      <Select
+                        value={periodFilter}
+                        onValueChange={(value) =>
+                          updateParams({ period_id: value, page: null })
+                        }
+                      >
+                        <SelectTrigger className="h-9 w-full sm:w-44 rounded-full px-3 text-xs cursor-pointer truncate">
+                          <SelectValue placeholder="Mọi đợt thi">
+                            {(val) => {
+                              const current = val ?? periodFilter;
+                              if (!current || current === "all") return "Mọi đợt thi";
+                              const matched = periods.find(
+                                (p) => String(p.id) === String(current)
+                              );
+                              return matched ? matched.code : "Mọi đợt thi";
+                            }}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent className="rounded-xl max-h-64">
+                          <SelectGroup>
+                            <SelectItem value="all" className="cursor-pointer text-xs">
+                              Mọi đợt thi
+                            </SelectItem>
+                            {periods.map((p) => (
+                              <SelectItem
+                                key={p.id}
+                                value={String(p.id)}
+                                className="cursor-pointer text-xs"
+                              >
+                                <span className="font-semibold">{p.code}</span> — {p.name}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    )}
+
+                    {/* Lọc Trạng thái */}
+                    <Select
+                      value={statusFilter}
+                      onValueChange={(value) =>
+                        updateParams({ status: value, page: null })
+                      }
+                    >
+                      <SelectTrigger className="h-9 w-full sm:w-36 rounded-full px-3 text-xs cursor-pointer">
+                        <SelectValue placeholder="Mọi trạng thái">
+                          {(val) => {
+                            const current = val ?? statusFilter;
+                            if (!current || current === "all") return "Mọi trạng thái";
+                            if (current === "open") return "Đang mở";
+                            if (current === "expired") return "Đã hết hạn";
+                            if (current === "closed") return "Đã đóng";
+                            if (current === "cancelled") return "Đã hủy";
+                            return "Mọi trạng thái";
+                          }}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl">
+                        <SelectGroup>
+                          <SelectItem value="all" className="cursor-pointer text-xs">
+                            Mọi trạng thái
+                          </SelectItem>
+                          <SelectItem value="open" className="cursor-pointer text-xs">
+                            Đang mở ({openCount})
+                          </SelectItem>
+                          <SelectItem value="expired" className="cursor-pointer text-xs">
+                            Đã hết hạn ({expiredCount})
+                          </SelectItem>
+                          <SelectItem value="closed" className="cursor-pointer text-xs">
+                            Đã đóng ({closedCount})
+                          </SelectItem>
+                          <SelectItem value="cancelled" className="cursor-pointer text-xs">
+                            Đã hủy ({cancelledCount})
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+
+                    {/* Lọc Buổi thi */}
+                    <Select
+                      value={shiftFilter}
+                      onValueChange={(value) =>
+                        updateParams({ shift: value, page: null })
+                      }
+                    >
+                      <SelectTrigger className="h-9 w-full sm:w-36 rounded-full px-3 text-xs cursor-pointer">
+                        <SelectValue placeholder="Mọi buổi thi">
+                          {(val) => {
+                            const current = val ?? shiftFilter;
+                            if (!current || current === "all") return "Mọi buổi thi";
+                            if (current === "morning") return "Buổi sáng (08:30)";
+                            if (current === "afternoon") return "Buổi chiều (13:30)";
+                            return "Mọi buổi thi";
+                          }}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl">
+                        <SelectGroup>
+                          <SelectItem value="all" className="cursor-pointer text-xs">
+                            Mọi buổi thi
+                          </SelectItem>
+                          <SelectItem value="morning" className="cursor-pointer text-xs">
+                            Buổi sáng (08:30)
+                          </SelectItem>
+                          <SelectItem value="afternoon" className="cursor-pointer text-xs">
+                            Buổi chiều (13:30)
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+
+                    {/* Nút Xóa lọc nếu có lọc */}
+                    {hasActiveSessionFilters && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleResetFilters}
+                        className="h-9 rounded-full px-3 text-xs text-muted-foreground hover:text-foreground cursor-pointer hover:bg-muted shrink-0"
+                      >
+                        <RotateCcwIcon className="size-3.5 mr-1" />
+                        Đặt lại
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+
+              {/* Table Container */}
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/30 hover:bg-muted/30 border-b">
+                      <TableHead className="w-[85px] py-3 text-xs font-semibold text-muted-foreground pl-5">
+                        Mã ca
+                      </TableHead>
+                      <TableHead className="min-w-[220px] py-3 text-xs font-semibold text-muted-foreground">
+                        Loại kỳ thi
+                      </TableHead>
+                      <TableHead className="min-w-[200px] py-3 text-xs font-semibold text-muted-foreground">
+                        Lịch thi & Ca thi
+                      </TableHead>
+                      <TableHead className="min-w-[110px] py-3 text-xs font-semibold text-muted-foreground">
+                        Số slot
+                      </TableHead>
+                      <TableHead className="min-w-[120px] py-3 text-xs font-semibold text-muted-foreground">
+                        Lệ phí
+                      </TableHead>
+                      <TableHead className="min-w-[130px] py-3 text-xs font-semibold text-muted-foreground">
+                        Trạng thái
+                      </TableHead>
+                      <TableHead className="w-[90px] py-3 text-xs font-semibold text-muted-foreground text-right pr-5">
+                        Thao tác
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {visibleSessions.map((session) => {
+                      const isExpired = isSessionExpired(session);
+                      const type = examTypes.find((item) => item.id === session.exam_type_id);
+                      const shiftInfo = getShiftDetails(session.shift);
+                      const parentPeriod = session.period_id
+                        ? periods.find((item) => item.id === session.period_id)
+                        : undefined;
+                      const statusInfo = getSessionStatusDetails(session.status, session.closed_reason);
+                      const lockReason = getSessionLockReason(session, parentPeriod);
+                      const isLocked = lockReason !== null;
+                      const canEdit = canSession(session, "edit", parentPeriod);
+                      const canSchedule = canSession(session, "schedule_publish", parentPeriod);
+                      const canPublish = canSession(session, "publish", parentPeriod);
+                      const canUnpublish = canSession(session, "unpublish", parentPeriod);
+                      const canCloseEarly = canSession(session, "close_registration", parentPeriod);
+                      const canReopenReg = canSession(session, "reopen_registration", parentPeriod);
+                      const canCancel = canSession(session, "cancel", parentPeriod);
+                      const canDelete = canSession(session, "delete", parentPeriod);
+                      const ShiftIcon = shiftInfo.icon;
+
+                      return (
+                        <TableRow
+                          key={session.id}
+                          className="hover:bg-muted/40 transition-colors"
+                        >
+                          {/* Mã ca */}
+                          <TableCell className="pl-5 font-mono text-xs font-medium text-muted-foreground">
+                            #{session.id}
+                          </TableCell>
+
+                          {/* Loại kỳ thi & Tên ca thi */}
+                          <TableCell>
+                            <div className="flex flex-col gap-0.5">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-semibold text-foreground text-xs sm:text-sm">
+                                  {session.name ? session.name : (type?.name ?? `Loại thi #${session.exam_type_id}`)}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {type?.name && session.name ? (
+                                  <span className="text-[11px] font-medium text-primary">
+                                    {type.name}
+                                  </span>
+                                ) : null}
+                                {type?.code ? (
+                                  <Badge
+                                    variant="outline"
+                                    className="rounded-full px-1.5 py-0 text-[10px] font-medium border-border/80"
+                                  >
+                                    {type.code}
+                                  </Badge>
+                                ) : null}
+                                {type?.description ? (
+                                  <span className="text-[11px] text-muted-foreground line-clamp-1">
+                                    {type.description}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </div>
+                          </TableCell>
+
+                          {/* Lịch thi & Ca thi */}
+                          <TableCell>
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-center gap-1.5 font-medium text-xs sm:text-sm text-foreground">
+                                <CalendarIcon className="size-3.5 text-muted-foreground shrink-0" />
+                                <span>{formatDateOnly(session.date)}</span>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <Badge
+                                  variant="outline"
+                                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium border flex items-center gap-1 ${shiftInfo.className}`}
+                                >
+                                  <ShiftIcon className="size-3 shrink-0" />
+                                  {shiftInfo.label}
+                                </Badge>
+                                <span className="text-[11px] text-muted-foreground">
+                                  Hạn: {formatDateTime(session.registration_deadline, false)}
+                                </span>
+                              </div>
+                            </div>
+                          </TableCell>
+
+                          {/* Số slot */}
+                          <TableCell>
+                            {session.capacity != null ? (
+                              <div className="flex items-center gap-1 text-xs sm:text-sm font-medium text-foreground">
+                                <UsersIcon className="size-3.5 text-muted-foreground shrink-0" />
+                                <span>{session.capacity}</span>
+                                <span className="text-xs text-muted-foreground font-normal">
+                                  slot
+                                </span>
+                              </div>
+                            ) : (
+                              <Badge
+                                variant="outline"
+                                className="rounded-full px-2 py-0.5 text-[10px] font-medium border-amber-300 bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300"
+                              >
+                                Chưa đặt slot
+                              </Badge>
+                            )}
+                          </TableCell>
+
+                          {/* Lệ phí */}
+                          <TableCell className="font-semibold text-xs sm:text-sm tabular-nums text-foreground">
+                            {formatCurrency(session.fee)}
+                          </TableCell>
+
+                          {/* Trạng thái */}
+                          <TableCell>
+                            <div className="flex flex-col gap-0.5">
+                              <Badge
+                                className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium border inline-flex items-center gap-1.5 w-fit ${statusInfo.badgeClass}`}
+                                title={lockReason ?? undefined}
+                              >
+                                <span
+                                  className={`size-1.5 rounded-full ${statusInfo.dotClass} ${statusInfo.pulse ? "animate-pulse" : ""
+                                    }`}
+                                />
+                                {statusInfo.label}
+                              </Badge>
+                              {statusInfo.subLabel && (
+                                <span className="text-[10px] text-muted-foreground ml-1">
+                                  {statusInfo.subLabel}
+                                </span>
+                              )}
+                            </div>
+                          </TableCell>
+
+                          {/* Thao tác */}
+                          <TableCell className="text-right pr-5">
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                className="rounded-full cursor-pointer hover:bg-muted text-muted-foreground hover:text-foreground"
+                                title="Xem chi tiết ca thi"
+                                onClick={() => {
+                                  setSelectedSessionForDetail(session);
+                                  setIsDetailOpen(true);
+                                }}
+                              >
+                                <EyeIcon className="size-3.5" />
+                                <span className="sr-only">Xem chi tiết</span>
+                              </Button>
+
+                              {canSchedule && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  className="rounded-full cursor-pointer hover:bg-sky-50 text-sky-600 dark:text-sky-400 hover:text-sky-700"
+                                  title={
+                                    session.status === "draft"
+                                      ? "Lên lịch công khai ca thi"
+                                      : "Chỉnh sửa lịch hẹn công khai"
+                                  }
+                                  onClick={() => handleOpenPublishSchedule(session)}
+                                >
+                                  <CalendarClockIcon className="size-3.5" />
+                                  <span className="sr-only">Lịch công khai</span>
+                                </Button>
+                              )}
+
+                              {parentPeriod?.status === "draft" &&
+                                (session.status === "draft" || session.status === "scheduled") && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    className="rounded-full cursor-pointer hover:bg-amber-50 text-amber-600 dark:text-amber-400"
+                                    title={`Đợt thi "${parentPeriod.name}" đang là Bản nháp. Nhấn để chuyển sang công bố đợt thi trước.`}
+                                    onClick={() => {
+                                      handleTabChange("periods");
+                                      toast.add({
+                                        type: "warning",
+                                        title: "Cần công bố đợt thi trước",
+                                        description: `Đợt thi "${parentPeriod.name}" (mã: ${parentPeriod.code}) đang ở trạng thái Bản nháp. Hãy công bố đợt thi trước khi công khai ca thi này.`,
+                                      });
+                                    }}
+                                  >
+                                    <GlobeIcon className="size-3.5" />
+                                    <span className="sr-only">Cần công bố đợt thi trước</span>
+                                  </Button>
+                                )}
+
+                              <DropdownMenu>
+                                <DropdownMenuTrigger
+                                  render={
+                                    <Button
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      className="rounded-full cursor-pointer hover:bg-muted text-muted-foreground hover:text-foreground"
+                                      aria-label={`Thao tác ca ${session.id}`}
+                                    />
+                                  }
+                                >
+                                  <MoreHorizontalIcon className="size-4" />
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-56 rounded-xl p-1.5 shadow-lg border">
+                                  <DropdownMenuLabel className="text-xs text-muted-foreground font-semibold px-2 py-1.5 truncate">
+                                    Ca thi #{session.id}
+                                  </DropdownMenuLabel>
+                                  <DropdownMenuGroup>
+                                    <DropdownMenuItem
+                                      className="cursor-pointer text-xs rounded-lg font-medium"
+                                      onClick={() => {
+                                        setSelectedSessionForDetail(session);
+                                        setIsDetailOpen(true);
+                                      }}
+                                    >
+                                      <EyeIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                      Xem chi tiết ca thi
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      className="cursor-pointer text-xs rounded-lg font-medium"
+                                      onClick={() =>
+                                        navigator.clipboard
+                                          ?.writeText(String(session.id))
+                                          .then(() =>
+                                            toast.add({
+                                              type: "info",
+                                              title: "Đã sao chép mã ca thi",
+                                              description: `Mã ca: #${session.id}`,
+                                            })
+                                          )
+                                      }
+                                    >
+                                      <CopyIcon className="size-3.5 mr-2 text-muted-foreground" />
+                                      Sao chép mã ca thi
+                                    </DropdownMenuItem>
+                                  </DropdownMenuGroup>
+
+                                  <DropdownMenuSeparator className="my-1" />
+                                  <DropdownMenuLabel className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider px-2 py-1">
+                                    Chỉnh sửa & Điều chỉnh
+                                  </DropdownMenuLabel>
+                                  <DropdownMenuGroup>
+                                    <DropdownMenuItem
+                                      disabled={!canEdit}
+                                      title={
+                                        !canEdit
+                                          ? lockReason ?? "Ca thi không cho phép chỉnh sửa ở trạng thái hiện tại"
+                                          : "Chỉnh sửa ca thi"
+                                      }
+                                      className="cursor-pointer text-xs rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                                      onClick={() => {
+                                        if (!canEdit) return;
+                                        setSessionToEdit(session);
+                                      }}
+                                    >
+                                      <EditIcon className="size-3.5 mr-2 text-primary" />
+                                      Chỉnh sửa ca thi
+                                    </DropdownMenuItem>
+                                    {canCloseEarly && (
+                                      <DropdownMenuItem
+                                        className="cursor-pointer text-xs rounded-lg font-medium text-amber-700 dark:text-amber-400 focus:text-amber-700 focus:bg-amber-50 dark:focus:bg-amber-950/40"
+                                        onClick={() =>
+                                          setCloseRegTarget({
+                                            type: "session",
+                                            id: session.id,
+                                            title: `Ca thi #${session.id}`,
                                           })
                                         }
                                       >
                                         <LockIcon className="size-3.5 mr-2" />
                                         Đóng đăng ký sớm
                                       </DropdownMenuItem>
-                                    </DropdownMenuGroup>
-                                  </>
-                                )}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
+                                    )}
+                                    {canReopenReg && (
+                                      <DropdownMenuItem
+                                        className="cursor-pointer text-xs rounded-lg font-medium text-emerald-700 dark:text-emerald-400 focus:text-emerald-700 focus:bg-emerald-50 dark:focus:bg-emerald-950/40"
+                                        onClick={() => {
+                                          setReopenTarget({
+                                            type: "session",
+                                            id: session.id,
+                                            title: session.name || `Ca thi #${session.id}`,
+                                            currentDeadline: session.registration_deadline,
+                                            closedReason: session.closed_reason,
+                                            startDate: session.date,
+                                          });
+                                        }}
+                                      >
+                                        <RotateCcwIcon className="size-3.5 mr-2" />
+                                        Mở lại cổng đăng ký
+                                      </DropdownMenuItem>
+                                    )}
+                                  </DropdownMenuGroup>
+
+                                  {/* Khối Phát hành & Lịch */}
+                                  {(canSchedule || canPublish || canUnpublish || session.status === "open") && (
+                                    <>
+                                      <DropdownMenuSeparator className="my-1" />
+                                      <DropdownMenuLabel className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider px-2 py-1">
+                                        Phát hành & Công khai
+                                      </DropdownMenuLabel>
+                                      <DropdownMenuGroup>
+                                        {canSchedule && (
+                                          <DropdownMenuItem
+                                            className="cursor-pointer text-xs rounded-lg font-medium text-sky-700 dark:text-sky-400 focus:text-sky-700 focus:bg-sky-50 dark:focus:bg-sky-950/40"
+                                            onClick={() => handleOpenPublishSchedule(session)}
+                                          >
+                                            <CalendarClockIcon className="size-3.5 mr-2" />
+                                            {session.status === "scheduled"
+                                              ? "Chỉnh sửa lịch hẹn"
+                                              : "Lên lịch công khai"}
+                                          </DropdownMenuItem>
+                                        )}
+
+                                        {canPublish && (
+                                          <DropdownMenuItem
+                                            className="cursor-pointer text-xs rounded-lg font-medium text-emerald-700 dark:text-emerald-400 focus:text-emerald-700 focus:bg-emerald-50 dark:focus:bg-emerald-950/40"
+                                            onClick={() => handleOpenPublishConfirm(session)}
+                                          >
+                                            <GlobeIcon className="size-3.5 mr-2" />
+                                            Công khai ngay
+                                          </DropdownMenuItem>
+                                        )}
+
+                                        {canUnpublish && (
+                                          <DropdownMenuItem
+                                            className="cursor-pointer text-xs rounded-lg font-medium text-amber-700 dark:text-amber-400 focus:text-amber-700 focus:bg-amber-50 dark:focus:bg-amber-950/40"
+                                            onClick={() => {
+                                              actionFetcher.submit(
+                                                {
+                                                  intent: "unpublish-session",
+                                                  session_id: String(session.id),
+                                                  session_status: session.status,
+                                                },
+                                                { method: "post" }
+                                              );
+                                            }}
+                                          >
+                                            <FileTextIcon className="size-3.5 mr-2" />
+                                            Hủy công bố (Về bản nháp)
+                                          </DropdownMenuItem>
+                                        )}
+
+                                        {session.status === "open" && (
+                                          <DropdownMenuItem
+                                            disabled
+                                            className="text-xs rounded-lg font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/20 cursor-default opacity-90 select-none"
+                                          >
+                                            <CheckCircle2Icon className="size-3.5 mr-2 text-emerald-600 dark:text-emerald-400" />
+                                            Đang công khai trên hệ thống
+                                          </DropdownMenuItem>
+                                        )}
+                                      </DropdownMenuGroup>
+                                    </>
+                                  )}
+
+                                  {/* Hướng dẫn công bố Đợt thi cha khi Đợt thi còn ở trạng thái nháp */}
+                                  {parentPeriod?.status === "draft" &&
+                                    (session.status === "draft" || session.status === "scheduled") && (
+                                      <>
+                                        <DropdownMenuSeparator className="my-1" />
+                                        <DropdownMenuLabel className="text-[10px] text-amber-600 dark:text-amber-400 font-bold uppercase tracking-wider px-2 py-1">
+                                          Cần công bố đợt thi trước
+                                        </DropdownMenuLabel>
+                                        <DropdownMenuGroup>
+                                          <DropdownMenuItem
+                                            className="cursor-pointer text-xs rounded-lg font-medium text-emerald-700 dark:text-emerald-400 focus:text-emerald-700 focus:bg-emerald-50 dark:focus:bg-emerald-950/40"
+                                            onClick={() => {
+                                              handleTabChange("periods");
+                                              toast.add({
+                                                type: "info",
+                                                title: "Chuyển sang Quản lý Đợt thi",
+                                                description: `Đợt thi "${parentPeriod.name}" đang là Bản nháp. Nhấn "Công bố đợt thi" tại đây trước khi công khai ca thi con.`,
+                                              });
+                                            }}
+                                          >
+                                            <GlobeIcon className="size-3.5 mr-2" />
+                                            Công bố đợt thi #{parentPeriod.id} trước
+                                          </DropdownMenuItem>
+                                        </DropdownMenuGroup>
+                                      </>
+                                    )}
+
+                                  {/* Khối Vùng nguy hiểm: Hủy hoặc Xóa ca thi */}
+                                  {(canCancel || canDelete) && (
+                                    <>
+                                      <DropdownMenuSeparator className="my-1" />
+                                      <DropdownMenuGroup>
+                                        {canCancel && (
+                                          <DropdownMenuItem
+                                            variant="destructive"
+                                            className="cursor-pointer text-xs rounded-lg font-medium text-destructive focus:text-destructive focus:bg-destructive/10"
+                                            onClick={() => {
+                                              setSessionToCancel(session);
+                                              setIsCancelAlertOpen(true);
+                                            }}
+                                          >
+                                            <XCircleIcon className="size-3.5 mr-2" />
+                                            Hủy ca thi
+                                          </DropdownMenuItem>
+                                        )}
+                                        {canDelete && (
+                                          <DropdownMenuItem
+                                            variant="destructive"
+                                            className="cursor-pointer text-xs rounded-lg font-medium text-destructive focus:text-destructive focus:bg-destructive/10"
+                                            onClick={() => {
+                                              setSessionToCancel(session);
+                                              setIsCancelAlertOpen(true);
+                                            }}
+                                          >
+                                            <Trash2Icon className="size-3.5 mr-2" />
+                                            Xóa bản nháp
+                                          </DropdownMenuItem>
+                                        )}
+                                      </DropdownMenuGroup>
+                                    </>
+                                  )}
+
+                                  {isLocked && (
+                                    <>
+                                      <DropdownMenuSeparator className="my-1" />
+                                      <DropdownMenuItem
+                                        disabled
+                                        title={lockReason ?? undefined}
+                                        className="text-xs text-muted-foreground flex items-center gap-1.5 cursor-not-allowed select-none"
+                                      >
+                                        <LockIcon className="size-3.5 text-muted-foreground" />
+                                        {lockReason}
+                                      </DropdownMenuItem>
+                                    </>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+
+                    {/* Empty state */}
+                    {visibleSessions.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={7} className="py-12 text-center">
+                          <div className="flex flex-col items-center justify-center max-w-sm mx-auto text-center gap-2">
+                            <div className="size-12 rounded-full bg-muted/80 flex items-center justify-center text-muted-foreground mb-1">
+                              <CalendarDaysIcon className="size-6" />
+                            </div>
+                            <p className="text-base font-semibold text-foreground">
+                              Không tìm thấy ca thi phù hợp
+                            </p>
+                            <p className="text-xs text-muted-foreground leading-relaxed">
+                              Không có ca thi nào khớp với từ khóa tìm kiếm hoặc các tiêu chí bộ lọc đã chọn.
+                            </p>
+                            {hasActiveSessionFilters && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleResetFilters}
+                                className="rounded-full cursor-pointer mt-2 hover:bg-muted text-xs"
+                              >
+                                <RotateCcwIcon className="size-3.5 mr-1.5" />
+                                Xóa bộ lọc tìm kiếm
+                              </Button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
-                    );
-                  })}
-
-                  {visiblePeriods.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={7} className="py-12 text-center">
-                        <div className="flex flex-col items-center justify-center max-w-sm mx-auto text-center gap-2">
-                          <div className="size-12 rounded-full bg-muted/80 flex items-center justify-center text-muted-foreground mb-1">
-                            <LayersIcon className="size-6" />
-                          </div>
-                          <p className="text-base font-semibold text-foreground">
-                            Không tìm thấy đợt thi phù hợp
-                          </p>
-                          <p className="text-xs text-muted-foreground leading-relaxed">
-                            Không có đợt thi nào khớp với từ khóa tìm kiếm hoặc trạng thái đã chọn.
-                          </p>
-                          {hasActivePeriodFilters && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={handleResetFilters}
-                              className="rounded-full cursor-pointer mt-2 hover:bg-muted text-xs"
-                            >
-                              <RotateCcwIcon className="size-3.5 mr-1.5" />
-                              Xóa bộ lọc tìm kiếm
-                            </Button>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-
-            {/* Period Pagination */}
-            <div className="flex flex-col items-center justify-between gap-3 border-t bg-card/30 p-4 sm:flex-row">
-              <p className="text-xs text-muted-foreground">
-                {filteredPeriods.length > 0 ? (
-                  <>
-                    Hiển thị{" "}
-                    <span className="font-semibold text-foreground">
-                      {(currentPeriodPage - 1) * PAGE_SIZE + 1}
-                    </span>{" "}
-                    -{" "}
-                    <span className="font-semibold text-foreground">
-                      {Math.min(currentPeriodPage * PAGE_SIZE, filteredPeriods.length)}
-                    </span>{" "}
-                    trên tổng số{" "}
-                    <span className="font-semibold text-foreground">
-                      {filteredPeriods.length}
-                    </span>{" "}
-                    đợt thi
-                  </>
-                ) : (
-                  "Không có dữ liệu hiển thị"
-                )}
-              </p>
-
-              {totalPeriodPages > 1 && (
-                <Pagination className="mx-0 w-auto">
-                  <PaginationContent>
-                    <PaginationItem>
-                      <PaginationPrevious
-                        disabled={currentPeriodPage <= 1}
-                        onClick={() => updateParams({ page: String(currentPeriodPage - 1) })}
-                      />
-                    </PaginationItem>
-                    {Array.from({ length: totalPeriodPages }, (_, index) => index + 1).map((item) => (
-                      <PaginationItem key={item}>
-                        <PaginationButton
-                          isActive={item === currentPeriodPage}
-                          onClick={() => updateParams({ page: String(item) })}
-                        >
-                          {item}
-                        </PaginationButton>
-                      </PaginationItem>
-                    ))}
-                    <PaginationItem>
-                      <PaginationNext
-                        disabled={currentPeriodPage >= totalPeriodPages}
-                        onClick={() => updateParams({ page: String(currentPeriodPage + 1) })}
-                      />
-                    </PaginationItem>
-                  </PaginationContent>
-                </Pagination>
-              )}
-            </div>
-          </Card>
-        </>
-      ) : (
-        <>
-          {/* ── Metric / Stat Cards ────────────────────────────────────────────── */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            {/* Card 1: Tổng ca thi */}
-            <Card
-              onClick={handleResetFilters}
-              className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-primary/40 ${
-                !hasActiveSessionFilters ? "ring-1 ring-primary/30 border-primary/40 bg-primary/5" : ""
-              }`}
-            >
-              <CardContent className="p-3.5 flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-primary/10 text-primary shrink-0">
-                  <CalendarDaysIcon className="size-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[11px] text-muted-foreground truncate">Tổng ca thi</p>
-                  <p className="text-xl font-bold tracking-tight text-foreground">
-                    {sessions.length}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-
-        {/* Card 2: Đang mở đăng ký */}
-        <Card
-          onClick={() =>
-            updateParams({
-              status: statusFilter === "open" ? null : "open",
-              page: null,
-            })
-          }
-          className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-emerald-500/40 ${statusFilter === "open"
-            ? "ring-1 ring-emerald-500/40 border-emerald-500/40 bg-emerald-500/5"
-            : ""
-            }`}
-        >
-          <CardContent className="p-3.5 flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">
-              <CheckCircle2Icon className="size-4" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[11px] text-muted-foreground truncate">Đang mở</p>
-              <p className="text-xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
-                {openCount}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Card 3: Bản nháp */}
-        <Card
-          onClick={() =>
-            updateParams({
-              pub_status: pubStatusFilter === "draft" ? null : "draft",
-              page: null,
-            })
-          }
-          className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-amber-500/40 ${pubStatusFilter === "draft"
-            ? "ring-1 ring-amber-500/40 border-amber-500/40 bg-amber-500/5"
-            : ""
-            }`}
-        >
-          <CardContent className="p-3.5 flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
-              <FileTextIcon className="size-4" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[11px] text-muted-foreground truncate">Bản nháp</p>
-              <p className="text-xl font-bold tracking-tight text-foreground">
-                {draftCount}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Card 4: Lên lịch */}
-        <Card
-          onClick={() =>
-            updateParams({
-              pub_status: pubStatusFilter === "scheduled" ? null : "scheduled",
-              page: null,
-            })
-          }
-          className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-sky-500/40 ${pubStatusFilter === "scheduled"
-            ? "ring-1 ring-sky-500/40 border-sky-500/40 bg-sky-500/5"
-            : ""
-            }`}
-        >
-          <CardContent className="p-3.5 flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-sky-500/10 text-sky-600 dark:text-sky-400 shrink-0">
-              <CalendarClockIcon className="size-4" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[11px] text-muted-foreground truncate">Lên lịch</p>
-              <p className="text-xl font-bold tracking-tight text-sky-600 dark:text-sky-400">
-                {scheduledCount}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Card 5: Đã đóng / Hủy */}
-        <Card
-          onClick={() =>
-            updateParams({
-              status: statusFilter === "closed" ? null : "closed",
-              page: null,
-            })
-          }
-          className={`rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all cursor-pointer hover:border-muted-foreground/40 ${statusFilter === "closed"
-            ? "ring-1 ring-muted-foreground/40 border-muted-foreground/40 bg-muted/20"
-            : ""
-            }`}
-        >
-          <CardContent className="p-3.5 flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
-              <ClockIcon className="size-4" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[11px] text-muted-foreground truncate">Đóng / Hết hạn</p>
-              <p className="text-xl font-bold tracking-tight text-foreground">
-                {closedCount + expiredCount + cancelledCount}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Card 6: Tổng số slot thi */}
-        <Card className="rounded-2xl border bg-card/70 shadow-2xs hover:shadow-xs transition-all">
-          <CardContent className="p-3.5 flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 shrink-0">
-              <UsersIcon className="size-4" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[11px] text-muted-foreground truncate">Tổng slot</p>
-              <p className="text-xl font-bold tracking-tight text-foreground">
-                {totalCapacity}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* ── Main Data Card: Filters & Table ─────────────────────────────────── */}
-      <Card className="min-w-0 overflow-hidden rounded-2xl border shadow-2xs">
-        <CardHeader className="gap-3.5 border-b bg-card/50 p-4 sm:p-5">
-          {/* Top Row: Title, Counter & Publication Status Tabs */}
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <CardTitle className="text-base sm:text-lg font-bold text-foreground">
-                  Danh sách ca thi HSK
-                </CardTitle>
-                <Badge
-                  variant="secondary"
-                  className="rounded-full px-2.5 py-0.5 text-[11px] font-semibold bg-muted text-muted-foreground"
-                >
-                  {filteredSessions.length} ca thi
-                </Badge>
+                    )}
+                  </TableBody>
+                </Table>
               </div>
-              <CardDescription className="text-xs text-muted-foreground mt-0.5">
-                Hiển thị {filteredSessions.length} kết quả
-                {hasActiveSessionFilters && sessions.length !== filteredSessions.length
-                  ? ''
-                  : ""}
-                {" · "}
-                {PAGE_SIZE} bản ghi mỗi trang
-              </CardDescription>
-            </div>
 
-            {/* Quick Publication Status Tabs */}
-            <div className="flex items-center gap-1 bg-muted/60 p-1 rounded-full w-fit overflow-x-auto max-w-full">
-              <button
-                type="button"
-                onClick={() => updateParams({ pub_status: null, page: null })}
-                className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 ${pubStatusFilter === "all"
-                  ? "bg-background text-foreground shadow-2xs font-semibold"
-                  : "text-muted-foreground hover:text-foreground"
-                  }`}
-              >
-                Tất cả ({sessions.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => updateParams({ pub_status: "published", page: null })}
-                className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${pubStatusFilter === "published"
-                  ? "bg-background text-foreground shadow-2xs font-semibold"
-                  : "text-muted-foreground hover:text-foreground"
-                  }`}
-              >
-                <GlobeIcon className="size-3 text-emerald-600 dark:text-emerald-400" />
-                Công khai (
-                {
-                  sessions.filter(
-                    (s) => (s.exam_session_publication_status ?? "published") === "published"
-                  ).length
-                }
-                )
-              </button>
-              <button
-                type="button"
-                onClick={() => updateParams({ pub_status: "draft", page: null })}
-                className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${pubStatusFilter === "draft"
-                  ? "bg-background text-foreground shadow-2xs font-semibold"
-                  : "text-muted-foreground hover:text-foreground"
-                  }`}
-              >
-                <FileTextIcon className="size-3 text-amber-600 dark:text-amber-400" />
-                Bản nháp ({draftCount})
-              </button>
-              <button
-                type="button"
-                onClick={() => updateParams({ pub_status: "scheduled", page: null })}
-                className={`px-3 py-1 text-xs rounded-full cursor-pointer transition-all font-medium shrink-0 flex items-center gap-1.5 ${pubStatusFilter === "scheduled"
-                  ? "bg-background text-foreground shadow-2xs font-semibold"
-                  : "text-muted-foreground hover:text-foreground"
-                  }`}
-              >
-                <CalendarClockIcon className="size-3 text-sky-600 dark:text-sky-400" />
-                Lên lịch ({scheduledCount})
-              </button>
-            </div>
-          </div>
+              {/* ── Pagination (Tuân thủ Project Rules 99-101) ────────────────────── */}
+              <div className="flex flex-col items-center justify-between gap-3 border-t bg-card/30 p-4 sm:flex-row">
+                <p className="text-xs text-muted-foreground">
+                  {filteredSessions.length > 0 ? (
+                    <>
+                      Hiển thị{" "}
+                      <span className="font-semibold text-foreground">
+                        {(currentSessionPage - 1) * PAGE_SIZE + 1}
+                      </span>{" "}
+                      -{" "}
+                      <span className="font-semibold text-foreground">
+                        {Math.min(currentSessionPage * PAGE_SIZE, filteredSessions.length)}
+                      </span>{" "}
+                      trên tổng số{" "}
+                      <span className="font-semibold text-foreground">
+                        {filteredSessions.length}
+                      </span>{" "}
+                      ca thi
+                    </>
+                  ) : (
+                    "Không có dữ liệu hiển thị"
+                  )}
+                </p>
 
-          {/* Bottom Row: Search & Filters Toolbar */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-2 border-t border-border/50">
-            {/* Search Input */}
-            <div className="relative flex-1 min-w-[200px]">
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={query}
-                onChange={(event) =>
-                  updateParams({ q: event.target.value, page: null })
-                }
-                placeholder="Tìm mã ca thi, loại kỳ thi HSK..."
-                className="h-9 rounded-full pl-8.5 pr-8 text-xs placeholder:text-xs bg-background"
-                aria-label="Tìm kiếm ca thi"
-              />
-              {query && (
-                <button
-                  type="button"
-                  onClick={() => updateParams({ q: null, page: null })}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
-                  aria-label="Xóa từ khóa tìm kiếm"
-                >
-                  <XIcon className="size-3.5" />
-                </button>
-              )}
-            </div>
-
-            {/* Filter Dropdowns Group */}
-            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-              {/* Lọc Loại kỳ thi */}
-              <Select
-                value={examTypeFilter}
-                onValueChange={(value) =>
-                  updateParams({ exam_type_id: value, page: null })
-                }
-              >
-                <SelectTrigger className="h-9 w-full sm:w-48 rounded-full px-3 text-xs cursor-pointer truncate">
-                  <SelectValue placeholder="Mọi loại kỳ thi">
-                    {(val) => {
-                      const current = val ?? examTypeFilter;
-                      if (!current || current === "all") return "Mọi loại kỳ thi";
-                      const matched = examTypes.find(
-                        (type) => String(type.id) === String(current)
-                      );
-                      return matched ? matched.name : "Mọi loại kỳ thi";
-                    }}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent className="rounded-xl max-h-64">
-                  <SelectGroup>
-                    <SelectItem value="all" className="cursor-pointer text-xs">
-                      Mọi loại kỳ thi
-                    </SelectItem>
-                    {examTypes.map((type) => (
-                      <SelectItem
-                        key={type.id}
-                        value={String(type.id)}
-                        className="cursor-pointer text-xs"
-                      >
-                        {type.name}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-
-              {/* Lọc Đợt thi */}
-              {periods && periods.length > 0 && (
-                <Select
-                  value={periodFilter}
-                  onValueChange={(value) =>
-                    updateParams({ period_id: value, page: null })
-                  }
-                >
-                  <SelectTrigger className="h-9 w-full sm:w-44 rounded-full px-3 text-xs cursor-pointer truncate">
-                    <SelectValue placeholder="Mọi đợt thi">
-                      {(val) => {
-                        const current = val ?? periodFilter;
-                        if (!current || current === "all") return "Mọi đợt thi";
-                        const matched = periods.find(
-                          (p) => String(p.id) === String(current)
-                        );
-                        return matched ? matched.code : "Mọi đợt thi";
-                      }}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent className="rounded-xl max-h-64">
-                    <SelectGroup>
-                      <SelectItem value="all" className="cursor-pointer text-xs">
-                        Mọi đợt thi
-                      </SelectItem>
-                      {periods.map((p) => (
-                        <SelectItem
-                          key={p.id}
-                          value={String(p.id)}
-                          className="cursor-pointer text-xs"
-                        >
-                          <span className="font-semibold">{p.code}</span> — {p.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              )}
-
-              {/* Lọc Trạng thái */}
-              <Select
-                value={statusFilter}
-                onValueChange={(value) =>
-                  updateParams({ status: value, page: null })
-                }
-              >
-                <SelectTrigger className="h-9 w-full sm:w-36 rounded-full px-3 text-xs cursor-pointer">
-                  <SelectValue placeholder="Mọi trạng thái">
-                    {(val) => {
-                      const current = val ?? statusFilter;
-                      if (!current || current === "all") return "Mọi trạng thái";
-                      if (current === "open") return "Đang mở";
-                      if (current === "expired") return "Đã hết hạn";
-                      if (current === "closed") return "Đã đóng";
-                      if (current === "cancelled") return "Đã hủy";
-                      return "Mọi trạng thái";
-                    }}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent className="rounded-xl">
-                  <SelectGroup>
-                    <SelectItem value="all" className="cursor-pointer text-xs">
-                      Mọi trạng thái
-                    </SelectItem>
-                    <SelectItem value="open" className="cursor-pointer text-xs">
-                      Đang mở ({openCount})
-                    </SelectItem>
-                    <SelectItem value="expired" className="cursor-pointer text-xs">
-                      Đã hết hạn ({expiredCount})
-                    </SelectItem>
-                    <SelectItem value="closed" className="cursor-pointer text-xs">
-                      Đã đóng ({closedCount})
-                    </SelectItem>
-                    <SelectItem value="cancelled" className="cursor-pointer text-xs">
-                      Đã hủy ({cancelledCount})
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-
-              {/* Lọc Buổi thi */}
-              <Select
-                value={shiftFilter}
-                onValueChange={(value) =>
-                  updateParams({ shift: value, page: null })
-                }
-              >
-                <SelectTrigger className="h-9 w-full sm:w-36 rounded-full px-3 text-xs cursor-pointer">
-                  <SelectValue placeholder="Mọi buổi thi">
-                    {(val) => {
-                      const current = val ?? shiftFilter;
-                      if (!current || current === "all") return "Mọi buổi thi";
-                      if (current === "morning") return "Buổi sáng (08:30)";
-                      if (current === "afternoon") return "Buổi chiều (13:30)";
-                      return "Mọi buổi thi";
-                    }}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent className="rounded-xl">
-                  <SelectGroup>
-                    <SelectItem value="all" className="cursor-pointer text-xs">
-                      Mọi buổi thi
-                    </SelectItem>
-                    <SelectItem value="morning" className="cursor-pointer text-xs">
-                      Buổi sáng (08:30)
-                    </SelectItem>
-                    <SelectItem value="afternoon" className="cursor-pointer text-xs">
-                      Buổi chiều (13:30)
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-
-              {/* Nút Xóa lọc nếu có lọc */}
-              {hasActiveSessionFilters && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleResetFilters}
-                  className="h-9 rounded-full px-3 text-xs text-muted-foreground hover:text-foreground cursor-pointer hover:bg-muted shrink-0"
-                >
-                  <RotateCcwIcon className="size-3.5 mr-1" />
-                  Đặt lại
-                </Button>
-              )}
-            </div>
-          </div>
-        </CardHeader>
-
-        {/* Table Container */}
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow className="bg-muted/30 hover:bg-muted/30 border-b">
-                <TableHead className="w-[85px] py-3 text-xs font-semibold text-muted-foreground pl-5">
-                  Mã ca
-                </TableHead>
-                <TableHead className="min-w-[220px] py-3 text-xs font-semibold text-muted-foreground">
-                  Loại kỳ thi
-                </TableHead>
-                <TableHead className="min-w-[200px] py-3 text-xs font-semibold text-muted-foreground">
-                  Lịch thi & Ca thi
-                </TableHead>
-                <TableHead className="min-w-[110px] py-3 text-xs font-semibold text-muted-foreground">
-                  Số slot
-                </TableHead>
-                <TableHead className="min-w-[120px] py-3 text-xs font-semibold text-muted-foreground">
-                  Lệ phí
-                </TableHead>
-                <TableHead className="min-w-[130px] py-3 text-xs font-semibold text-muted-foreground">
-                  Trạng thái
-                </TableHead>
-                <TableHead className="w-[90px] py-3 text-xs font-semibold text-muted-foreground text-right pr-5">
-                  Thao tác
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {visibleSessions.map((session) => {
-                const isExpired = isSessionExpired(session);
-                const type = examTypes.find((item) => item.id === session.exam_type_id);
-                const shiftInfo = getShiftDetails(session.shift);
-                const statusInfo = getStatusDetails(session.status, isExpired);
-                const pubStatusInfo = getPublicationStatusDetails(session.exam_session_publication_status);
-                const ShiftIcon = shiftInfo.icon;
-
-                return (
-                  <TableRow
-                    key={session.id}
-                    className="hover:bg-muted/40 transition-colors"
-                  >
-                    {/* Mã ca */}
-                    <TableCell className="pl-5 font-mono text-xs font-medium text-muted-foreground">
-                      #{session.id}
-                    </TableCell>
-
-                    {/* Loại kỳ thi */}
-                    <TableCell>
-                      <div className="flex flex-col gap-0.5">
-                        <span className="font-semibold text-foreground text-xs sm:text-sm">
-                          {type?.name ?? `Loại thi #${session.exam_type_id}`}
-                        </span>
-                        <div className="flex items-center gap-1.5">
-                          {type?.code ? (
-                            <Badge
-                              variant="outline"
-                              className="rounded-full px-1.5 py-0 text-[10px] font-medium border-border/80"
-                            >
-                              {type.code}
-                            </Badge>
-                          ) : null}
-                          {type?.description ? (
-                            <span className="text-[11px] text-muted-foreground line-clamp-1">
-                              {type.description}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                    </TableCell>
-
-                    {/* Lịch thi & Ca thi */}
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <div className="flex items-center gap-1.5 font-medium text-xs sm:text-sm text-foreground">
-                          <CalendarIcon className="size-3.5 text-muted-foreground shrink-0" />
-                          <span>{formatDateOnly(session.date)}</span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <Badge
-                            variant="outline"
-                            className={`rounded-full px-2 py-0.5 text-[11px] font-medium border flex items-center gap-1 ${shiftInfo.className}`}
-                          >
-                            <ShiftIcon className="size-3 shrink-0" />
-                            {shiftInfo.label}
-                          </Badge>
-                          <span className="text-[11px] text-muted-foreground">
-                            Hạn: {formatDateTime(session.registration_deadline, false)}
-                          </span>
-                        </div>
-                      </div>
-                    </TableCell>
-
-                    {/* Số slot */}
-                    <TableCell>
-                      <div className="flex items-center gap-1 text-xs sm:text-sm font-medium text-foreground">
-                        <UsersIcon className="size-3.5 text-muted-foreground shrink-0" />
-                        <span>{session.capacity}</span>
-                        <span className="text-xs text-muted-foreground font-normal">
-                          slot
-                        </span>
-                      </div>
-                    </TableCell>
-
-                    {/* Lệ phí */}
-                    <TableCell className="font-semibold text-xs sm:text-sm tabular-nums text-foreground">
-                      {formatCurrency(session.fee)}
-                    </TableCell>
-
-                    {/* Trạng thái */}
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        {session.status === "cancelled" ? (
-                          <Badge
-                            className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium border inline-flex items-center gap-1.5 w-fit ${statusInfo.badgeClass}`}
-                          >
-                            <span className={`size-1.5 rounded-full ${statusInfo.dotClass}`} />
-                            {statusInfo.label}
-                          </Badge>
-                        ) : isExpired ? (
-                          <Badge
-                            className="rounded-full px-2.5 py-0.5 text-[11px] font-medium border inline-flex items-center gap-1.5 w-fit bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800/60"
-                            title="Ca thi đã qua hạn chót đăng ký hoặc đã qua ngày thi"
-                          >
-                            <LockIcon className="size-3 text-rose-500" />
-                            Đã hết hạn
-                          </Badge>
-                        ) : session.exam_session_publication_status === "draft" ? (
-                          <Badge
-                            variant="secondary"
-                            onClick={() => handleOpenPublishSchedule(session)}
-                            className="rounded-full px-2.5 py-0.5 text-[11px] font-medium border border-border inline-flex items-center gap-1.5 w-fit bg-muted text-muted-foreground cursor-pointer hover:bg-muted/80 transition-colors"
-                            title="Bản nháp — Nhấp để xem / chỉnh sửa lịch công khai"
-                          >
-                            <span className="size-1.5 rounded-full bg-muted-foreground" />
-                            Bản nháp
-                          </Badge>
-                        ) : session.exam_session_publication_status === "scheduled" ? (
-                          <Badge
-                            variant="outline"
-                            onClick={() => handleOpenPublishSchedule(session)}
-                            className="rounded-full px-2.5 py-0.5 text-[11px] font-medium border inline-flex items-center gap-1.5 w-fit bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800/60 cursor-pointer hover:bg-sky-100/70 transition-colors"
-                            title="Lên lịch — Nhấp để xem / chỉnh sửa lịch công khai"
-                          >
-                            <span className="size-1.5 rounded-full bg-sky-500" />
-                            Lên lịch
-                          </Badge>
-                        ) : (
-                          <Badge
-                            className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium border inline-flex items-center gap-1.5 w-fit ${statusInfo.badgeClass}`}
-                          >
-                            <span
-                              className={`size-1.5 rounded-full ${statusInfo.dotClass} ${statusInfo.pulse ? "animate-pulse" : ""
-                                }`}
-                            />
-                            {statusInfo.label}
-                          </Badge>
-                        )}
-                      </div>
-                    </TableCell>
-
-                    {/* Thao tác */}
-                    <TableCell className="text-right pr-5">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          className="rounded-full cursor-pointer hover:bg-muted text-muted-foreground hover:text-foreground"
-                          title="Xem chi tiết ca thi"
-                          onClick={() => {
-                            setSelectedSessionForDetail(session);
-                            setIsDetailOpen(true);
-                          }}
-                        >
-                          <EyeIcon className="size-3.5" />
-                          <span className="sr-only">Xem chi tiết</span>
-                        </Button>
-
-                        {!isExpired &&
-                          session.status !== "cancelled" &&
-                          (session.exam_session_publication_status === "draft" ||
-                            session.exam_session_publication_status === "scheduled") && (
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              className="rounded-full cursor-pointer hover:bg-sky-50 text-sky-600 dark:text-sky-400 hover:text-sky-700"
-                              title={
-                                session.exam_session_publication_status === "draft"
-                                  ? "Lên lịch công khai ca thi"
-                                  : "Chỉnh sửa lịch hẹn công khai"
-                              }
-                              onClick={() => handleOpenPublishSchedule(session)}
-                            >
-                              <CalendarClockIcon className="size-3.5" />
-                              <span className="sr-only">Lịch công khai</span>
-                            </Button>
-                          )}
-
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            render={
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                className="rounded-full cursor-pointer hover:bg-muted text-muted-foreground hover:text-foreground"
-                                aria-label={`Thao tác ca ${session.id}`}
-                              />
-                            }
-                          >
-                            <MoreHorizontalIcon className="size-4" />
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-56 rounded-xl p-1.5 shadow-lg border">
-                            <DropdownMenuLabel className="text-xs text-muted-foreground font-semibold px-2 py-1.5 truncate">
-                              Ca thi #{session.id}
-                            </DropdownMenuLabel>
-                            <DropdownMenuGroup>
-                              <DropdownMenuItem
-                                className="cursor-pointer text-xs rounded-lg font-medium"
-                                onClick={() => {
-                                  setSelectedSessionForDetail(session);
-                                  setIsDetailOpen(true);
-                                }}
-                              >
-                                <EyeIcon className="size-3.5 mr-2 text-muted-foreground" />
-                                Xem chi tiết ca thi
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                className="cursor-pointer text-xs rounded-lg font-medium"
-                                onClick={() =>
-                                  navigator.clipboard
-                                    ?.writeText(String(session.id))
-                                    .then(() =>
-                                      toast.add({
-                                        type: "info",
-                                        title: "Đã sao chép mã ca thi",
-                                        description: `Mã ca: #${session.id}`,
-                                      })
-                                    )
-                                }
-                              >
-                                <CopyIcon className="size-3.5 mr-2 text-muted-foreground" />
-                                Sao chép mã ca thi
-                              </DropdownMenuItem>
-                            </DropdownMenuGroup>
-
-                            <DropdownMenuSeparator className="my-1" />
-                            <DropdownMenuLabel className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider px-2 py-1">
-                              Chỉnh sửa & Điều chỉnh
-                            </DropdownMenuLabel>
-                            <DropdownMenuGroup>
-                              <DropdownMenuItem
-                                className="cursor-pointer text-xs rounded-lg font-medium"
-                                onClick={() => setSessionToEdit(session)}
-                              >
-                                <EditIcon className="size-3.5 mr-2 text-primary" />
-                                Chỉnh sửa ca thi
-                              </DropdownMenuItem>
-                              {!isExpired && session.status === "open" && (
-                                <DropdownMenuItem
-                                  className="cursor-pointer text-xs rounded-lg font-medium text-amber-700 dark:text-amber-400 focus:text-amber-700 focus:bg-amber-50 dark:focus:bg-amber-950/40"
-                                  onClick={() =>
-                                    setCloseRegTarget({
-                                      type: "session",
-                                      id: session.id,
-                                      title: `Ca thi #${session.id}`,
-                                    })
-                                  }
-                                >
-                                  <LockIcon className="size-3.5 mr-2" />
-                                  Đóng đăng ký sớm
-                                </DropdownMenuItem>
-                              )}
-                            </DropdownMenuGroup>
-
-                            {/* Khối Phát hành & Lịch: Chỉ hiển thị khi ca thi chưa hết hạn và chưa bị hủy */}
-                            {!isExpired && session.status !== "cancelled" && (
-                              <>
-                                <DropdownMenuSeparator className="my-1" />
-                                <DropdownMenuLabel className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider px-2 py-1">
-                                  Phát hành & Công khai
-                                </DropdownMenuLabel>
-                                <DropdownMenuGroup>
-                                  {session.exam_session_publication_status === "draft" && (
-                                    <>
-                                      <DropdownMenuItem
-                                        className="cursor-pointer text-xs rounded-lg font-medium text-sky-700 dark:text-sky-400 focus:text-sky-700 focus:bg-sky-50 dark:focus:bg-sky-950/40"
-                                        onClick={() => handleOpenPublishSchedule(session)}
-                                      >
-                                        <CalendarClockIcon className="size-3.5 mr-2" />
-                                        Lên lịch công khai
-                                      </DropdownMenuItem>
-                                      <DropdownMenuItem
-                                        className="cursor-pointer text-xs rounded-lg font-medium text-emerald-700 dark:text-emerald-400 focus:text-emerald-700 focus:bg-emerald-50 dark:focus:bg-emerald-950/40"
-                                        onClick={() => handleOpenPublishConfirm(session)}
-                                      >
-                                        <GlobeIcon className="size-3.5 mr-2" />
-                                        Công khai ca thi
-                                      </DropdownMenuItem>
-                                    </>
-                                  )}
-
-                                  {session.exam_session_publication_status === "scheduled" && (
-                                    <>
-                                      <DropdownMenuItem
-                                        className="cursor-pointer text-xs rounded-lg font-medium text-sky-700 dark:text-sky-400 focus:text-sky-700 focus:bg-sky-50 dark:focus:bg-sky-950/40"
-                                        onClick={() => handleOpenPublishSchedule(session)}
-                                      >
-                                        <CalendarClockIcon className="size-3.5 mr-2" />
-                                        Chỉnh sửa lịch hẹn
-                                      </DropdownMenuItem>
-                                      <DropdownMenuItem
-                                        className="cursor-pointer text-xs rounded-lg font-medium text-emerald-700 dark:text-emerald-400 focus:text-emerald-700 focus:bg-emerald-50 dark:focus:bg-emerald-950/40"
-                                        onClick={() => handleOpenPublishConfirm(session)}
-                                      >
-                                        <GlobeIcon className="size-3.5 mr-2" />
-                                        Công khai ngay
-                                      </DropdownMenuItem>
-                                    </>
-                                  )}
-
-                                  {session.exam_session_publication_status === "published" && (
-                                    <DropdownMenuItem
-                                      disabled
-                                      className="text-xs rounded-lg font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/20 cursor-default opacity-90 select-none"
-                                    >
-                                      <CheckCircle2Icon className="size-3.5 mr-2 text-emerald-600 dark:text-emerald-400" />
-                                      Đang công khai trên hệ thống
-                                    </DropdownMenuItem>
-                                  )}
-                                </DropdownMenuGroup>
-                              </>
-                            )}
-
-                            {/* Khối Vùng nguy hiểm: Hủy ca thi */}
-                            {!isExpired && session.status !== "cancelled" && (
-                              <>
-                                <DropdownMenuSeparator className="my-1" />
-                                <DropdownMenuGroup>
-                                  <DropdownMenuItem
-                                    variant="destructive"
-                                    className="cursor-pointer text-xs rounded-lg font-medium text-destructive focus:text-destructive focus:bg-destructive/10"
-                                    onClick={() => {
-                                      setSessionToCancel(session);
-                                      setIsCancelAlertOpen(true);
-                                    }}
-                                  >
-                                    <XCircleIcon className="size-3.5 mr-2" />
-                                    Hủy ca thi
-                                  </DropdownMenuItem>
-                                </DropdownMenuGroup>
-                              </>
-                            )}
-
-                            {session.status === "cancelled" && (
-                              <>
-                                <DropdownMenuSeparator className="my-1" />
-                                <DropdownMenuItem disabled className="text-xs text-muted-foreground flex items-center gap-1.5 cursor-not-allowed select-none">
-                                  <XCircleIcon className="size-3.5 text-muted-foreground" />
-                                  Ca thi đã bị hủy
-                                </DropdownMenuItem>
-                              </>
-                            )}
-
-                            {isExpired && session.status !== "cancelled" && (
-                              <>
-                                <DropdownMenuSeparator className="my-1" />
-                                <DropdownMenuItem disabled className="text-xs text-muted-foreground flex items-center gap-1.5 cursor-not-allowed select-none">
-                                  <LockIcon className="size-3.5 text-muted-foreground" />
-                                  Ca thi đã khóa (Hết hạn)
-                                </DropdownMenuItem>
-                              </>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-
-              {/* Empty state */}
-              {visibleSessions.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={7} className="py-12 text-center">
-                    <div className="flex flex-col items-center justify-center max-w-sm mx-auto text-center gap-2">
-                      <div className="size-12 rounded-full bg-muted/80 flex items-center justify-center text-muted-foreground mb-1">
-                        <CalendarDaysIcon className="size-6" />
-                      </div>
-                      <p className="text-base font-semibold text-foreground">
-                        Không tìm thấy ca thi phù hợp
-                      </p>
-                      <p className="text-xs text-muted-foreground leading-relaxed">
-                        Không có ca thi nào khớp với từ khóa tìm kiếm hoặc các tiêu chí bộ lọc đã chọn.
-                      </p>
-                      {hasActiveSessionFilters && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleResetFilters}
-                          className="rounded-full cursor-pointer mt-2 hover:bg-muted text-xs"
-                        >
-                          <RotateCcwIcon className="size-3.5 mr-1.5" />
-                          Xóa bộ lọc tìm kiếm
-                        </Button>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </div>
-
-        {/* ── Pagination (Tuân thủ Project Rules 99-101) ────────────────────── */}
-        <div className="flex flex-col items-center justify-between gap-3 border-t bg-card/30 p-4 sm:flex-row">
-          <p className="text-xs text-muted-foreground">
-            {filteredSessions.length > 0 ? (
-              <>
-                Hiển thị{" "}
-                <span className="font-semibold text-foreground">
-                  {(currentSessionPage - 1) * PAGE_SIZE + 1}
-                </span>{" "}
-                -{" "}
-                <span className="font-semibold text-foreground">
-                  {Math.min(currentSessionPage * PAGE_SIZE, filteredSessions.length)}
-                </span>{" "}
-                trên tổng số{" "}
-                <span className="font-semibold text-foreground">
-                  {filteredSessions.length}
-                </span>{" "}
-                ca thi
-              </>
-            ) : (
-              "Không có dữ liệu hiển thị"
-            )}
-          </p>
-
-          {totalSessionPages > 1 && (
-            <Pagination className="mx-0 w-auto">
-              <PaginationContent>
-                <PaginationItem>
-                  <PaginationPrevious
-                    disabled={currentSessionPage <= 1}
-                    onClick={() => updateParams({ page: String(currentSessionPage - 1) })}
-                  />
-                </PaginationItem>
-
-                {Array.from({ length: totalSessionPages }, (_, index) => index + 1).map(
-                  (item) => {
-                    // Logic hiển thị trang thông minh
-                    const isFirst = item === 1;
-                    const isLast = item === totalSessionPages;
-                    const isNearCurrent = Math.abs(item - currentSessionPage) <= 1;
-
-                    if (!isFirst && !isLast && !isNearCurrent) {
-                      if (item === 2 && currentSessionPage > 3) {
-                        return (
-                          <PaginationItem key="ellipsis-start">
-                            <PaginationEllipsis />
-                          </PaginationItem>
-                        );
-                      }
-                      if (
-                        item === totalSessionPages - 1 &&
-                        currentSessionPage < totalSessionPages - 2
-                      ) {
-                        return (
-                          <PaginationItem key="ellipsis-end">
-                            <PaginationEllipsis />
-                          </PaginationItem>
-                        );
-                      }
-                      return null;
-                    }
-
-                    return (
-                      <PaginationItem key={item}>
-                        <PaginationButton
-                          isActive={item === currentSessionPage}
-                          onClick={() => updateParams({ page: String(item) })}
-                        >
-                          {item}
-                        </PaginationButton>
+                {totalSessionPages > 1 && (
+                  <Pagination className="mx-0 w-auto">
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          disabled={currentSessionPage <= 1}
+                          onClick={() => updateParams({ page: String(currentSessionPage - 1) })}
+                        />
                       </PaginationItem>
-                    );
-                  }
-                )}
 
-                <PaginationItem>
-                  <PaginationNext
-                    disabled={currentSessionPage >= totalSessionPages}
-                    onClick={() => updateParams({ page: String(currentSessionPage + 1) })}
-                  />
-                </PaginationItem>
-              </PaginationContent>
-            </Pagination>
-          )}
-        </div>
-      </Card>
-        </>
-      )}
+                      {Array.from({ length: totalSessionPages }, (_, index) => index + 1).map(
+                        (item) => {
+                          // Logic hiển thị trang thông minh
+                          const isFirst = item === 1;
+                          const isLast = item === totalSessionPages;
+                          const isNearCurrent = Math.abs(item - currentSessionPage) <= 1;
+
+                          if (!isFirst && !isLast && !isNearCurrent) {
+                            if (item === 2 && currentSessionPage > 3) {
+                              return (
+                                <PaginationItem key="ellipsis-start">
+                                  <PaginationEllipsis />
+                                </PaginationItem>
+                              );
+                            }
+                            if (
+                              item === totalSessionPages - 1 &&
+                              currentSessionPage < totalSessionPages - 2
+                            ) {
+                              return (
+                                <PaginationItem key="ellipsis-end">
+                                  <PaginationEllipsis />
+                                </PaginationItem>
+                              );
+                            }
+                            return null;
+                          }
+
+                          return (
+                            <PaginationItem key={item}>
+                              <PaginationButton
+                                isActive={item === currentSessionPage}
+                                onClick={() => updateParams({ page: String(item) })}
+                              >
+                                {item}
+                              </PaginationButton>
+                            </PaginationItem>
+                          );
+                        }
+                      )}
+
+                      <PaginationItem>
+                        <PaginationNext
+                          disabled={currentSessionPage >= totalSessionPages}
+                          onClick={() => updateParams({ page: String(currentSessionPage + 1) })}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
+                )}
+              </div>
+            </Card>
+          </>
+        )}
+      </div>
 
       {/* Thông tin hỗ trợ */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground/80 px-1">
@@ -3801,6 +4169,11 @@ export default function QuanLyKyThiCaThiPage() {
         }}
         onOpenPublishSchedule={handleOpenPublishSchedule}
         onPublishNow={handleOpenPublishConfirm}
+        parentPeriod={
+          selectedSessionForDetail?.period_id
+            ? periods.find((item) => item.id === selectedSessionForDetail.period_id)
+            : undefined
+        }
       />
 
       {/* ── Dialog Xem Chi Tiết & Chỉnh Sửa Lịch Công Khai ───────────────── */}
@@ -3810,6 +4183,11 @@ export default function QuanLyKyThiCaThiPage() {
         open={isPublishScheduleOpen}
         onOpenChange={setIsPublishScheduleOpen}
         onPublishNow={handleOpenPublishConfirm}
+        parentPeriod={
+          sessionForPublishSchedule?.period_id
+            ? periods.find((item) => item.id === sessionForPublishSchedule.period_id)
+            : undefined
+        }
       />
 
       {/* ── AlertDialog: Xác Nhận Công Khai Ca Thi (Bản nháp & Lên lịch) ─────── */}
@@ -3846,13 +4224,17 @@ export default function QuanLyKyThiCaThiPage() {
                 )}{" "}
                 ngay bây giờ không?
               </p>
-              {sessionToPublish?.exam_session_publication_status === "scheduled" && (
-                <p className="text-sky-600 dark:text-sky-400 font-medium">
-                  Ca thi này đang được hẹn giờ công khai vào lúc{" "}
-                  {formatDateTime(sessionToPublish.exam_session_publish_at, true)}
-                  . Việc công khai ngay sẽ lập tức hiển thị ca thi cho thí sinh.
-                </p>
-              )}
+              {(sessionToPublish?.status === "scheduled" ||
+                sessionToPublish?.exam_session_publication_status === "scheduled") && (
+                  <p className="text-sky-600 dark:text-sky-400 font-medium">
+                    Ca thi này đang được hẹn giờ công khai vào lúc{" "}
+                    {formatDateTime(
+                      sessionToPublish.publish_at ?? sessionToPublish.exam_session_publish_at,
+                      true
+                    )}
+                    . Việc công khai ngay sẽ lập tức hiển thị ca thi cho thí sinh.
+                  </p>
+                )}
               <p>
                 Sau khi công khai, ca thi sẽ xuất hiện trên trang đăng ký của thí sinh và các thí sinh có thể bắt đầu đăng ký thi.
               </p>
@@ -3872,10 +4254,13 @@ export default function QuanLyKyThiCaThiPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* ── AlertDialog: Hủy Ca Thi (Project Rule 3 BẮT BUỘC) ────────────────── */}
+      {/* ── AlertDialog: Hủy / Xóa Ca Thi (Project Rule 3 BẮT BUỘC) ────────────────── */}
       <AlertDialog
         open={isCancelAlertOpen}
-        onOpenChange={setIsCancelAlertOpen}
+        onOpenChange={(open) => {
+          setIsCancelAlertOpen(open);
+          if (!open) setSessionToCancel(null);
+        }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -3883,22 +4268,73 @@ export default function QuanLyKyThiCaThiPage() {
               <AlertTriangleIcon className="size-5" />
             </div>
             <AlertDialogTitle className="text-lg font-bold text-foreground">
-              Xác nhận hủy ca thi #{sessionToCancel?.id}?
+              {sessionToCancel?.status === "draft" || sessionToCancel?.status === "scheduled"
+                ? `Xác nhận xóa bản nháp ca thi #${sessionToCancel?.id}?`
+                : `Xác nhận hủy ca thi #${sessionToCancel?.id}?`}
             </AlertDialogTitle>
             <AlertDialogDescription className="text-xs text-muted-foreground leading-relaxed">
-              Bạn có chắc chắn muốn hủy ca thi này không? Ca thi sau khi hủy sẽ đóng toàn bộ tiếp nhận thí sinh và chuyển trạng thái sang "Đã hủy". Hành động này không thể hoàn tác.
+              {sessionToCancel?.status === "draft" || sessionToCancel?.status === "scheduled"
+                ? "Bạn có chắc chắn muốn xóa bản nháp ca thi này không? Bản nháp và toàn bộ ghế ngồi liên quan sẽ bị xóa hoàn toàn khỏi cơ sở dữ liệu."
+                : "Bạn có chắc chắn muốn hủy ca thi này không? Ca thi sau khi hủy sẽ đóng toàn bộ tiếp nhận thí sinh và chuyển trạng thái sang 'Đã hủy'. Hành động này không thể hoàn tác."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel className="rounded-full cursor-pointer hover:bg-muted text-xs">
-              Không, giữ lại ca thi
+              {sessionToCancel?.status === "draft" || sessionToCancel?.status === "scheduled"
+                ? "Không, giữ lại bản nháp"
+                : "Không, giữ lại ca thi"}
             </AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               className="rounded-full cursor-pointer hover:bg-destructive/90 text-xs font-medium"
               onClick={confirmCancelSession}
             >
-              Xác nhận hủy ca thi
+              {sessionToCancel?.status === "draft" || sessionToCancel?.status === "scheduled"
+                ? "Xác nhận xóa bản nháp"
+                : "Xác nhận hủy ca thi"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ── AlertDialog: Hủy / Xóa Đợt Thi ─────────────────────────────────── */}
+      <AlertDialog
+        open={isPeriodCancelAlertOpen}
+        onOpenChange={(open) => {
+          setIsPeriodCancelAlertOpen(open);
+          if (!open) setPeriodToCancel(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <div className="size-11 rounded-full bg-destructive/10 text-destructive flex items-center justify-center mx-auto sm:mx-0 mb-1">
+              <AlertTriangleIcon className="size-5" />
+            </div>
+            <AlertDialogTitle className="text-lg font-bold text-foreground">
+              {periodToCancel?.status === "draft"
+                ? `Xác nhận xóa bản nháp đợt thi "${periodToCancel?.name}"?`
+                : `Xác nhận hủy đợt thi "${periodToCancel?.name}"?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs text-muted-foreground leading-relaxed">
+              {periodToCancel?.status === "draft"
+                ? "Bạn có chắc chắn muốn xóa bản nháp đợt thi này không? Bản nháp đợt thi cùng các ca thi con chưa công bố sẽ bị xóa hoàn toàn khỏi cơ sở dữ liệu."
+                : "Bạn có chắc chắn muốn hủy đợt thi này không? Đợt thi sau khi hủy sẽ đóng toàn bộ tiếp nhận thí sinh ở tất cả ca thi con và chuyển trạng thái sang 'Đã hủy'. Hành động này không thể hoàn tác."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-full cursor-pointer hover:bg-muted text-xs">
+              {periodToCancel?.status === "draft"
+                ? "Không, giữ lại bản nháp"
+                : "Không, giữ lại đợt thi"}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              className="rounded-full cursor-pointer hover:bg-destructive/90 text-xs font-medium"
+              onClick={confirmCancelPeriod}
+            >
+              {periodToCancel?.status === "draft"
+                ? "Xác nhận xóa bản nháp"
+                : "Xác nhận hủy đợt thi"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -3941,6 +4377,12 @@ export default function QuanLyKyThiCaThiPage() {
         examTypes={examTypes}
         open={selectedPeriodIdForDetail !== null}
         onOpenChange={(open) => !open && setSelectedPeriodIdForDetail(null)}
+        onPublishPeriod={(period) => {
+          actionFetcher.submit(
+            { intent: "publish-period", period_id: String(period.id) },
+            { method: "post" }
+          );
+        }}
         onEditPeriod={(period) => setPeriodToEdit(period)}
         onDuplicatePeriod={(period) => setPeriodToDuplicate(period)}
         onReschedulePeriod={(period) => setPeriodToReschedule(period)}
@@ -3953,6 +4395,11 @@ export default function QuanLyKyThiCaThiPage() {
         examTypes={examTypes}
         open={!!sessionToEdit}
         onOpenChange={(open) => !open && setSessionToEdit(null)}
+        parentPeriod={
+          sessionToEdit?.period_id
+            ? periods.find((item) => item.id === sessionToEdit.period_id)
+            : undefined
+        }
       />
 
       {/* ── AlertDialog Đóng Đăng Ký Sớm (Đợt thi / Ca thi) ────────────────── */}
@@ -3960,6 +4407,13 @@ export default function QuanLyKyThiCaThiPage() {
         target={closeRegTarget}
         open={!!closeRegTarget}
         onOpenChange={(open) => !open && setCloseRegTarget(null)}
+      />
+
+      {/* ── Dialog Mở Lại Cổng Đăng Ký (Đợt thi / Ca thi) ──────────────────── */}
+      <ReopenRegistrationDialog
+        target={reopenTarget}
+        open={!!reopenTarget}
+        onOpenChange={(open) => !open && setReopenTarget(null)}
       />
     </div>
   );

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useDebounce } from "~/hooks/use-debounce";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -144,15 +145,16 @@ export function RecentActivityFeed() {
   const [activities] = React.useState<ActivityItem[]>(INITIAL_ACTIVITIES);
   const [selectedCategory, setSelectedCategory] = React.useState<ActivityCategory>("all");
   const [searchQuery, setSearchQuery] = React.useState("");
+  const debouncedSearchQuery = useDebounce(searchQuery, 300);
   const [currentPage, setCurrentPage] = React.useState(1);
 
   const PAGE_SIZE = 4; // 4 hoạt động / trang
 
-  // Lọc hoạt động
+  // Lọc hoạt động (sử dụng debouncedSearchQuery để tránh giật lag khi gõ)
   const filteredActivities = activities.filter((item) => {
     if (selectedCategory !== "all" && item.category !== selectedCategory) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
+    if (debouncedSearchQuery) {
+      const q = debouncedSearchQuery.toLowerCase();
       return (
         item.title.toLowerCase().includes(q) ||
         item.description.toLowerCase().includes(q) ||
@@ -165,7 +167,7 @@ export function RecentActivityFeed() {
   // Reset về trang 1 khi lọc
   React.useEffect(() => {
     setCurrentPage(1);
-  }, [selectedCategory, searchQuery]);
+  }, [selectedCategory, debouncedSearchQuery]);
 
   const totalPages = Math.ceil(filteredActivities.length / PAGE_SIZE) || 1;
   const startIndex = (currentPage - 1) * PAGE_SIZE;

@@ -34,6 +34,7 @@ import {
 import { Label } from "~/components/ui/label";
 import { Textarea } from "~/components/ui/textarea";
 import { validateImageFile, uploadToCloudinary } from "~/lib/cloudinary";
+import { useDebouncedCallback, useThrottledCallback } from "~/hooks/use-debounce";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Badge } from "~/components/ui/badge";
@@ -2689,10 +2690,53 @@ export default function QuanLyGiaoDichThanhToanPage() {
         next.delete(key);
       }
     });
-    setSearchParams(next);
+    setSearchParams(next, { preventScrollReset: true });
   };
 
-  const handleResetFilters = () => setSearchParams(new URLSearchParams());
+  // Local state cho ô tìm kiếm mã đơn PayOS để gõ phím mượt mà 60fps
+  const [orderCodeInput, setOrderCodeInput] = React.useState(orderCodeQuery);
+
+  // Đồng bộ với URL param khi URL thay đổi (reset, history back/forward)
+  React.useEffect(() => {
+    setOrderCodeInput(orderCodeQuery);
+  }, [orderCodeQuery]);
+
+  // Debounce (350ms) cập nhật URL params
+  const debouncedUpdateOrderCode = useDebouncedCallback((val: string) => {
+    const trimmed = val.trim();
+    if (trimmed !== (orderCodeQuery || "")) {
+      updateParams({ order_code: trimmed || null, page: null });
+    }
+  }, 350);
+
+  const handleOrderCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setOrderCodeInput(val);
+    debouncedUpdateOrderCode(val);
+  };
+
+  const handleOrderCodeKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      debouncedUpdateOrderCode.flush(orderCodeInput);
+    }
+  };
+
+  const handleClearOrderCode = () => {
+    setOrderCodeInput("");
+    debouncedUpdateOrderCode.cancel();
+    updateParams({ order_code: null, page: null });
+  };
+
+  const handleResetFilters = () => {
+    setOrderCodeInput("");
+    debouncedUpdateOrderCode.cancel();
+    setSearchParams(new URLSearchParams(), { preventScrollReset: true });
+  };
+
+  const handleThrottledRevalidate = useThrottledCallback(() => {
+    revalidator.revalidate();
+  }, 1000);
 
   const hasActiveFilters =
     Boolean(orderCodeQuery) ||
@@ -2854,7 +2898,7 @@ export default function QuanLyGiaoDichThanhToanPage() {
           <Button
             variant="outline"
             className="rounded-full cursor-pointer hover:bg-muted font-medium text-xs sm:text-sm shadow-2xs"
-            onClick={() => revalidator.revalidate()}
+            onClick={handleThrottledRevalidate}
             disabled={revalidator.state === "loading"}
           >
             <RefreshCwIcon
@@ -3058,18 +3102,17 @@ export default function QuanLyGiaoDichThanhToanPage() {
             <div className="relative flex-1 min-w-[200px]">
               <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
-                value={orderCodeQuery}
-                onChange={(e) =>
-                  updateParams({ order_code: e.target.value || null, page: null })
-                }
+                value={orderCodeInput}
+                onChange={handleOrderCodeChange}
+                onKeyDown={handleOrderCodeKeyDown}
                 placeholder="Tìm mã đơn PayOS..."
                 className="h-9 rounded-full pl-8.5 pr-8 text-xs placeholder:text-xs bg-background"
                 aria-label="Tìm kiếm theo mã đơn PayOS"
               />
-              {orderCodeQuery && (
+              {orderCodeInput && (
                 <button
                   type="button"
-                  onClick={() => updateParams({ order_code: null, page: null })}
+                  onClick={handleClearOrderCode}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
                   aria-label="Xóa từ khóa tìm kiếm"
                 >

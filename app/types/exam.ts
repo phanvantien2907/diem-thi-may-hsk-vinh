@@ -25,17 +25,17 @@ export interface ExamRoom {
 /** Ca thi (Shift) */
 export type ExamShift = "morning" | "afternoon" | "evening";
 
-/** Trạng thái đợt thi — API_DOCUMENTATION.md §12.6 */
+/** Trạng thái đợt thi — API_DOCUMENTATION.md §12.6, §13.4 */
 export type ExamPeriodStatus =
   | "draft"
   | "published"
   | "registration_open"
   | "registration_closed"
-  | "rescheduled"
+  | "completed"
   | "cancelled"
-  | "completed";
+  | "rescheduled"; // Legacy support
 
-/** Đợt thi — ExamPeriodResponseDTO (API_DOCUMENTATION.md §4.10, §4.11) */
+/** Đợt thi — ExamPeriodResponseDTO (API_DOCUMENTATION.md §4.19, §4.20) */
 export interface ExamPeriod {
   id: number;
   name: string;
@@ -47,16 +47,28 @@ export interface ExamPeriod {
   registration_start: string | null;
   registration_deadline: string | null;
   status: ExamPeriodStatus;
+  reschedule_count?: number;
+  original_date?: string | null;
   session_count: number;
   sessions?: ExamSession[];
+  available_actions?: string[];
   created_at: string;
   updated_at: string;
 }
 
-/** Trạng thái ca thi */
-export type ExamSessionStatus = "open" | "closed" | "cancelled" | "full" | "in_progress";
+/** Lý do đóng ca thi — API_DOCUMENTATION.md §4.5, §13.4.1 */
+export type ExamSessionClosedReason = "manual" | "full" | "deadline" | "period_closed";
 
-/** Trạng thái hiển thị / công khai ca thi */
+/** Trạng thái ca thi hợp nhất theo v1.2.4 — API_DOCUMENTATION.md §4.5, §13.4.1 */
+export type ExamSessionStatus =
+  | "draft"
+  | "scheduled"
+  | "open"
+  | "closed"
+  | "completed"
+  | "cancelled";
+
+/** Trạng thái hiển thị / công khai ca thi (legacy compatibility) */
 export type ExamPublicationStatus = "published" | "draft" | "scheduled";
 
 /** Ca thi — ExamSessionResponseDTO */
@@ -65,12 +77,19 @@ export interface ExamSession {
   period_id?: number | null;
   exam_type_id: number;
   exam_room_id?: number;
+  name?: string | null;
+  description?: string | null;
   date: string | null;
   shift: ExamShift;
-  capacity: number;
+  capacity: number | null;
   fee: number;
   registration_deadline: string | null;
   status: ExamSessionStatus;
+  stored_status?: ExamSessionStatus;
+  closed_reason?: ExamSessionClosedReason | null;
+  available_actions?: string[];
+  publish_at?: string | null;
+  check_in_at?: string | null;
   exam_session_publication_status?: ExamPublicationStatus;
   exam_session_publish_at?: string | null;
   exam_session_check_in_at?: string | null;

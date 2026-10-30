@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useFetcher } from "react-router";
+import { useDebounce, useThrottledCallback } from "~/hooks/use-debounce";
 import {
   Dialog,
   DialogContent,
@@ -382,6 +383,7 @@ const PAGE_SIZE = 10; // Quy chuẩn bắt buộc: 10 bản ghi / trang
 
 export function AdminAuditLogDialog({ open, onOpenChange }: AdminAuditLogDialogProps) {
   const [searchTerm, setSearchTerm] = React.useState("");
+  const debouncedSearchTerm = useDebounce(searchTerm, 300);
   const [selectedCategory, setSelectedCategory] = React.useState<string>("all");
   const [logs, setLogs] = React.useState<AuditLogItem[]>([]);
   const [currentPage, setCurrentPage] = React.useState<number>(1);
@@ -412,7 +414,7 @@ export function AdminAuditLogDialog({ open, onOpenChange }: AdminAuditLogDialogP
   // Reset về trang 1 khi lọc hoặc tìm kiếm
   React.useEffect(() => {
     setCurrentPage(1);
-  }, [selectedCategory, searchTerm]);
+  }, [selectedCategory, debouncedSearchTerm]);
 
   // Cuộn lên đầu danh sách khi chuyển trang
   React.useEffect(() => {
@@ -440,7 +442,7 @@ export function AdminAuditLogDialog({ open, onOpenChange }: AdminAuditLogDialogP
   const filteredLogs = React.useMemo(() => {
     return logs.filter((log) => {
       const matchesCategory = selectedCategory === "all" || log.category === selectedCategory;
-      const term = searchTerm.trim().toLowerCase();
+      const term = debouncedSearchTerm.trim().toLowerCase();
       const matchesSearch =
         term === "" ||
         log.id.toLowerCase().includes(term) ||
@@ -450,7 +452,7 @@ export function AdminAuditLogDialog({ open, onOpenChange }: AdminAuditLogDialogP
         log.ip.includes(term);
       return matchesCategory && matchesSearch;
     });
-  }, [logs, selectedCategory, searchTerm]);
+  }, [logs, selectedCategory, debouncedSearchTerm]);
 
   const totalPages = Math.max(1, Math.ceil(filteredLogs.length / PAGE_SIZE));
 
@@ -466,7 +468,8 @@ export function AdminAuditLogDialog({ open, onOpenChange }: AdminAuditLogDialogP
     return filteredLogs.slice(startIndex, startIndex + PAGE_SIZE);
   }, [filteredLogs, currentPage]);
 
-  const handleRefresh = () => {
+  // Throttled refresh (1000ms): Ngăn chặn spam load log liên tục
+  const handleRefresh = useThrottledCallback(() => {
     setIsRefreshing(true);
     fetcher.load("/internal/admin/users/me/audit-log?limit=100");
     setTimeout(() => {
@@ -476,7 +479,7 @@ export function AdminAuditLogDialog({ open, onOpenChange }: AdminAuditLogDialogP
         title: "Đã đồng bộ nhật ký thao tác mới nhất",
       });
     }, 450);
-  };
+  }, 1000);
 
   const handleExport = () => {
     if (filteredLogs.length === 0) {

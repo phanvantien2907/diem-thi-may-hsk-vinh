@@ -106,6 +106,7 @@ import {
 } from "~/components/ui/select";
 import { toast } from "~/components/ui/toast";
 import { useLoaderData, useSearchParams, useFetcher, useRevalidator } from "react-router";
+import { useDebouncedCallback, useThrottledCallback } from "~/hooks/use-debounce";
 
 // ─── Metadata chuẩn theo Project Rules (Rule 8) ──────────────────────────────
 export const meta: Route.MetaFunction = () => [
@@ -649,7 +650,8 @@ export default function QuanLyHoSoDangKyPage() {
   const revalidator = useRevalidator();
   const [isRefreshing, setIsRefreshing] = React.useState(false);
 
-  const handleRefresh = async () => {
+  // Throttled refresh (1000ms): Ngăn chặn spam click nút làm mới liên tục
+  const handleRefresh = useThrottledCallback(async () => {
     setIsRefreshing(true);
     try {
       await fetch("/internal/admin/system/clear-cache?target=candidates", { method: "POST" });
@@ -664,7 +666,7 @@ export default function QuanLyHoSoDangKyPage() {
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, 1000);
 
   // State Modal Chi tiết thí sinh & thẩm định giấy tờ (API §3.10)
   const [selectedCandidate, setSelectedCandidate] = React.useState<AdminCandidateResponseDTO | null>(null);
@@ -765,8 +767,36 @@ export default function QuanLyHoSoDangKyPage() {
     [searchParams, setSearchParams]
   );
 
+  // Debounce (350ms) cập nhật URL params
+  const debouncedUpdateSearch = useDebouncedCallback((val: string) => {
+    const trimmed = val.trim();
+    if (trimmed !== (search || "")) {
+      updateParams({ search: trimmed || null, page: null });
+    }
+  }, 350);
+
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setQuery(val);
+    debouncedUpdateSearch(val);
+  };
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      debouncedUpdateSearch.flush(query);
+    }
+  };
+
+  const handleClearSearch = () => {
+    setQuery("");
+    debouncedUpdateSearch.cancel();
+    updateParams({ search: null, page: null });
+  };
+
   const handleResetFilters = () => {
     setQuery("");
+    debouncedUpdateSearch.cancel();
     setSearchParams(new URLSearchParams(), { preventScrollReset: true });
   };
 
@@ -1149,22 +1179,15 @@ export default function QuanLyHoSoDangKyPage() {
                 <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      updateParams({ search: query, page: null });
-                    }
-                  }}
+                  onChange={handleSearchChange}
+                  onKeyDown={handleSearchKeyDown}
                   placeholder="Tìm theo họ tên thí sinh hoặc số CCCD..."
                   className="h-9 rounded-full pl-8.5 pr-8 text-xs placeholder:text-xs bg-background"
                 />
                 {query && (
                   <button
                     type="button"
-                    onClick={() => {
-                      setQuery("");
-                      updateParams({ search: null, page: null });
-                    }}
+                    onClick={handleClearSearch}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
                   >
                     <XIcon className="size-3.5" />

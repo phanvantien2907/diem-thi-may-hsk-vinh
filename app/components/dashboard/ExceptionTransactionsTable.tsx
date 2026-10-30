@@ -1,5 +1,6 @@
 import * as React from "react";
 import { formatVND, formatStandardDateTime } from "~/lib/chart-utils";
+import { useDebounce } from "~/hooks/use-debounce";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -349,6 +350,7 @@ export function ExceptionTransactionsTable({ initialData, onActiveCountChange }:
   }, [unresolvedCount, onActiveCountChange]);
   const [filterType, setFilterType] = React.useState<"all" | ExceptionType>("all");
   const [searchQuery, setSearchQuery] = React.useState("");
+  const debouncedSearchQuery = useDebounce(searchQuery, 300);
   const [currentPage, setCurrentPage] = React.useState(1);
   const [selectedTxForLog, setSelectedTxForLog] = React.useState<ExceptionTransaction | null>(null);
 
@@ -357,7 +359,7 @@ export function ExceptionTransactionsTable({ initialData, onActiveCountChange }:
   // Reset về trang 1 khi lọc hoặc tìm kiếm
   React.useEffect(() => {
     setCurrentPage(1);
-  }, [filterType, searchQuery]);
+  }, [filterType, debouncedSearchQuery]);
 
   // Thao tác duyệt thủ công khẩn cấp
   const handleManualApprove = (tx: ExceptionTransaction) => {
@@ -415,11 +417,11 @@ export function ExceptionTransactionsTable({ initialData, onActiveCountChange }:
     }
   };
 
-  // Lọc dữ liệu
+  // Lọc dữ liệu (sử dụng debouncedSearchQuery để tránh giật lag khi gõ nhanh)
   const filteredList = exceptions.filter((tx) => {
     if (filterType !== "all" && tx.type !== filterType) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
+    if (debouncedSearchQuery) {
+      const q = debouncedSearchQuery.toLowerCase();
       return (
         tx.candidateName.toLowerCase().includes(q) ||
         tx.orderCode.toLowerCase().includes(q) ||

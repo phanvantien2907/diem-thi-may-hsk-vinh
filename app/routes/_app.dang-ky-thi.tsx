@@ -113,7 +113,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         slotsMap[session.id] = available;
       } catch {
         // Fallback: nếu API seats chưa sẵn sàng, dùng capacity
-        slotsMap[session.id] = session.capacity;
+        slotsMap[session.id] = session.capacity ?? 0;
       }
     });
 
@@ -182,7 +182,7 @@ function DataWrapper({ loaderData }: { loaderData: LoaderData }) {
       .filter((s) => s.status === "open") // Chỉ hiển thị ca thi đang mở
       .map((s) => ({
         ...s,
-        available_slots: slotsMap[s.id] ?? s.capacity,
+        available_slots: slotsMap[s.id] ?? s.capacity ?? 0,
         exam_type_name: typeMap.get(s.exam_type_id)?.name,
       }));
   }, [sessions, examTypes, examRooms, slotsMap]);

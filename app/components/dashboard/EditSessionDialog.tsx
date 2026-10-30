@@ -2,7 +2,8 @@ import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useFetcher } from "react-router";
-import type { ExamSession, ExamType } from "~/types/exam";
+import type { ExamPeriod, ExamSession, ExamType } from "~/types/exam";
+import { canSession, getSessionLockReason } from "~/lib/exam-status";
 import {
   Dialog,
   DialogContent,
@@ -42,6 +43,8 @@ interface EditSessionDialogProps {
   examTypes: ExamType[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Đợt thi cha — dùng để chặn chỉnh sửa khi đợt thi đã đóng/hủy/hoàn thành */
+  parentPeriod?: ExamPeriod | null;
 }
 
 export function EditSessionDialog({
@@ -49,10 +52,13 @@ export function EditSessionDialog({
   examTypes,
   open,
   onOpenChange,
+  parentPeriod,
 }: EditSessionDialogProps) {
   const fetcher = useFetcher<{ success?: boolean; message?: string; error?: string }>();
-  const isPublished = session?.exam_session_publication_status === "published";
-  const isCancelled = session?.status === "cancelled";
+  const canEdit = canSession(session, "edit", parentPeriod);
+  const lockReason = getSessionLockReason(session, parentPeriod);
+  const isLocked = !canEdit || lockReason !== null;
+  const isPublished = session?.status === "open";
   const examType = examTypes.find((t) => t.id === session?.exam_type_id);
 
   const {
@@ -113,10 +119,19 @@ export function EditSessionDialog({
   if (!session) return null;
 
   const onSubmit = (data: UpdateExamSessionFormValues) => {
+    if (isLocked) {
+      toast.add({
+        type: "error",
+        title: "Không thể chỉnh sửa ca thi",
+        description: lockReason ?? "Ca thi đang ở trạng thái không cho phép chỉnh sửa.",
+      });
+      return;
+    }
     fetcher.submit(
       {
         intent: "update-session",
         session_id: String(session.id),
+        session_status: session.status,
         date: data.date,
         shift: data.shift,
         capacity: String(data.capacity),
@@ -163,11 +178,11 @@ export function EditSessionDialog({
               </div>
             )}
 
-            {isCancelled && (
+            {isLocked && (
               <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 dark:bg-rose-950/40 dark:border-rose-900/60 dark:text-rose-300 text-xs flex items-start gap-2.5">
                 <LockIcon className="size-4 shrink-0 mt-0.5 text-rose-600" />
                 <p className="text-[11px] leading-relaxed">
-                  Ca thi này đã bị hủy, không thể chỉnh sửa thêm bất kỳ thông tin nào.
+                  {lockReason} Ca thi đã bị khóa toàn bộ thao tác chỉnh sửa.
                 </p>
               </div>
             )}
@@ -181,8 +196,8 @@ export function EditSessionDialog({
                 <Input
                   id="session-date"
                   type="date"
-                  disabled={isPublished || isCancelled}
-                  className={`h-9 rounded-xl text-xs ${isPublished || isCancelled ? "bg-muted cursor-not-allowed" : ""}`}
+                  disabled={isPublished || isLocked}
+                  className={`h-9 rounded-xl text-xs ${isPublished || isLocked ? "bg-muted cursor-not-allowed" : ""}`}
                   {...register("date")}
                 />
                 {errors.date && <p className="text-[11px] text-destructive font-medium">{errors.date.message}</p>}
@@ -193,7 +208,7 @@ export function EditSessionDialog({
                   Buổi thi (Ca thi) <span className="text-destructive">*</span>
                 </Label>
                 <Select
-                  disabled={isPublished || isCancelled}
+                  disabled={isPublished || isLocked}
                   value={shiftValue}
                   onValueChange={(val) => setValue("shift", val as "morning" | "afternoon" | "evening")}
                 >
@@ -221,8 +236,8 @@ export function EditSessionDialog({
                   id="session-capacity"
                   type="number"
                   min={1}
-                  disabled={isPublished || isCancelled}
-                  className={`h-9 rounded-xl text-xs ${isPublished || isCancelled ? "bg-muted cursor-not-allowed" : ""}`}
+                  disabled={isPublished || isLocked}
+                  className={`h-9 rounded-xl text-xs ${isPublished || isLocked ? "bg-muted cursor-not-allowed" : ""}`}
                   {...register("capacity")}
                 />
                 {errors.capacity && <p className="text-[11px] text-destructive font-medium">{errors.capacity.message}</p>}
@@ -237,8 +252,8 @@ export function EditSessionDialog({
                   type="number"
                   min={0}
                   step={10000}
-                  disabled={isPublished || isCancelled}
-                  className={`h-9 rounded-xl text-xs ${isPublished || isCancelled ? "bg-muted cursor-not-allowed" : ""}`}
+                  disabled={isPublished || isLocked}
+                  className={`h-9 rounded-xl text-xs ${isPublished || isLocked ? "bg-muted cursor-not-allowed" : ""}`}
                   {...register("fee")}
                 />
                 {errors.fee && <p className="text-[11px] text-destructive font-medium">{errors.fee.message}</p>}
@@ -254,8 +269,8 @@ export function EditSessionDialog({
                 <Input
                   id="session-deadline"
                   type="datetime-local"
-                  disabled={isPublished || isCancelled}
-                  className={`h-9 rounded-xl text-xs ${isPublished || isCancelled ? "bg-muted cursor-not-allowed" : ""}`}
+                  disabled={isPublished || isLocked}
+                  className={`h-9 rounded-xl text-xs ${isPublished || isLocked ? "bg-muted cursor-not-allowed" : ""}`}
                   {...register("registration_deadline")}
                 />
                 {errors.registration_deadline && (
@@ -270,7 +285,7 @@ export function EditSessionDialog({
                 <Input
                   id="session-checkin"
                   type="datetime-local"
-                  disabled={isCancelled}
+                  disabled={isLocked}
                   className="h-9 rounded-xl text-xs"
                   {...register("exam_session_check_in_at")}
                 />
@@ -291,7 +306,7 @@ export function EditSessionDialog({
             <Button
               type="submit"
               size="sm"
-              disabled={isSubmitting || isCancelled}
+              disabled={isSubmitting || isLocked}
               className="rounded-full cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-medium h-9 w-full sm:w-auto shadow-2xs"
             >
               {isSubmitting ? (

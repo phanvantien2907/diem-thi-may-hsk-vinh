@@ -1,6 +1,15 @@
 import * as React from "react";
 import type { ExamPeriod, ExamSession, ExamType } from "~/types/exam";
 import {
+  canPeriod,
+  canSession,
+  getPeriodDuplicateBlockReason,
+  getPeriodLockReason,
+  getPeriodRescheduleBlockReason,
+  getSessionLockReason,
+  getSessionStatusDetails,
+} from "~/lib/exam-status";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -28,6 +37,7 @@ import {
   ClockIcon,
   UsersIcon,
   LockIcon,
+  GlobeIcon,
 } from "lucide-react";
 
 interface PeriodDetailDialogProps {
@@ -38,6 +48,7 @@ interface PeriodDetailDialogProps {
   onEditPeriod?: (period: ExamPeriod) => void;
   onDuplicatePeriod?: (period: ExamPeriod) => void;
   onReschedulePeriod?: (period: ExamPeriod) => void;
+  onPublishPeriod?: (period: ExamPeriod) => void;
   onEditSession?: (session: ExamSession) => void;
 }
 
@@ -49,6 +60,7 @@ export function PeriodDetailDialog({
   onEditPeriod,
   onDuplicatePeriod,
   onReschedulePeriod,
+  onPublishPeriod,
   onEditSession,
 }: PeriodDetailDialogProps) {
   const [period, setPeriod] = React.useState<ExamPeriod | null>(null);
@@ -75,29 +87,14 @@ export function PeriodDetailDialog({
 
   if (!periodId) return null;
 
+  const periodLockReason = getPeriodLockReason(period);
+  const isPeriodLockedDetail = periodLockReason !== null;
+  const duplicateBlockReason = getPeriodDuplicateBlockReason(period);
+  const rescheduleBlockReason = getPeriodRescheduleBlockReason(period);
+  const canPublishPeriod = period ? canPeriod(period, "publish") : false;
+
   const formatCurrency = (val?: number) =>
     new Intl.NumberFormat("vi-VN", { style: "currency", currency: "VND" }).format(val || 0);
-
-  const getStatusBadge = (status?: string) => {
-    switch (status) {
-      case "draft":
-        return <Badge variant="secondary" className="rounded-full px-2 py-0.5 text-xs font-semibold">Bản nháp</Badge>;
-      case "registration_open":
-        return <Badge className="rounded-full px-2 py-0.5 text-xs font-semibold bg-emerald-50 text-emerald-700 border-emerald-300">Đang mở đăng ký</Badge>;
-      case "published":
-        return <Badge className="rounded-full px-2 py-0.5 text-xs font-semibold bg-sky-50 text-sky-700 border-sky-300">Đã công khai</Badge>;
-      case "rescheduled":
-        return <Badge className="rounded-full px-2 py-0.5 text-xs font-semibold bg-indigo-50 text-indigo-700 border-indigo-300">Đã dời lịch</Badge>;
-      case "registration_closed":
-        return <Badge className="rounded-full px-2 py-0.5 text-xs font-semibold bg-amber-50 text-amber-700 border-amber-300">Đã đóng đăng ký</Badge>;
-      case "cancelled":
-        return <Badge variant="destructive" className="rounded-full px-2 py-0.5 text-xs font-semibold">Đã hủy</Badge>;
-      case "completed":
-        return <Badge variant="outline" className="rounded-full px-2 py-0.5 text-xs font-semibold">Đã hoàn thành</Badge>;
-      default:
-        return <Badge variant="outline" className="rounded-full px-2 py-0.5 text-xs font-semibold">{status || "—"}</Badge>;
-    }
-  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -107,7 +104,6 @@ export function PeriodDetailDialog({
             <Badge variant="outline" className="rounded-full px-2.5 py-0.5 text-xs font-mono font-bold text-primary border-primary/20 bg-primary/5">
               {period?.code || `ID #${periodId}`}
             </Badge>
-            {getStatusBadge(period?.status)}
             <span className="text-xs text-muted-foreground">• Phân cấp 2 tầng (§4.11)</span>
           </div>
           <DialogTitle className="text-xl font-bold text-foreground">
@@ -180,6 +176,18 @@ export function PeriodDetailDialog({
                 </div>
               )}
 
+              {isPeriodLockedDetail && (
+                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 dark:bg-rose-950/40 dark:border-rose-900/60 dark:text-rose-300 text-xs flex items-start gap-2.5">
+                  <LockIcon className="size-4 shrink-0 mt-0.5 text-rose-600" />
+                  <div className="space-y-1">
+                    <p className="font-semibold text-xs">Đợt thi đã bị khóa</p>
+                    <p className="text-[11px] leading-relaxed">
+                      {periodLockReason} Mọi thao tác chỉnh sửa đợt thi và ca thi con đều không được phép.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Bảng danh sách Ca thi con */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -207,6 +215,9 @@ export function PeriodDetailDialog({
                       <TableBody>
                         {period.sessions.map((s) => {
                           const type = examTypes.find((t) => t.id === s.exam_type_id);
+                          const canEdit = canSession(s, "edit", period);
+                          const sessionEditBlockReason = getSessionLockReason(s, period);
+                          const statusInfo = getSessionStatusDetails(s.status, s.closed_reason);
                           return (
                             <TableRow key={s.id} className="text-xs">
                               <TableCell className="font-mono font-medium">#{s.id}</TableCell>
@@ -219,41 +230,43 @@ export function PeriodDetailDialog({
                                   </span>
                                 </div>
                               </TableCell>
-                              <TableCell className="text-right font-medium">{s.capacity} slots</TableCell>
+                              <TableCell className="text-right font-medium">
+                                {s.capacity != null ? `${s.capacity} slots` : "Chưa đặt"}
+                              </TableCell>
                               <TableCell className="text-right font-medium">{formatCurrency(s.fee)}</TableCell>
                               <TableCell className="text-center">
                                 <Badge
                                   variant="outline"
-                                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                                    s.exam_session_publication_status === "published"
-                                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                      : s.exam_session_publication_status === "scheduled"
-                                        ? "bg-sky-50 text-sky-700 border-sky-200"
-                                        : "bg-muted text-muted-foreground"
-                                  }`}
+                                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium border ${statusInfo.badgeClass}`}
                                 >
-                                  {s.exam_session_publication_status === "published"
-                                    ? "Công khai"
-                                    : s.exam_session_publication_status === "scheduled"
-                                      ? "Lên lịch"
-                                      : "Bản nháp"}
+                                  {statusInfo.label}
                                 </Badge>
                               </TableCell>
                               {onEditSession && (
                                 <TableCell className="text-right">
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 w-7 p-0 rounded-full cursor-pointer hover:bg-muted"
-                                    title="Chỉnh sửa ca thi này"
-                                    onClick={() => {
-                                      onOpenChange(false);
-                                      onEditSession(s);
-                                    }}
-                                  >
-                                    <EditIcon className="size-3.5" />
-                                  </Button>
+                                  <div className="flex items-center justify-end gap-1">
+                                    {onEditSession && (
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        disabled={!canEdit}
+                                        className="h-7 w-7 p-0 rounded-full cursor-pointer hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                                        title={
+                                          !canEdit
+                                            ? sessionEditBlockReason ?? "Ca thi không cho phép chỉnh sửa"
+                                            : "Chỉnh sửa ca thi này"
+                                        }
+                                        onClick={() => {
+                                          if (!canEdit) return;
+                                          onOpenChange(false);
+                                          onEditSession(s);
+                                        }}
+                                      >
+                                        <EditIcon className="size-3.5" />
+                                      </Button>
+                                    )}
+                                  </div>
                                 </TableCell>
                               )}
                             </TableRow>
@@ -274,16 +287,34 @@ export function PeriodDetailDialog({
 
         <DialogFooter className="p-4 border-t bg-muted/40 flex flex-wrap items-center justify-between gap-2 shrink-0">
           <div className="flex flex-wrap items-center gap-1.5">
+            {period && canPublishPeriod && onPublishPeriod && (
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                onClick={() => {
+                  onOpenChange(false);
+                  onPublishPeriod(period);
+                }}
+                className="rounded-full cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-8 shadow-2xs font-medium"
+              >
+                <GlobeIcon className="size-3 mr-1" />
+                Công bố đợt thi
+              </Button>
+            )}
             {period && onEditPeriod && (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
+                disabled={isPeriodLockedDetail}
+                title={periodLockReason ?? "Chỉnh sửa thông tin đợt thi"}
                 onClick={() => {
+                  if (isPeriodLockedDetail) return;
                   onOpenChange(false);
                   onEditPeriod(period);
                 }}
-                className="rounded-full cursor-pointer hover:bg-muted text-xs h-8"
+                className="rounded-full cursor-pointer hover:bg-muted text-xs h-8 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <EditIcon className="size-3 mr-1" />
                 Chỉnh sửa đợt
@@ -294,11 +325,14 @@ export function PeriodDetailDialog({
                 type="button"
                 variant="outline"
                 size="sm"
+                disabled={duplicateBlockReason !== null}
+                title={duplicateBlockReason ?? "Nhân bản đợt thi này"}
                 onClick={() => {
+                  if (duplicateBlockReason !== null) return;
                   onOpenChange(false);
                   onDuplicatePeriod(period);
                 }}
-                className="rounded-full cursor-pointer hover:bg-muted text-xs h-8"
+                className="rounded-full cursor-pointer hover:bg-muted text-xs h-8 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <CopyIcon className="size-3 mr-1" />
                 Nhân bản
@@ -309,11 +343,14 @@ export function PeriodDetailDialog({
                 type="button"
                 variant="outline"
                 size="sm"
+                disabled={rescheduleBlockReason !== null}
+                title={rescheduleBlockReason ?? "Dời lịch thi và thông báo cho thí sinh"}
                 onClick={() => {
+                  if (rescheduleBlockReason !== null) return;
                   onOpenChange(false);
                   onReschedulePeriod(period);
                 }}
-                className="rounded-full cursor-pointer hover:bg-indigo-50 text-indigo-700 border-indigo-200 dark:border-indigo-800 dark:text-indigo-300 text-xs h-8"
+                className="rounded-full cursor-pointer hover:bg-indigo-50 text-indigo-700 border-indigo-200 dark:border-indigo-800 dark:text-indigo-300 text-xs h-8 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <CalendarClockIcon className="size-3 mr-1" />
                 Dời lịch thi

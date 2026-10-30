@@ -128,3 +128,16 @@ export const updateExamSessionSchema = z.object({
 
 export type UpdateExamSessionInput = z.input<typeof updateExamSessionSchema>;
 export type UpdateExamSessionFormValues = z.output<typeof updateExamSessionSchema>;
+
+// ─── 7. Schema Mở Lại Cổng Đăng Ký (§4.13, §4.27) ─────────────────────────────
+export const reopenRegistrationSchema = z.object({
+  registration_deadline: z
+    .string()
+    .trim()
+    .optional(),
+});
+
+export type ReopenRegistrationInput = z.input<typeof reopenRegistrationSchema>;
+export type ReopenRegistrationFormValues = z.output<typeof reopenRegistrationSchema>;
+
+

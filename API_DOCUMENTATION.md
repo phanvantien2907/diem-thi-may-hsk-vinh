@@ -3,10 +3,21 @@
 > **Base URL:** `http://<host>:<port>/api/v1`
 > **Content-Type:** `application/json`
 > **Ngôn ngữ lỗi:** Tiếng Việt (tất cả thông báo lỗi trả về bằng Tiếng Việt)
-> **Phiên bản:** v1.2.3
-> **Cập nhật lần cuối:** 2026-10-24
+> **Phiên bản:** v1.2.4
+> **Cập nhật lần cuối:** 2026-10-28
 
 ## Changelog
+
+### v1.2.4 (2026-10-28)
+- 🔄 **Viết lại toàn bộ State Machine của module Exam** theo chuẩn nghiệp vụ mới:
+  - **Đợt thi:** `draft → published → registration_open → registration_closed → completed`, nhánh `cancelled`. Loại bỏ trạng thái `rescheduled` — dời lịch **không** đổi trạng thái mà chỉ ghi `original_date`, tăng `reschedule_count` và cascade ngày của ca con.
+  - **Ca thi:** `draft → scheduled → open → closed → completed`, nhánh `cancelled`. Thêm trường `closed_reason` (`manual`, `full`, `deadline`, `period_closed`) để phân biệt "Đã đóng" và "Đã hết hạn" trên cùng một trạng thái `closed`.
+  - **Gộp trạng thái:** `exam_session_publication_status` bị loại bỏ hoàn toàn; các giá trị `draft`/`scheduled`/`published` được hợp nhất vào `exam_session_status` (`published` → `open`). Response trả thêm `stored_status` bên cạnh `status`.
+  - **Trạng thái hiệu lực (effective status):** backend luôn tính lại trạng thái từ `now()`, hạn đăng ký, ngày thi, `publish_at` và trạng thái hiệu lực của đợt cha — không tin cột đã lưu. Worker nền chỉ đồng bộ cột đã lưu để hiển thị (`SyncStoredStatuses`).
+  - **Guard dùng chung:** mọi endpoint thay đổi trạng thái trả **HTTP 409** kèm `code: "INVALID_STATE_TRANSITION"` và lý do tiếng Việt khi hành động không hợp lệ. Mọi response đợt thi / ca thi kèm `available_actions` để FE ẩn/hiện nút.
+  - **Cascade trong một transaction:** đóng đăng ký đợt → ca `open` thành `closed` + `period_closed`, ca `scheduled` bị hủy hẹn về `draft`; mở lại đợt → chỉ ca `period_closed` quay về `open`; hủy đợt → mọi ca `cancelled` + mỗi đăng ký chọn `refund` hoặc `transfer`; dời lịch đợt → không đổi trạng thái.
+  - **Đặt chỗ an toàn:** `fn_book_exam_seat` và `fn_transfer_registration` cùng gọi `fn_assert_session_accepts_registration`, hàm này khóa dòng ca thi bằng `SELECT ... FOR SHARE` và kiểm tra trạng thái hiệu lực, hạn chót, sĩ số, trùng lặp — đóng đăng ký ghi vào cùng dòng nên tuần tự hóa với thao tác đặt chỗ.
+  - **API mới:** `publish`, `schedule-publish`, `unpublish`, `reopen-registration`, `capacity`, `DELETE /:id/draft`, `complete`, `cancel` cho đợt thi và ca thi (xem mục [4](#4-module-exam-kỳ-thi)). Endpoint `PATCH /admin/exam-sessions/:id/publication-status` đã bị xóa.
 
 ### v1.2.3 (2026-10-24)
 - 🚀 **Quản lý Đợt thi (Exam Period) & Nhân bản Kỳ thi định kỳ (Duplicate Exam Period)**:
@@ -116,7 +127,12 @@ Với **phân trang** (pagination):
 | `statusCode` | `integer` | HTTP status code |
 | `timestamp` | `string` | Thời điểm lỗi, format ISO 8601 (`YYYY-MM-DDTHH:mm:ss+07:00`) |
 | `path` | `string` | Đường dẫn API đã gọi |
+| `code` | `string` | Mã lỗi máy đọc được (tùy chọn). Hiện dùng `INVALID_STATE_TRANSITION` cho module Exam |
 | `msg` | `string` | Thông báo lỗi (bằng Tiếng Việt) |
+
+> `code` chỉ xuất hiện với các lỗi có mã nghiệp vụ. Module Exam trả
+> `409` + `code: "INVALID_STATE_TRANSITION"` khi hành động không hợp lệ với trạng
+> thái hiệu lực hiện tại của đợt thi / ca thi (xem [4.5](#45-trạng-thái--hành-động-state-machine)).
 
 ### 1.2. Xác thực (Authentication)
 
@@ -1556,16 +1572,14 @@ thí sinh và trả về `null` nếu chưa được cập nhật.
 |---|---|
 | **Endpoint** | `GET /api/v1/admin/exam-sessions` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Admin xem toàn bộ ca thi, bao gồm `published`, `draft`, `scheduled` và `cancelled` |
+| **Use-case** | Admin xem toàn bộ ca thi ở mọi trạng thái (`draft`, `scheduled`, `open`, `closed`, `completed`, `cancelled`) |
 
-Endpoint này chỉ dành cho tài khoản Admin. API public bên trên chỉ trả về ca `published`
-đã đến thời điểm `exam_session_publish_at`; Admin API không áp dụng bộ lọc phát hành đó.
+Endpoint này chỉ dành cho tài khoản Admin. API public bên trên chỉ trả về ca đang
+**hiệu lực `open`**; Admin API không áp dụng bộ lọc đó.
 
 **Query Params (tất cả tùy chọn):** `exam_type_id`, `from`, `to`.
 
-**Response (200 OK):** Mảng `ExamSessionResponseDTO`, giữ nguyên các field:
-`exam_session_publication_status`, `exam_session_publish_at`,
-`exam_session_check_in_at`.
+**Response (200 OK):** Mảng `ExamSessionResponseDTO` (xem bảng field bên dưới).
 
 **Response (200 OK):**
 
@@ -1582,9 +1596,11 @@ Endpoint này chỉ dành cho tài khoản Admin. API public bên trên chỉ tr
       "fee": 500000,
       "registration_deadline": "2026-10-10T23:59:59+07:00",
       "status": "open",
-      "exam_session_publication_status": "published",
-      "exam_session_publish_at": null,
-      "exam_session_check_in_at": "2026-10-15T07:30:00+07:00"
+      "stored_status": "open",
+      "closed_reason": null,
+      "publish_at": null,
+      "check_in_at": "2026-10-15T07:30:00+07:00",
+      "available_actions": ["view", "copy_code", "edit", "close_registration", "increase_capacity", "cancel"]
     }
   ],
   "error": null,
@@ -1597,16 +1613,25 @@ Endpoint này chỉ dành cho tài khoản Admin. API public bên trên chỉ tr
 | Field | Kiểu | Nullable | Mô tả |
 |---|---|---|---|
 | `id` | `integer` | ❌ | ID ca thi |
+| `period_id` | `integer` | ✅ | ID đợt thi cha (bỏ trống với ca thi độc lập) |
 | `exam_type_id` | `integer` | ❌ | ID loại thi |
-| `date` | `datetime` | ❌ | Ngày thi |
+| `name` | `string` | ✅ | Tên ca thi |
+| `description` | `string` | ✅ | Mô tả / ghi chú |
+| `date` | `datetime` | ✅ | Ngày thi |
 | `shift` | `string` | ❌ | Ca thi: `morning`, `afternoon`, `evening` |
-| `capacity` | `integer` | ❌ | Sức chứa tối đa |
+| `capacity` | `integer` | ✅ | Sức chứa tối đa |
 | `fee` | `integer` | ❌ | Lệ phí thi (đơn vị: VNĐ) |
-| `registration_deadline` | `datetime` | ❌ | Hạn đăng ký |
-| `status` | `string` | ❌ | `open`, `closed`, `cancelled` |
-| `exam_session_publication_status` | `string` | ❌ | `published`, `draft`, `scheduled` |
-| `exam_session_publish_at` | `datetime` | ✅ | Thời điểm công khai; bắt buộc ở trạng thái `scheduled` |
-| `exam_session_check_in_at` | `datetime` | ✅ | Giờ có mặt của thí sinh |
+| `registration_deadline` | `datetime` | ✅ | Hạn đăng ký |
+| `status` | `string` | ❌ | **Trạng thái hiệu lực**: `draft`, `scheduled`, `open`, `closed`, `completed`, `cancelled` |
+| `stored_status` | `string` | ❌ | Giá trị đã lưu trong DB (chỉ để hiển thị; có thể trễ so với `status`) |
+| `closed_reason` | `string` | ✅ | Chỉ có khi `status = "closed"`: `manual`, `full`, `deadline`, `period_closed` |
+| `publish_at` | `datetime` | ✅ | Thời điểm hẹn công khai; bắt buộc ở trạng thái `scheduled` |
+| `check_in_at` | `datetime` | ✅ | Giờ có mặt của thí sinh |
+| `available_actions` | `string[]` | ❌ | Các hành động được phép ở trạng thái hiện tại |
+
+> **Lưu ý:** `status` **không** phải giá trị trong DB. Backend luôn tính lại từ
+> `now()`, hạn đăng ký, ngày thi, `publish_at` và trạng thái hiệu lực của đợt cha.
+> `exam_session_publication_status` đã bị loại bỏ — dùng `status` / `stored_status`.
 
 ---
 
@@ -1672,7 +1697,101 @@ Endpoint này chỉ dành cho tài khoản Admin. API public bên trên chỉ tr
 
 ---
 
-### 4.5. [Admin] Tạo ca thi hàng loạt
+### 4.5. Trạng thái & hành động (State machine)
+
+> Mọi endpoint trong module `exam` đều tuân theo bảng trạng thái dưới đây.
+> `status` trong response **luôn là trạng thái hiệu lực** (tính từ `now()`), không
+> phải giá trị đã lưu trong DB. Giá trị đã lưu nằm ở `stored_status` (chỉ để hiển thị).
+
+#### Đợt thi (`exam_periods`)
+
+```
+draft → published → registration_open → registration_closed → completed
+                    ↘ cancelled ↙
+```
+
+| Trạng thái | Ý nghĩa |
+|---|---|
+| `draft` | Nháp, chưa công khai |
+| `published` | Đã công bố, chưa tới `registration_start` |
+| `registration_open` | Đang mở đăng ký |
+| `registration_closed` | Đã đóng đăng ký (hết hạn hoặc đóng sớm) |
+| `completed` | Đã hoàn tất |
+| `cancelled` | Đã hủy (terminal) |
+
+#### Ca thi (`exam_sessions`)
+
+```
+draft → scheduled → open → closed → completed
+              ↘  cancelled  ↙
+```
+
+| Trạng thái | Ý nghĩa |
+|---|---|
+| `draft` | Nháp / chưa công khai |
+| `scheduled` | Đã hẹn giờ công khai (`publish_at`) |
+| `open` | Đang mở đăng ký |
+| `closed` | Đã đóng đăng ký — phân biệt bằng `closed_reason` |
+| `completed` | Đã thi xong |
+| `cancelled` | Đã hủy (terminal) |
+
+`closed_reason` (chỉ có khi `status = "closed"`, ràng buộc DB
+`ck_exam_session_closed_reason_required`):
+
+| Giá trị | Nghĩa | Điều kiện mở lại |
+|---|---|---|
+| `manual` | Admin đóng tay | Luôn được (đợt cha phải đang mở đăng ký) |
+| `full` | Đủ sĩ số | Phải nới sĩ số trước |
+| `deadline` | Hết hạn đăng ký | Phải đặt hạn chót mới trong tương lai |
+| `period_closed` | Đợt cha đóng đăng ký | Không mở riêng được, phải mở lại từ đợt |
+
+> “Đã đóng” và “Đã hết hạn” là hai cách hiển thị của **cùng** trạng thái `closed`,
+> chỉ khác `closed_reason`.
+
+#### `available_actions`
+
+Mọi response của đợt thi / ca thi đều kèm `available_actions` — danh sách hành động
+được phép ở trạng thái hiệu lực hiện tại. FE nên dùng trường này để ẩn/hiện nút
+thay vì tự suy luận từ `status`.
+
+Ca thi: `view`, `copy_code`, `edit`, `edit_notes`, `publish`, `schedule_publish`,
+`unpublish`, `close_registration`, `reopen_registration`, `increase_capacity`,
+`decrease_capacity`, `participant_list`, `check_in`, `cancel`, `delete`.
+
+> **Ràng buộc công khai ca thi theo đợt cha:**
+> - Ca thi chỉ được công khai (`publish`) hoặc hẹn giờ công khai (`schedule_publish`) khi **đợt thi cha đã được công bố** (`published`, `registration_open`, hoặc `registration_closed`).
+> - Khi đợt thi cha có trạng thái **`draft`** (hoặc `cancelled`, `completed`), backend tự động **loại bỏ** `publish` và `schedule_publish` khỏi mảng `available_actions` của ca thi con.
+> - Nếu gửi request `POST /api/v1/admin/exam-sessions/:id/publish` hoặc `schedule-publish` khi đợt cha đang là `draft`, backend sẽ trả HTTP **409 Conflict** (`code: "INVALID_STATE_TRANSITION"`) với thông báo: *"Đợt thi đang ở trạng thái nháp; phải công bố đợt thi trước khi công khai ca thi"*.
+
+> **Đã bỏ nhân bản ca thi.** `POST /api/v1/admin/exam-sessions/:id/duplicate` và
+> trường `duplicated_from_id` không còn tồn tại (migration
+> `000018_remove_exam_session_duplication` xóa cột `exam_session_duplicated_from_id`).
+> `duplicate` **không bao giờ** xuất hiện trong `available_actions` của ca thi; muốn
+> nhân bản, dùng `POST /api/v1/admin/exam-periods/:id/duplicate` — đợt mới sinh lại
+> các ca con ở trạng thái `draft`.
+
+Đợt thi: `view`, `copy_code`, `export_candidates`, `edit`, `edit_description`,
+`publish`, `unpublish`, `close_registration`, `reopen_registration`, `reschedule`,
+`duplicate`, `cancel`, `delete`.
+
+#### Lỗi 409 `INVALID_STATE_TRANSITION`
+
+Khi hành động không hợp lệ với trạng thái hiệu lực, backend trả **409 Conflict**
+kèm mã lỗi `INVALID_STATE_TRANSITION` và lý do bằng tiếng Việt:
+
+```json
+{
+  "statusCode": 409,
+  "timestamp": "2026-09-07T10:00:00+07:00",
+  "path": "/api/v1/admin/exam-sessions/12/reopen-registration",
+  "code": "INVALID_STATE_TRANSITION",
+  "msg": "Ca thi đóng do đầy sĩ số; phải nới sĩ số trước khi mở lại"
+}
+```
+
+---
+
+### 4.6. [Admin] Tạo ca thi hàng loạt
 
 | | |
 |---|---|
@@ -1692,9 +1811,9 @@ Endpoint này chỉ dành cho tài khoản Admin. API public bên trên chỉ tr
       "capacity": 40,
       "fee": 500000,
       "registration_deadline": "2026-10-10T23:59:59+07:00",
-      "exam_session_publication_status": "scheduled",
-      "exam_session_publish_at": "2026-10-01T00:00:00+07:00",
-      "exam_session_check_in_at": "2026-10-15T07:30:00+07:00"
+      "status": "scheduled",
+      "publish_at": "2026-10-01T00:00:00+07:00",
+      "check_in_at": "2026-10-15T07:30:00+07:00"
     }
   ]
 }
@@ -1709,15 +1828,15 @@ Endpoint này chỉ dành cho tài khoản Admin. API public bên trên chỉ tr
 | `sessions[].capacity` | `integer` | ✅ | Min 1 | Sức chứa |
 | `sessions[].fee` | `number` | ❌ | Min 0 | Lệ phí (VNĐ) |
 | `sessions[].registration_deadline` | `string` | ✅ | RFC 3339 datetime | Hạn đăng ký |
-| `sessions[].exam_session_publication_status` | `string` | ❌ | `published`, `draft`, `scheduled` | Trạng thái hiển thị; mặc định `published` |
-| `sessions[].exam_session_publish_at` | `string` | ❌ | RFC 3339 datetime | Bắt buộc và phải ở tương lai khi `scheduled` |
-| `sessions[].exam_session_check_in_at` | `string` | ❌ | RFC 3339 datetime | Giờ có mặt |
+| `sessions[].status` | `string` | ❌ | `open`, `draft`, `scheduled` | Mặc định `open` (công khai ngay) |
+| `sessions[].publish_at` | `string` | ❌ | RFC 3339 datetime | Bắt buộc và phải ở tương lai khi `status = scheduled` |
+| `sessions[].check_in_at` | `string` | ❌ | RFC 3339 datetime | Giờ có mặt |
 
 **Response (201 Created):** Mảng `ExamSessionResponseDTO`.
 
 ---
 
-### 4.6. [Admin] Sinh ghế cho ca thi
+### 4.7. [Admin] Sinh ghế cho ca thi
 
 | | |
 |---|---|
@@ -1745,17 +1864,248 @@ Endpoint này chỉ dành cho tài khoản Admin. API public bên trên chỉ tr
 
 ---
 
-### 4.7. [Admin] Hủy ca thi
+### 4.8. [Admin] Chỉnh sửa ca thi
+
+| | |
+|---|---|
+| **Endpoint** | `PUT /api/v1/admin/exam-sessions/:id` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Admin cập nhật thông tin một ca thi (partial update — chỉ field gửi lên mới được áp dụng) |
+
+**Path Params:** `id` — ID ca thi (`integer`)
+
+**Request Body (mọi field tùy chọn):**
+
+```json
+{
+  "name": "Ca sáng HSK 3",
+  "description": "Có mặt trước 15 phút",
+  "date": "2026-10-20",
+  "shift": "afternoon",
+  "capacity": 45,
+  "fee": 550000,
+  "registration_deadline": "2026-10-12T23:59:59+07:00",
+  "check_in_at": "2026-10-20T13:00:00+07:00"
+}
+```
+
+| Field | Kiểu | Validate | Mô tả |
+|---|---|---|---|
+| `name` | `string` | Max 255 | Tên ca thi |
+| `description` | `string` | — | Mô tả / hướng dẫn |
+| `date` | `string` | `YYYY-MM-DD` | Ngày thi |
+| `shift` | `string` | `morning`, `afternoon`, `evening` | Ca thi |
+| `capacity` | `integer` | Min 1 | Sức chứa (nên dùng [4.14](#414-admin-nới--giảm-sĩ-số)) |
+| `fee` | `integer` | Min 0 | Lệ phí |
+| `registration_deadline` | `string` | RFC 3339 | Hạn đăng ký |
+| `check_in_at` | `string` | RFC 3339 | Giờ có mặt |
+
+**Ràng buộc theo trạng thái:**
+
+- `draft`, `scheduled`: sửa được mọi field.
+- `open`: nếu **đã có đăng ký** thì `date`, `shift`, `fee`, `registration_deadline`
+  bị khóa (400) — phải dùng nghiệp vụ dời giờ; `name`, `description`, `check_in_at`
+  vẫn sửa được.
+- `closed`: chỉ ghi chú (`name`, `description`) — mọi field khác trả 409.
+- `completed`, `cancelled`: không sửa được (409).
+
+**Response (200 OK):** `ExamSessionResponseDTO`.
+
+---
+
+### 4.9. [Admin] Công khai ca thi ngay
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-sessions/:id/publish` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Công khai ca thi ngay lập tức (`draft`/`scheduled` → `open`) |
+
+**Request Body:** Không cần, hoặc `{}` (không truyền `publish_at`).
+
+**Điều kiện:**
+- Ca thi phải có `date`, `registration_deadline` và đã sinh ghế (`capacity` > 0).
+- Trạng thái ca thi phải là `draft` hoặc `scheduled`; ngược lại trả 409 `INVALID_STATE_TRANSITION`.
+- **Đợt thi cha phải được công bố trước:** Nếu đợt thi cha mang trạng thái `draft`, API trả 409 `INVALID_STATE_TRANSITION` (`"Đợt thi đang ở trạng thái nháp; phải công bố đợt thi trước khi công khai ca thi"`). Mảng `available_actions` của ca thi sẽ không cung cấp `publish` khi đợt cha ở trạng thái `draft`.
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Đã công khai ca thi",
+    "session": { "id": 1, "status": "open", "stored_status": "open", "closed_reason": null, "available_actions": ["view", "copy_code", "edit", "..."] }
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+---
+
+### 4.10. [Admin] Lên lịch công khai ca thi
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-sessions/:id/schedule-publish` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Hẹn giờ công khai (`draft`/`scheduled` → `scheduled`) |
+
+**Request Body:**
+
+```json
+{ "publish_at": "2026-10-01T00:00:00+07:00" }
+```
+
+| Field | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `publish_at` | `string` | ✅ | RFC 3339, **phải ở tương lai** | Thời điểm công khai |
+
+**Điều kiện:** Tương tự như công khai ngay, đợt thi cha phải không ở trạng thái `draft`. Nếu đợt cha đang là `draft`, API trả 409 `INVALID_STATE_TRANSITION` và `available_actions` của ca thi sẽ không cung cấp `schedule_publish`.
+
+Worker nền (`SyncStoredStatuses`) tự chuyển `scheduled` → `open` khi tới hạn **và**
+đợt cha đang ở `registration_open`, đồng thời xóa `publish_at`.
+
+**Response (200 OK):** `UpdateSessionStatusResponseDTO` với
+`message = "Đã lên lịch công khai ca thi"`.
+
+---
+
+### 4.11. [Admin] Thu hồi công khai ca thi
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-sessions/:id/unpublish` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Hủy hẹn công khai ca thi (`scheduled` → `draft`) |
+
+**Request Body:** Không cần.
+
+**Điều kiện (Strict State Transition):**
+- Chỉ ca thi đang ở trạng thái `scheduled` (đang hẹn giờ công khai) mới được phép thu hồi về `draft`.
+- Ca thi đang ở trạng thái mở đăng ký (`open`) **TUYỆT ĐỐI KHÔNG ĐƯỢC HOÀN TÁC VỀ BẢN NHÁP (`draft`)**.
+- Bất kỳ nỗ lực nào nhằm chuyển ca thi `open` về `draft` sẽ bị từ chối với HTTP 409 `INVALID_STATE_TRANSITION`.
+- Các trạng thái khác (`closed`, `completed`, `cancelled`) trả 409.
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Đã thu hồi công khai ca thi",
+    "session": { "id": 1, "status": "draft", "stored_status": "draft", "closed_reason": null }
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+---
+
+### 4.12. [Admin] Đóng đăng ký sớm cấp Ca thi
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-sessions/:id/close-registration` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Đóng đăng ký của một ca thi (`open` → `closed`) |
+
+**Request Body (tùy chọn):**
+
+```json
+{ "reason": "Hết phòng thi", "closed_reason": "manual" }
+```
+
+| Field | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `reason` | `string` | ❌ | Max 500 | Ghi chú, lưu vào audit log |
+| `closed_reason` | `string` | ❌ | `manual`, `full`, `deadline`, `period_closed` | Lý do đóng; mặc định `manual` |
+
+**Response (200 OK):** `ExamSessionResponseDTO` với `status = "closed"`.
+
+---
+
+### 4.13. [Admin] Mở lại đăng ký Ca thi
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-sessions/:id/reopen-registration` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Mở lại ca thi đã đóng (`closed` → `open`) |
+
+**Request Body (tùy chọn):**
+
+```json
+{ "registration_deadline": "2026-10-20T23:59:59+07:00" }
+```
+
+| Field | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `registration_deadline` | `string` | ❌ | RFC 3339, phải ở tương lai | Hạn đăng ký mới (bắt buộc nếu đóng vì hết hạn `deadline`) |
+
+> [!IMPORTANT]
+> **Payload / DTO Mapping:** Nếu không cập nhật `registration_deadline` (ví dụ đóng thủ công `manual`), gửi body rỗng `{}` hoặc bỏ trường này. **Tuyệt đối không gửi chuỗi rỗng `""`** vì sẽ gây lỗi kiểm thực định dạng ngày RFC 3339 phía backend.
+
+**Điều kiện mở lại:**
+
+1. Đợt cha phải đang ở `registration_open`.
+2. `closed_reason = "manual"` → mở lại luôn được.
+3. `closed_reason = "full"` → 409, phải nới sĩ số trước ([4.14](#414-admin-nới--giảm-sĩ-số)).
+4. `closed_reason = "deadline"` → bắt buộc gửi `registration_deadline` mới trong tương lai.
+5. `closed_reason = "period_closed"` → 409, phải mở lại từ đợt ([4.27](#427-admin-mở-lại-đăng-ký-đợt-thi)).
+
+**Response (200 OK):** `ExamSessionResponseDTO` với `status = "open"`.
+
+---
+
+### 4.14. [Admin] Nới / giảm sĩ số
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-sessions/:id/capacity` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Tăng hoặc giảm sĩ số ca thi |
+
+**Request Body:**
+
+```json
+{ "capacity": 50 }
+```
+
+| Field | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `capacity` | `integer` | ✅ | Min 1 | Sĩ số mới |
+
+**Quy tắc:**
+
+- `open`, `closed` → được phép. `draft`/`scheduled`/`completed`/`cancelled` → 409.
+- Giảm xuống dưới số đã đăng ký → 400.
+- Tăng sĩ số của ca đang `closed` với `closed_reason = "full"` → **tự động mở lại**
+  thành `open` (nếu đợt cha đang mở đăng ký).
+
+**Response (200 OK):** `ExamSessionResponseDTO`.
+
+---
+
+### 4.15. [Admin] Hủy ca thi
 
 | | |
 |---|---|
 | **Endpoint** | `POST /api/v1/admin/exam-sessions/:id/cancel` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Admin hủy một ca thi |
+| **Use-case** | Hủy một ca thi / slot thi (`open` → `cancelled`) |
 
 **Path Params:** `id` — ID ca thi (`integer`)
 
 **Request Body:** Không cần.
+
+**Điều kiện (Cancellation Restriction & Locking Rule):**
+- **Cancellation Restriction:** Ca thi / slot thi **CHỈ có thể bị hủy nếu trạng thái hiện tại là `open` (registration open)**.
+- **Locking Rule & Immutability:** Một khi ca thi đã đóng đăng ký (`closed`), lịch thi và danh sách slot thi trở thành **bất biến (strictly immutable)**. Mọi nỗ lực hủy ca thi đã đóng (`closed`) bị khóa hoàn toàn và hệ thống sẽ ném lỗi HTTP 409 `INVALID_STATE_TRANSITION`.
+- Ca thi `draft` / `scheduled` phải dùng chức năng Xóa ca thi nháp ([4.16](#416-admin-xóa-ca-thi-nháp)).
+- Ca thi đã hoàn thành (`completed`) hoặc đã hủy (`cancelled`) trả về 409.
 
 **Response (200 OK):**
 
@@ -1770,45 +2120,24 @@ Endpoint này chỉ dành cho tài khoản Admin. API public bên trên chỉ tr
 
 ---
 
-### 4.8. [Admin] Cập nhật trạng thái phát hành (Publication Status)
+### 4.16. [Admin] Xóa ca thi nháp
 
 | | |
 |---|---|
-| **Endpoint** | `PATCH /api/v1/admin/exam-sessions/:id/publication-status` |
+| **Endpoint** | `DELETE /api/v1/admin/exam-sessions/:id/draft` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Admin thay đổi trạng thái phát hành của ca thi (draft, scheduled, published) |
+| **Use-case** | Xóa mềm một ca thi chưa công khai |
 
 **Path Params:** `id` — ID ca thi (`integer`)
 
-**Request Body:**
-
-```json
-{
-  "exam_session_publication_status": "scheduled",
-  "exam_session_publish_at": "2026-10-20T10:00:00Z"
-}
-```
-
-| Field | Kiểu | Bắt buộc | Validate | Mô tả |
-|---|---|---|---|---|
-| `exam_session_publication_status` | `string` | ✅ | `draft`, `published`, `scheduled` | Trạng thái phát hành |
-| `exam_session_publish_at` | `string` | ❌ | RFC 3339 datetime | Bắt buộc và phải ở tương lai khi `exam_session_publication_status` là `scheduled` |
-
-Quy tắc bổ sung: `draft` và `published` luôn lưu `exam_session_publish_at = null`;
-`published` được phát hành ngay. Với `scheduled`, backend bắt buộc thời điểm tương lai.
-Worker nền kiểm tra định kỳ và tự động chuyển ca đến hạn sang `published`, đồng thời
-xóa `exam_session_publish_at`. Không thể cập nhật trạng thái phát hành cho ca thi đã hủy.
+**Điều kiện:** chỉ `draft` hoặc `scheduled`. Các trạng thái khác trả 409.
 
 **Response (200 OK):**
 
 ```json
 {
   "success": true,
-  "data": {
-    "message": "Cập nhật trạng thái phát hành thành công",
-    "exam_session_publication_status": "scheduled",
-    "exam_session_publish_at": "2026-10-20T10:00:00Z"
-  },
+  "data": { "message": "Đã xóa ca thi nháp" },
   "error": null,
   "meta": null
 }
@@ -1816,13 +2145,13 @@ xóa `exam_session_publish_at`. Không thể cập nhật trạng thái phát h�
 
 ---
 
-### 4.9. [Admin] Xoá bộ nhớ đệm Ca thi (Clear Exam Sessions Cache)
+### 4.17. [Admin] Xoá bộ nhớ đệm Ca thi (Clear Exam Sessions Cache)
 
 | | |
 |---|---|
 | **Endpoint** | `POST /api/v1/admin/exam-sessions/clear-cache` (Admin)<br>`POST /api/v1/exam-sessions/clear-cache` (Công khai / Development) |
 | **Auth** | 🔐 JWT + Admin (với route admin) / 🔓 Public (route dev) |
-| **Use-case** | Xoá toàn bộ cache danh sách loại thi (`hsk:exam:types`), danh sách ca thi công khai (`hsk:exam:sessions:published`), và chi tiết từng ca thi (`hsk:exam:session:*`) trên Redis. Giúp làm mới danh sách ca thi ngay lập tức khi Admin cập nhật lịch hoặc số lượng chỗ thi |
+| **Use-case** | Xoá cache danh sách loại thi, danh sách ca thi công khai và chi tiết từng ca thi. Giúp làm mới danh sách ca thi ngay lập tức sau khi Admin đổi trạng thái hoặc sĩ số |
 
 **Request Body:** Không cần body.
 
@@ -1841,222 +2170,113 @@ xóa `exam_session_publish_at`. Không thể cập nhật trạng thái phát h�
 
 ---
 
-### 4.10. [Admin] Danh sách Đợt thi (List Exam Periods)
+### 4.18. [Admin] Danh sách Đợt thi (List Exam Periods)
 
 | | |
 |---|---|
 | **Endpoint** | `GET /api/v1/admin/exam-periods` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Admin xem danh sách các đợt thi (kèm thống kê số lượng ca thi con trong từng đợt), có thể lọc theo trạng thái và khoảng thời gian |
+| **Use-case** | Admin xem danh sách các đợt thi (kèm số lượng ca thi con), lọc theo trạng thái và khoảng thời gian |
 
-**Query Params (tất cả tùy chọn):**
+**Query Params (tùy chọn):** `status` (`draft`, `published`, `registration_open`,
+`registration_closed`, `completed`, `cancelled`), `from`, `to` (`YYYY-MM-DD`).
 
-| Param | Kiểu | Validate | Mô tả |
-|---|---|---|---|
-| `status` | `string` | `draft`, `published`, `registration_open`, `registration_closed`, `rescheduled`, `cancelled`, `completed` | Lọc theo trạng thái đợt thi |
-| `from` | `string` | Format: `YYYY-MM-DD` | Lọc từ ngày bắt đầu |
-| `to` | `string` | Format: `YYYY-MM-DD` | Lọc đến ngày kết thúc |
-
-**Response (200 OK):**
-
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "id": 1,
-      "name": "Đợt thi HSK ngày 13/12/2026",
-      "code": "HSK-2026-12-13",
-      "description": "Kỳ thi năng lực HSK đợt tháng 12/2026",
-      "instructions": "Thí sinh có mặt trước giờ thi 30 phút",
-      "start_date": "2026-12-13",
-      "end_date": "2026-12-13",
-      "registration_start": "2026-10-01T08:00:00Z",
-      "registration_deadline": "2026-11-23T23:59:59Z",
-      "status": "published",
-      "session_count": 4,
-      "created_at": "2026-10-24T08:56:33Z",
-      "updated_at": "2026-10-24T08:56:33Z"
-    }
-  ],
-  "error": null,
-  "meta": null
-}
-```
+**Response (200 OK):** Mảng `ExamPeriodResponseDTO`.
 
 ---
 
-### 4.11. [Admin] Chi tiết Đợt thi kèm danh sách Ca con (Get Exam Period Details)
+### 4.19. [Admin] Chi tiết Đợt thi kèm danh sách Ca con
 
 | | |
 |---|---|
 | **Endpoint** | `GET /api/v1/admin/exam-periods/:id` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Admin xem thông tin chi tiết đợt thi và danh sách toàn bộ các ca thi con (`exam_sessions`) thuộc đợt |
+| **Use-case** | Xem chi tiết một đợt thi và toàn bộ ca thi con |
 
-**Path Params:** `id` — ID đợt thi (`integer`)
-
-**Response (200 OK):**
-
-```json
-{
-  "success": true,
-  "data": {
-    "id": 1,
-    "name": "Đợt thi HSK ngày 13/12/2026",
-    "code": "HSK-2026-12-13",
-    "description": "Kỳ thi năng lực HSK đợt tháng 12/2026",
-    "instructions": "Thí sinh có mặt trước giờ thi 30 phút",
-    "start_date": "2026-12-13",
-    "end_date": "2026-12-13",
-    "registration_start": "2026-10-01T08:00:00Z",
-    "registration_deadline": "2026-11-23T23:59:59Z",
-    "status": "published",
-    "session_count": 4,
-    "sessions": [
-      {
-        "id": 3,
-        "period_id": 1,
-        "exam_type_id": 1,
-        "date": "2026-12-13T00:00:00Z",
-        "shift": "morning",
-        "capacity": 40,
-        "fee": 1330000,
-        "registration_deadline": "2026-11-23T23:59:59Z",
-        "status": "open",
-        "exam_session_publication_status": "published"
-      }
-    ],
-    "created_at": "2026-10-24T08:56:33Z",
-    "updated_at": "2026-10-24T08:56:33Z"
-  },
-  "error": null,
-  "meta": null
-}
-```
+**Response (200 OK):** `ExamPeriodResponseDTO` — `sessions` chứa đầy đủ
+`ExamSessionResponseDTO` của từng ca con.
 
 ---
 
-### 4.12. [Admin] Tạo mới Đợt thi (Create Exam Period)
+### 4.20. [Admin] Tạo mới Đợt thi
 
 | | |
 |---|---|
 | **Endpoint** | `POST /api/v1/admin/exam-periods` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Tạo đợt thi mới ở trạng thái mặc định `draft` |
+| **Use-case** | Tạo một đợt thi mới ở trạng thái `draft` |
 
 **Request Body:**
 
 ```json
 {
-  "name": "Đợt thi HSK Tháng 03/2027",
-  "code": "HSK-2027-03",
-  "description": "Đợt thi năng lực HSK đầu năm",
-  "instructions": "Yêu cầu mang theo CCCD bản gốc",
-  "start_date": "2027-03-15",
-  "end_date": "2027-03-15",
-  "registration_start": "2027-01-10T08:00:00Z",
-  "registration_deadline": "2027-02-28T23:59:59Z"
+  "name": "Đợt thi HSK tháng 10/2026",
+  "code": "HSK-2026-10",
+  "description": "Đợt thi dành cho thí sinh tự do",
+  "instructions": "Mang theo CCCD khi dự thi",
+  "start_date": "2026-10-15",
+  "end_date": "2026-10-17",
+  "registration_start": "2026-09-01T08:00:00+07:00",
+  "registration_deadline": "2026-10-05T23:59:59+07:00"
 }
 ```
 
 | Field | Kiểu | Bắt buộc | Validate | Mô tả |
 |---|---|---|---|---|
-| `name` | `string` | ✅ | Max 255 ký tự | Tên đợt thi |
-| `code` | `string` | ✅ | Max 50 ký tự, Unique | Mã đợt thi |
-| `description` | `string` | ❌ | — | Mô tả chi tiết đợt thi |
-| `instructions` | `string` | ❌ | — | Hướng dẫn cho thí sinh |
-| `start_date` | `string` | ❌ | Format `YYYY-MM-DD` | Ngày bắt đầu đợt thi |
-| `end_date` | `string` | ❌ | Format `YYYY-MM-DD` | Ngày kết thúc đợt thi |
-| `registration_start` | `string` | ❌ | RFC 3339 datetime | Thời điểm bắt đầu mở đăng ký |
-| `registration_deadline` | `string` | ❌ | RFC 3339 datetime | Hạn chót đóng đăng ký |
+| `name` | `string` | ✅ | 3–150 ký tự | Tên đợt thi |
+| `code` | `string` | ✅ | 3–50 ký tự | Mã đợt thi |
+| `description` | `string` | ❌ | — | Mô tả |
+| `instructions` | `string` | ❌ | — | Hướng dẫn |
+| `start_date` | `string` | ❌ | `YYYY-MM-DD` | Ngày bắt đầu |
+| `end_date` | `string` | ❌ | `YYYY-MM-DD` | Ngày kết thúc |
+| `registration_start` | `string` | ❌ | RFC 3339 | Mở đăng ký |
+| `registration_deadline` | `string` | ❌ | RFC 3339 | Đóng đăng ký |
 
-**Response (201 Created):** Trả về `ExamPeriodResponseDTO` với trạng thái ban đầu là `draft`.
+**Response (201 Created):** `ExamPeriodResponseDTO`.
 
 ---
 
-### 4.13. [Admin] Chỉnh sửa Đợt thi (Update Exam Period)
+### 4.21. [Admin] Chỉnh sửa Đợt thi
 
 | | |
 |---|---|
 | **Endpoint** | `PUT /api/v1/admin/exam-periods/:id` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Chỉnh sửa thông tin đợt thi với cơ chế bảo vệ trạng thái an toàn |
+| **Use-case** | Cập nhật thông tin đợt thi (partial update) |
 
-> **⚠️ Ràng buộc cốt lõi (Business Invariant):**
-> - **Khi trạng thái là `draft`**: Cho phép tự do chỉnh sửa mọi trường thông tin (tên, mô tả, hướng dẫn, ngày bắt đầu, ngày kết thúc, thời gian mở/đóng đăng ký).
-> - **Từ khi đợt thi chuyển sang `published` hoặc `registration_open` trở đi**: Hệ thống **CHỈ cho phép sửa các trường an toàn** (`name`, `description`, `instructions`). Mọi hành vi cố tình thay đổi ngày thi (`start_date`, `end_date`) hoặc hạn nộp (`registration_start`, `registration_deadline`) sẽ bị chặn ngay lập tức với mã **HTTP 409 Conflict** và hướng dẫn quản trị viên chuyển sang quy trình **Dời lịch thi (Reschedule)** chuyên dụng nhằm cảnh báo và gửi thông báo tới thí sinh.
+**Request Body (mọi field tùy chọn):** `name`, `description`, `instructions`,
+`start_date`, `end_date`, `registration_start`, `registration_deadline`.
 
-**Request Body:**
+**Ràng buộc theo trạng thái:**
 
-```json
-{
-  "name": "Đợt thi HSK Tháng 03/2027 (Điều chỉnh)",
-  "description": "Cập nhật mô tả: Phòng thi có trang bị điều hòa và máy tính mới.",
-  "instructions": "Vui lòng có mặt trước giờ thi 45 phút."
-}
-```
+- `draft`, `published`: sửa đầy đủ.
+- `registration_open`: **chỉ** `description`, `instructions`. Đổi ngày/giờ → 409
+  (phải dùng Dời lịch để thí sinh được thông báo).
+- `registration_closed`, `completed`, `cancelled`: 409.
 
-**Response khi thành công (200 OK):** Trả về `ExamPeriodResponseDTO` đã cập nhật.
-
-**Response khi vi phạm sửa ngày ở trạng thái đã công khai (409 Conflict):**
-
-```json
-{
-  "statusCode": 409,
-  "timestamp": "2026-10-24T16:25:07+07:00",
-  "path": "/api/v1/admin/exam-periods/1",
-  "msg": "Kỳ thi đã mở đăng ký hoặc đã công khai. Không thể thay đổi trực tiếp ngày thi hoặc hạn đăng ký. Vui lòng sử dụng quy trình dời lịch (Reschedule) để cảnh báo và gửi thông báo tới thí sinh."
-}
-```
+**Response (200 OK):** `ExamPeriodResponseDTO`.
 
 ---
 
-### 4.14. [Admin] Nhân bản Đợt thi (Duplicate Exam Period)
+### 4.22. [Admin] Nhân bản Đợt thi
 
 | | |
 |---|---|
 | **Endpoint** | `POST /api/v1/admin/exam-periods/:id/duplicate` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Trung tâm tổ chức kỳ thi gần như tương tự hàng tháng → sao chép toàn bộ cấu hình kỳ thi (phòng thi, lệ phí, loại chứng chỉ HSK, ca sáng/chiều, sức chứa...) từ đợt trước |
+| **Use-case** | Tạo bản sao đợt thi (kèm các ca con), ở mọi trạng thái |
 
-> **⭐ Các lưu ý kỹ thuật bắt buộc:**
-> 1. **Giao dịch Transactional & Atomic**: Thao tác thực thi hoàn toàn trong **duy nhất 1 database transaction (ACID)** trên backend; không dựa vào việc frontend gửi nhiều request riêng lẻ. Nếu xảy ra bất kỳ lỗi nào, toàn bộ giao dịch sẽ tự động rollback.
-> 2. **Trạng thái an toàn chống phát hành nhầm**: 
->    - Tạo mới một `exam_period` với trạng thái `draft`.
->    - Sao chép toàn bộ các `exam_sessions` con thuộc đợt thi nguồn.
->    - Toàn bộ ca thi con được **reset trạng thái phát hành về `draft`** và **đặt ngày thi (`exam_session_date`) cùng hạn đăng ký (`exam_session_registration_deadline`) về `NULL`**. Điều này bắt buộc Admin phải vào nhập ngày thi mới, loại bỏ hoàn toàn nguy cơ vô tình phát hành ca thi với ngày tháng cũ của tháng trước.
-> 3. **Bảo toàn dữ liệu thí sinh**: **TUYỆT ĐỐI KHÔNG sao chép** bất kỳ đơn đăng ký (`exam_registrations`) hay thí sinh (`candidates`) nào sang đợt mới. Đợt thi mới bắt đầu hoàn toàn sạch sẽ với 0 lượt đăng ký.
+**Request Body:** xem `DuplicateExamPeriodRequestDTO` (tùy chọn đổi tên / mã / ngày).
 
-**Path Params:** `id` — ID đợt thi cần nhân bản (`integer`)
-
-**Request Body (tùy chọn):**
-
-```json
-{
-  "name": "Đợt thi HSK Tháng 01/2027",
-  "code": "HSK-2027-01"
-}
-```
-*(Nếu không truyền `name` và `code`, backend sẽ tự động gán tên dạng `"[Tên cũ] (Bản sao)"` và mã duy nhất kèm timestamp).*
-
-**Response (201 Created):**
+**Response (201 Created):** `DuplicateExamPeriodResponseDTO`
 
 ```json
 {
   "success": true,
   "data": {
-    "new_period_id": 7,
-    "duplicated_sessions": 4,
-    "period": {
-      "id": 7,
-      "name": "Đợt thi HSK Tháng 01/2027",
-      "code": "HSK-2027-01",
-      "status": "draft",
-      "session_count": 4,
-      "created_at": "2026-10-24T09:22:14Z",
-      "updated_at": "2026-10-24T09:22:14Z"
-    }
+    "new_period_id": 8,
+    "duplicated_sessions": 6,
+    "period": { "id": 8, "status": "draft", "...": "..." }
   },
   "error": null,
   "meta": null
@@ -2065,155 +2285,215 @@ xóa `exam_session_publish_at`. Không thể cập nhật trạng thái phát h�
 
 ---
 
-### 4.15. [Admin] Dời lịch thi Đợt thi (Reschedule Exam Period)
+### 4.23. [Admin] Dời lịch thi Đợt thi (Reschedule)
 
 | | |
 |---|---|
 | **Endpoint** | `POST /api/v1/admin/exam-periods/:id/reschedule` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Áp dụng khi gặp sự kiện bất khả kháng (thiên tai bão lũ, dịch bệnh, sự cố hội trường) cần dời ngày thi của toàn bộ đợt thi sang thời gian mới |
-
-> **⭐ Đặc điểm hành vi của quy trình Reschedule:**
-> 1. **Cascade đồng loạt**: Tự động cập nhật ngày thi mới và hạn nộp hồ sơ mới cho **TOÀN BỘ các ca thi con (`exam_sessions`)** thuộc đợt thi.
-> 2. **Giữ nguyên hồ sơ đăng ký**: Toàn bộ thí sinh đã đăng ký và nộp lệ phí vẫn được bảo toàn nguyên vẹn mã ghế và trạng thái đăng ký, chỉ cập nhật ngày thi mới.
-> 3. **Gửi thông báo hàng loạt (Bulk Notification) bắt buộc**: Hệ thống tự động tạo thông báo gửi tới tất cả các tài khoản thí sinh có đơn đăng ký đang hoạt động trong đợt thi đó.
-> 4. **Bắt buộc ghi nhận lý do vào Nhật ký kiểm toán (Audit Log)**: Trường `reason` là bắt buộc, được lưu trữ trong Audit Log để phục vụ thanh tra, kiểm toán hành chính.
-
-**Path Params:** `id` — ID đợt thi (`integer`)
+| **Use-case** | Dời ngày thi do bất khả kháng; dời toàn bộ ca con và thông báo thí sinh |
 
 **Request Body:**
 
 ```json
 {
-  "new_start_date": "2026-12-20",
-  "new_end_date": "2026-12-20",
-  "new_registration_deadline": "2026-11-30T23:59:59Z",
-  "reason": "Do ảnh hưởng bão số 6 gây ngập lụt diện rộng, hội đồng thi dời ngày thi sang 20/12/2026 để đảm bảo an toàn cho thí sinh.",
-  "send_notification": true
+  "new_start_date": "2026-11-15",
+  "new_end_date": "2026-11-17",
+  "new_registration_deadline": "2026-11-05T23:59:59+07:00",
+  "days_offset": 31,
+  "reason": "Bão lũ, phải dời lịch thi"
 }
 ```
 
 | Field | Kiểu | Bắt buộc | Validate | Mô tả |
 |---|---|---|---|---|
-| `new_start_date` | `string` | ✅ | Format `YYYY-MM-DD` | Ngày bắt đầu thi mới |
-| `new_end_date` | `string` | ❌ | Format `YYYY-MM-DD` | Ngày kết thúc thi mới |
-| `new_registration_deadline` | `string` | ❌ | RFC 3339 datetime | Hạn đăng ký mới sau khi dời lịch |
-| `reason` | `string` | ✅ | Không được rỗng | Lý do dời lịch thi (bắt buộc lưu audit log) |
-| `send_notification` | `boolean` | ❌ | Default: `true` | Gửi thông báo tự động tới các thí sinh đã đăng ký |
+| `new_start_date` | `string` | ✅ | `YYYY-MM-DD` | Ngày bắt đầu mới |
+| `new_end_date` | `string` | ❌ | `YYYY-MM-DD` | Ngày kết thúc mới |
+| `new_registration_deadline` | `string` | ❌ | RFC 3339 | Hạn đăng ký mới |
+| `days_offset` | `integer` | ❌ | — | Số ngày dời (dùng khi không gửi ngày cụ thể) |
+| `reason` | `string` | ✅ | 5–500 ký tự | Lý do dời lịch |
+
+**Quy tắc:** **không đổi trạng thái**. Chỉ ghi `original_date`, tăng
+`reschedule_count`, dời ngày các ca con và gửi thông báo. Cho phép ở
+`published`, `registration_open`, `registration_closed`.
+
+**Response (200 OK):** `RescheduleExamPeriodResponseDTO`
+
+```json
+{
+  "success": true,
+  "data": {
+    "period_id": 3,
+    "updated_sessions": 6,
+    "candidates_alerted": 128,
+    "reason": "Bão lũ, phải dời lịch thi",
+    "period": { "id": 3, "original_date": "2026-10-15", "reschedule_count": 1, "...": "..." }
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+---
+
+### 4.24. [Admin] Công bố Đợt thi
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-periods/:id/publish` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Công bố đợt thi (`draft` → `published`) |
+
+**Request Body:** Không cần.
+
+**Điều kiện:** cần **≥ 1 ca thi hợp lệ** trong đợt; ngược lại 409.
+
+**Response (200 OK):** `ExamPeriodResponseDTO` với `status = "published"`.
+
+---
+
+### 4.25. [Admin] Thu hồi công bố Đợt thi
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-periods/:id/unpublish` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Thu hồi công bố (`published` → `draft`) |
+
+**Request Body:** Không cần.
+
+**Điều kiện (Strict State Transition):**
+- Chỉ được phép thực hiện khi đợt thi ở trạng thái `published` (đã công bố nhưng chưa đến thời gian mở đăng ký).
+- Một khi đợt thi đã chuyển sang trạng thái mở đăng ký (`registration_open`), **tuyệt đối không được hoàn tác về bản nháp (`draft`)**.
+- Các trạng thái khác (`registration_closed`, `completed`, `cancelled`) trả 409.
+
+**Response (200 OK):** `ExamPeriodResponseDTO` với `status = "draft"`.
+
+---
+
+### 4.26. [Admin] Đóng đăng ký sớm cấp Đợt thi (Cascade)
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-periods/:id/close-registration` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Đóng đăng ký của cả đợt thi và cascade xuống toàn bộ ca con trong **một transaction** |
+
+**Request Body (tùy chọn):**
+
+```json
+{ "reason": "Đã đủ chỉ tiêu" }
+```
+
+**Cascade:**
+
+- Ca con đang hiệu lực `open` → `closed` với `closed_reason = "period_closed"`.
+- Ca con đã đóng vì lý do khác (`manual`, `full`, `deadline`) **giữ nguyên** lý do.
+- Ca `scheduled` → `draft` và `publish_at = NULL` (hủy hẹn công khai).
+- Ca `draft` không được công khai trong đợt đã đóng.
+
+**Response (200 OK):** `ExamPeriodResponseDTO` — `sessions` phản ánh trạng thái sau cascade.
+
+---
+
+### 4.27. [Admin] Mở lại đăng ký Đợt thi
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-periods/:id/reopen-registration` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Mở lại đợt thi đã đóng (`registration_closed` → `registration_open`) |
+
+**Request Body:**
+
+```json
+{ "registration_deadline": "2026-11-10T23:59:59+07:00" }
+```
+
+| Field | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `registration_deadline` | `string` | ✅ | RFC 3339, phải ở **tương lai** | Hạn chót mới (bắt buộc) |
+
+> [!IMPORTANT]
+> **Payload / DTO Requirement:** Trường `registration_deadline` là bắt buộc, phải là chuỗi thời gian định dạng RFC 3339 hợp lệ và nằm ở tương lai (sau `now()`). Tuyệt đối không gửi chuỗi rỗng `""` hay null.
+
+**Cascade:** chỉ các ca con có `closed_reason = "period_closed"` quay về `open`;
+ca đóng vì `full` hoặc `manual`/`deadline` **giữ nguyên**.
+
+**Điều kiện:** đợt đang `registration_closed` và còn trước ngày thi; ngược lại 409.
+
+**Response (200 OK):** `ExamPeriodResponseDTO`.
+
+---
+
+### 4.28. [Admin] Hoàn tất Đợt thi
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-periods/:id/complete` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Đánh dấu đợt thi đã hoàn tất |
+
+**Request Body:** Không cần.
+
+**Điều kiện:** `registration_open` hoặc `registration_closed` (hoặc ngày thi đã qua);
+ngược lại 409.
+
+**Response (200 OK):** `ExamPeriodResponseDTO` với `status = "completed"`.
+
+---
+
+### 4.29. [Admin] Hủy Đợt thi (kèm hoàn tiền / chuyển ca)
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/exam-periods/:id/cancel` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Hủy cả đợt thi; mọi ca con → `cancelled`, mỗi đăng ký phải chọn hoàn tiền hoặc chuyển ca |
+
+**Request Body:**
+
+```json
+{
+  "reason": "Không đủ số lượng thí sinh",
+  "resolution": "refund",
+  "target_session_id": 0
+}
+```
+
+| Field | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `reason` | `string` | ✅ | Max 500 | Lý do hủy |
+| `resolution` | `string` | ✅ | `refund` hoặc `transfer` | Cách xử lý đăng ký |
+| `target_session_id` | `integer` | ❌ | Min 1 | Ca thi đích; **bắt buộc** khi `resolution = transfer` |
+
+**Điều kiện:** `published`, `registration_open`, `registration_closed`. Đợt đã
+`completed`/`cancelled` hoặc còn `draft` → 409.
+
+**Response (200 OK):** `ExamPeriodResponseDTO` với `status = "cancelled"`.
+
+---
+
+### 4.30. [Admin] Xóa Đợt thi nháp
+
+| | |
+|---|---|
+| **Endpoint** | `DELETE /api/v1/admin/exam-periods/:id` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Xóa mềm một đợt thi còn ở trạng thái `draft` |
+
+**Điều kiện:** chỉ `draft`; các trạng thái khác trả 409.
 
 **Response (200 OK):**
 
 ```json
 {
   "success": true,
-  "data": {
-    "period_id": 1,
-    "updated_sessions": 4,
-    "candidates_alerted": 25,
-    "reason": "Do ảnh hưởng bão số 6 gây ngập lụt diện rộng, hội đồng thi dời ngày thi sang 20/12/2026 để đảm bảo an toàn cho thí sinh.",
-    "period": {
-      "id": 1,
-      "name": "Đợt thi HSK ngày 13/12/2026",
-      "code": "HSK-2026-12-13",
-      "start_date": "2026-12-20",
-      "end_date": "2026-12-20",
-      "registration_deadline": "2026-11-30T23:59:59Z",
-      "status": "rescheduled",
-      "session_count": 4,
-      "created_at": "2026-10-24T08:56:33Z",
-      "updated_at": "2026-10-24T09:25:33Z"
-    }
-  },
+  "data": { "message": "Đã xóa đợt thi nháp" },
   "error": null,
   "meta": null
 }
 ```
-
----
-
-### 4.16. [Admin] Đóng đăng ký sớm cấp Đợt thi (Close Exam Period Registration)
-
-| | |
-|---|---|
-| **Endpoint** | `POST /api/v1/admin/exam-periods/:id/close-registration` |
-| **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Đóng cổng đăng ký thủ công cho toàn bộ đợt thi trước hạn chót (ví dụ: tất cả phòng thi đã kín chỗ trên toàn bộ các ca) |
-
-**Path Params:** `id` — ID đợt thi (`integer`)
-
-**Request Body (tùy chọn):**
-
-```json
-{
-  "reason": "Tất cả các ca thi trong đợt đã kín chỗ trước thời hạn"
-}
-```
-
-**Response (200 OK):** Trả về `ExamPeriodResponseDTO` với trạng thái `registration_closed` và hạn đăng ký được cập nhật về thời điểm đóng hiện tại.
-
----
-
-### 4.17. [Admin] Đóng đăng ký sớm cấp Ca thi (Close Exam Session Registration)
-
-| | |
-|---|---|
-| **Endpoint** | `POST /api/v1/admin/exam-sessions/:id/close-registration` |
-| **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Đóng cổng đăng ký thủ công cho một ca thi đơn lẻ trước hạn chót (ví dụ: ca sáng HSK 3 đã hết 100% chỗ) |
-
-**Path Params:** `id` — ID ca thi (`integer`)
-
-**Request Body (tùy chọn):**
-
-```json
-{
-  "reason": "Ca thi đã đủ số lượng thí sinh đăng ký sớm hơn dự kiến"
-}
-```
-
-**Response (200 OK):** Trả về `ExamSessionResponseDTO` với trạng thái `closed` và hạn đăng ký được cập nhật về thời điểm hiện tại.
-
----
-
-### 4.18. [Admin] Chỉnh sửa Ca thi (Update Exam Session)
-
-| | |
-|---|---|
-| **Endpoint** | `PUT /api/v1/admin/exam-sessions/:id` |
-| **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Admin tùy chỉnh ngày thi, ca thi (sáng/chiều), sức chứa, lệ phí thi, hạn nộp hồ sơ, hoặc giờ check-in của một ca thi cụ thể. Đây là API cốt lõi được frontend gọi khi Admin ở màn hình chỉnh sửa đợt thi mới nhân bản (Draft) để hoàn thiện ngày thi và lệ phí trước khi công khai |
-
-> **⚠️ Ràng buộc bảo vệ tính toàn vẹn (Safety Invariants):**
-> - **Khi ca thi ở trạng thái `draft`**: Cho phép tự do cập nhật ngày thi, ca thi, sức chứa, lệ phí và hạn nộp hồ sơ.
-> - **Khi ca thi đã chuyển sang `published` hoặc đã có thí sinh đăng ký**: Hệ thống **CHẶN can thiệp trực tiếp** vào ngày thi, sức chứa hoặc lệ phí thi (trả về mã **HTTP 409 Conflict**). Mọi thay đổi lịch thi khi đó bắt buộc phải đi qua quy trình **Dời lịch (Reschedule)** để đảm bảo an toàn quyền lợi thí sinh và phát thông báo đồng bộ.
-> - **Khi ca thi đã hủy (`cancelled`)**: Không thể chỉnh sửa (trả về HTTP 400).
-> - **Khóa DB ràng buộc**: Ràng buộc cơ sở dữ liệu `chk_exam_sessions_publish_requires_schedule` đảm bảo ca thi không bao giờ có thể chuyển sang trạng thái công khai (`published` / `scheduled`) khi ngày thi hoặc hạn đăng ký đang là `NULL`.
-
-**Path Params:** `id` — ID ca thi (`integer`)
-
-**Request Body (tất cả các trường đều tùy chọn - partial update):**
-
-```json
-{
-  "date": "2027-01-15",
-  "shift": "morning",
-  "capacity": 45,
-  "fee": 1400000,
-  "registration_deadline": "2027-01-05T23:59:59Z",
-  "exam_session_check_in_at": "2027-01-15T07:30:00Z"
-}
-```
-
-| Field | Kiểu | Bắt buộc | Validate | Mô tả |
-|---|---|---|---|---|
-| `date` | `string` | ❌ | Format `YYYY-MM-DD` | Ngày tổ chức ca thi |
-| `shift` | `string` | ❌ | `morning`, `afternoon`, `evening` | Ca thi trong ngày |
-| `capacity` | `integer` | ❌ | Min 1 | Số lượng thí sinh tối đa |
-| `fee` | `integer` | ❌ | Min 0 (VND) | Lệ phí thi của ca này |
-| `registration_deadline` | `string` | ❌ | RFC 3339 datetime | Hạn chót nộp hồ sơ ca thi |
-| `exam_session_check_in_at` | `string` | ❌ | RFC 3339 datetime | Giờ tập trung làm thủ tục |
-
-**Response (200 OK):** Trả về `ExamSessionResponseDTO` với các trường đã cập nhật.
 
 ---
 
@@ -4316,22 +4596,36 @@ transaction PostgreSQL. Không sử dụng Redis.
 | Giá trị | Mô tả |
 |---|---|
 | `draft` | Bản nháp (cho phép chỉnh sửa tự do toàn bộ thông tin) |
-| `published` | Đã công khai thông tin kỳ thi (chỉ cho phép sửa thông tin an toàn) |
+| `published` | Đã công bố thông tin đợt thi, chưa tới `registration_start` |
 | `registration_open` | Đang mở tiếp nhận đăng ký trực tuyến |
-| `registration_closed` | Đã đóng tiếp nhận đăng ký (hết hạn hoặc đóng sớm do kín chỗ) |
-| `rescheduled` | Đã dời lịch thi do sự kiện bất khả kháng (cascade ngày thi con, giữ nguyên thí sinh) |
-| `cancelled` | Đã hủy toàn bộ đợt thi |
+| `registration_closed` | Đã đóng tiếp nhận đăng ký (hết hạn hoặc đóng sớm) |
 | `completed` | Đợt thi đã hoàn thành |
+| `cancelled` | Đã hủy toàn bộ đợt thi |
+
+> `rescheduled` **không còn** là trạng thái. Dời lịch không đổi trạng thái; nó ghi
+> `original_date`, tăng `reschedule_count` và cascade ngày của các ca con.
 
 ### 12.7. Exam Session Status
 
 | Giá trị | Mô tả |
 |---|---|
+| `draft` | Nháp / chưa công khai |
+| `scheduled` | Đã hẹn giờ công khai (`publish_at`) |
 | `open` | Đang mở đăng ký |
-| `closed` | Đã đóng đăng ký |
+| `closed` | Đã đóng đăng ký — phân biệt bằng `closed_reason` |
+| `completed` | Ca thi đã hoàn tất |
 | `cancelled` | Đã hủy |
 
-### 12.7. Exam Seat Status
+### 12.7.1. Exam Session Closed Reason
+
+| Giá trị | Mô tả | Điều kiện mở lại |
+|---|---|---|
+| `manual` | Admin đóng tay | Mở lại luôn được |
+| `full` | Đủ sĩ số | Phải nới sĩ số trước |
+| `deadline` | Hết hạn đăng ký | Phải đặt hạn chót mới trong tương lai |
+| `period_closed` | Đợt cha đóng đăng ký | Phải mở lại từ đợt |
+
+### 12.8. Exam Seat Status
 
 | Giá trị | Mô tả |
 |---|---|
@@ -4495,43 +4789,82 @@ transaction PostgreSQL. Không sử dụng Redis.
 
 ### 13.4. Đợt thi (Exam Period)
 
+```mermaid
+stateDiagram-v2
+    [*] --> draft
+    draft --> published: Công bố (cần ≥ 1 ca hợp lệ)
+    published --> registration_open: Tới registration_start
+    published --> draft: Thu hồi công bố
+    registration_open --> registration_closed: Hết hạn / đóng sớm
+    registration_open --> draft: Thu hồi (chỉ khi 0 đăng ký)
+    registration_closed --> registration_open: Mở lại (cần hạn chót mới)
+    registration_open --> completed: Hoàn tất
+    registration_closed --> completed: Hoàn tất
+    published --> cancelled: Hủy
+    registration_open --> cancelled: Hủy
+    registration_closed --> cancelled: Hủy
+    completed --> [*]
+    cancelled --> [*]
 ```
-              ┌───────────────────────────┐
-              │           draft           │ ── (Nhân bản từ đợt cũ / Tạo mới)
-              │ (sửa tự do toàn bộ fields)│
-              └─────────────┬─────────────┘
-                            │ Phát hành / Mở đăng ký
-                            ▼
-              ┌───────────────────────────┐
-              │  published / reg_open     │ ── Chỉ sửa an toàn (name/desc/notes)
-              └──────┬──────────────┬─────┘
-                     │              │
-      Dời lịch (Force│              │ Đóng đăng ký sớm (hết chỗ)
-      Majeure)       │              │ hoặc hết hạn chót
-                     ▼              ▼
-           ┌──────────────┐   ┌───────────────────────┐
-           │ rescheduled  │   │  registration_closed  │
-           └──────┬───────┘   └───────────┬───────────┘
-                  │                       │
-                  └───────────┬───────────┘
-                              │ Tổ chức thi xong
-                              ▼
-                      ┌───────────────┐
-                      │   completed   │
-                      └───────────────┘
+
+### 13.4.1. Ca thi (Exam Session)
+
+```mermaid
+stateDiagram-v2
+    [*] --> draft
+    draft --> open: Công khai ngay (cần ngày + ghế)
+    draft --> scheduled: Lên lịch công khai
+    scheduled --> open: Tới publish_at (đợt cha đang mở ĐK)
+    scheduled --> draft: Thu hồi công khai (hủy hẹn)
+    open --> draft: Thu hồi (chỉ khi 0 đăng ký)
+    open --> closed: Hết hạn / đầy / admin đóng / đợt đóng
+    closed --> open: Mở lại (xem điều kiện)
+    open --> completed: Qua ngày thi
+    closed --> completed: Qua ngày thi
+    open --> cancelled: Hủy ca
+    closed --> cancelled: Hủy ca
+    completed --> [*]
+    cancelled --> [*]
 ```
 
 - `draft`: Trạng thái ban đầu sau khi tạo hoặc nhân bản. Toàn bộ thông tin được phép chỉnh sửa tự do.
-- `published` / `registration_open`: Công khai và mở tiếp nhận thí sinh. Khóa chặt các trường ngày thi và hạn đăng ký trực tiếp; mọi can thiệp thay đổi ngày thi bắt buộc chuyển qua quy trình `Reschedule`.
-- `rescheduled`: Khi dời lịch thi do sự cố bất khả kháng. Cập nhật cascade toàn bộ ca thi con, giữ nguyên hồ sơ thí sinh, gửi thông báo diện rộng tới thí sinh.
-- `registration_closed`: Đóng tiếp nhận hồ sơ (tự động khi đến hạn chót hoặc do Admin chủ động đóng sớm khi kín phòng).
-- `cancelled`: Khi hủy bỏ toàn bộ đợt thi.
-- `completed`: Khi kỳ thi đã diễn ra xong.
+- `scheduled`: Đã hẹn giờ công khai. Worker nền tự chuyển sang `open` khi tới hạn và đợt cha đang mở đăng ký.
+- `open`: Đang mở tiếp nhận thí sinh. Khóa ngày/giờ/loại thi khi đã có đăng ký.
+- `closed`: Đã đóng đăng ký. "Đã đóng" và "Đã hết hạn" là hai cách hiển thị của cùng
+  trạng thái này, phân biệt bằng `closed_reason`. Lý do đóng quyết định điều kiện mở lại.
+- `completed`: Khi ca thi đã diễn ra xong.
+- `cancelled`: Khi hủy ca thi. Chỉ dùng Xóa nháp cho `draft` / `scheduled`.
+
+**Trạng thái hiệu lực:** backend luôn tính lại trạng thái từ `now()`, hạn đăng ký,
+ngày thi, `publish_at` và trạng thái hiệu lực của đợt cha — **không** đọc thẳng cột
+đã lưu. Response trả `status` (hiệu lực) và `stored_status` (đã lưu). Worker nền chỉ
+đồng bộ cột đã lưu để hiển thị.
+
+**Guard dùng chung:** mọi hành động thay đổi trạng thái trả **409** kèm
+`code: "INVALID_STATE_TRANSITION"` và lý do tiếng Việt khi không hợp lệ. FE dùng
+`available_actions` để biết hành động nào đang được phép.
+
+### 13.4.2. Cascade Đợt → Ca (một transaction)
+
+| Hành động | Kết quả trên ca con |
+|---|---|
+| Đóng đăng ký đợt | Ca `open` → `closed` + `period_closed`; ca đã đóng vì lý do khác giữ nguyên; ca `scheduled` → `draft` + `publish_at = NULL` |
+| Mở lại đăng ký đợt | Chỉ ca có `closed_reason = "period_closed"` → `open`; các lý do khác giữ nguyên |
+| Hủy đợt | Mọi ca → `cancelled`; mỗi đăng ký chọn `refund` hoặc `transfer` |
+| Dời lịch đợt | Không đổi trạng thái; ghi `original_date`, tăng `reschedule_count`, dời ngày ca con, gửi thông báo |
+
+**Đặt chỗ an toàn:** `fn_book_exam_seat` và `fn_transfer_registration` đều gọi
+`fn_assert_session_accepts_registration`, hàm này khóa dòng ca thi bằng
+`SELECT ... FOR SHARE` và kiểm tra trạng thái hiệu lực, hạn chót, sĩ số, trùng lặp.
+Đóng đăng ký ghi vào cùng dòng đó nên hai thao tác tuần tự hóa — không ai lọt vào
+đúng khoảnh khắc admin bấm đóng.
 
 ---
 
 ## Tổng hợp Endpoint nhanh
 
+| # | Method | Path | Auth | Module |
+|---|---|---|---|---|
 | # | Method | Path | Auth | Module |
 |---|---|---|---|---|
 | 1 | `POST` | `/auth/register` | 🔓 | Auth |
@@ -4561,80 +4894,94 @@ transaction PostgreSQL. Không sử dụng Redis.
 | 25 | `GET` | `/admin/candidates/:id` | 🔐👑 | Candidate |
 | 26 | `POST` | `/admin/candidates/:id/approve` | 🔐👑 | Candidate |
 | 27 | `POST` | `/admin/candidates/:id/reject` | 🔐👑 | Candidate |
-| 26 | `GET` | `/admin/exam-sessions/:id/roster` | 🔐👑 | Candidate |
-| 27 | `GET` | `/exam-types` | 🔓 | Exam |
-| 28 | `GET` | `/exam-sessions` | 🔓 | Exam |
-| 29 | `GET` | `/exam-sessions/:id` | 🔓 | Exam |
-| 30 | `GET` | `/exam-sessions/:id/seats` | 🔓 | Exam |
-| 31 | `GET` | `/admin/exam-sessions` | 🔐👑 | Exam |
-| 32 | `POST` | `/admin/exam-sessions/batch-create` | 🔐👑 | Exam |
-| 33 | `POST` | `/admin/exam-sessions/:id/seats/generate` | 🔐👑 | Exam |
-| 34 | `POST` | `/admin/exam-sessions/:id/cancel` | 🔐👑 | Exam |
-| 35 | `GET` | `/admin/exam-periods` | 🔐👑 | Exam |
-| 36 | `POST` | `/admin/exam-periods` | 🔐👑 | Exam |
-| 37 | `GET` | `/admin/exam-periods/:id` | 🔐👑 | Exam |
-| 38 | `PUT` | `/admin/exam-periods/:id` | 🔐👑 | Exam |
+| 28 | `GET` | `/admin/exam-sessions/:id/roster` | 🔐👑 | Candidate |
+| 29 | `GET` | `/exam-types` | 🔓 | Exam |
+| 30 | `GET` | `/exam-sessions` | 🔓 | Exam |
+| 31 | `GET` | `/exam-sessions/:id` | 🔓 | Exam |
+| 32 | `GET` | `/exam-sessions/:id/seats` | 🔓 | Exam |
+| 33 | `POST` | `/exam-sessions/clear-cache` | 🔓 | Exam |
+| 34 | `GET` | `/admin/exam-periods` | 🔐👑 | Exam |
+| 35 | `POST` | `/admin/exam-periods` | 🔐👑 | Exam |
+| 36 | `GET` | `/admin/exam-periods/:id` | 🔐👑 | Exam |
+| 37 | `PUT` | `/admin/exam-periods/:id` | 🔐👑 | Exam |
+| 38 | `DELETE` | `/admin/exam-periods/:id` | 🔐👑 | Exam |
 | 39 | `POST` | `/admin/exam-periods/:id/duplicate` | 🔐👑 | Exam |
-| 40 | `POST` | `/admin/exam-periods/:id/reschedule` | 🔐👑 | Exam |
-| 41 | `POST` | `/admin/exam-periods/:id/close-registration` | 🔐👑 | Exam |
-| 42 | `POST` | `/admin/exam-sessions/:id/close-registration` | 🔐👑 | Exam |
-| 43 | `PUT` | `/admin/exam-sessions/:id` | 🔐👑 | Exam |
-| 43 | `POST` | `/me/registrations` | 🔐 | Registration |
-| 35 | `GET` | `/me/registrations` | 🔐 | Registration |
-| 36 | `POST` | `/me/registrations/:id/payment-confirm` | 🔐 | Registration |
-| 37 | `POST` | `/me/registrations/:id/transfer` | 🔐 | Registration |
-| 38 | `POST` | `/me/registrations/:id/cancel` | 🔐 | Registration |
-| 39 | `GET` | `/me/registrations/:id/admission-slip` | 🔐 | Registration |
-| 40 | `POST` | `/me/exam-sessions/:id/waitlist` | 🔐 | Registration |
-| 41 | `PATCH` | `/proctor/exam-sessions/:id/attendance/:registration_id` | 🔐 | Registration |
-| 42 | `GET` | `/admin/exam-sessions/:id/dashboard` | 🔐👑 | Registration |
-| 43 | `GET` | `/admin/payments/reconcile` | 🔐👑 | Registration |
-| 44 | `POST` | `/payments/payos/create` | 🔐 | Payment |
-| 45 | `POST` | `/payments/callback` | 🔐 | Payment |
-| 46 | `GET` | `/payments` | 🔐 | Payment |
-| 47 | `GET` | `/results/:registration_id` | 🔐 | Result |
-| 48 | `POST` | `/rechecks` | 🔐 | Result |
-| 49 | `POST` | `/admin/results` | 🔐👑 | Result |
-| 50 | `GET` | `/admin/payments` | 🔐👑 | Payment |
-| 51 | `GET` | `/admin/payments/export` | 🔐👑 | Payment |
-| 52 | `POST` | `/admin/payments/:id/confirm` | 🔐👑 | Payment |
-| 53 | `POST` | `/admin/payments/:id/sync` | 🔐👑 | Payment |
-| 54 | `POST` | `/admin/payments/:id/cancel` | 🔐👑 | Payment |
-| 55 | `POST` | `/admin/payments/:id/mark-refund` | 🔐👑 | Payment |
-| 56 | `POST` | `/admin/payments/:id/confirm-refund` | 🔐👑 | Payment |
-| 57 | `GET` | `/admin/payments/evidence-upload-signature` | 🔐👑 | Payment |
-| 58 | `POST` | `/admin/payments/:id/top-up` | 🔐👑 | Payment |
-| 59 | `POST` | `/admin/payments/:id/resolve-overpayment` | 🔐👑 | Payment |
-| 60 | `GET` | `/admin/payments/double-charges` | 🔐👑 | Payment |
-| 61 | `POST` | `/admin/payments/resolve-double-charge` | 🔐👑 | Payment |
-| 62 | `GET` | `/admin/payments/suspense` | 🔐👑 | Payment |
-| 63 | `POST` | `/admin/payments/suspense` | 🔐👑 | Payment |
-| 64 | `POST` | `/admin/payments/suspense/:id/match` | 🔐👑 | Payment |
-| 65 | `POST` | `/admin/payments/suspense/import` | 🔐👑 | Payment |
-| 50 | `GET` | `/me/certificates` | 🔐 | Certificate |
-| 51 | `GET` | `/me/certificates/:id` | 🔐 | Certificate |
-| 52 | `GET` | `/me/certificates/:id/pdf` | 🔐 | Certificate |
-| 53 | `POST` | `/me/certificates/:id/deliveries` | 🔐 | Certificate |
-| 54 | `GET` | `/me/certificates/:id/deliveries` | 🔐 | Certificate |
-| 55 | `POST` | `/me/certificates/:id/reissue-request` | 🔐 | Certificate |
-| 56 | `PATCH` | `/me/deliveries/:delivery_id` | 🔐 | Certificate |
-| 57 | `GET` | `/public/certificates/verify` | 🔓 | Certificate |
-| 58 | `POST` | `/admin/certificates/:id/issue` | 🔐👑 | Certificate |
-| 59 | `POST` | `/admin/certificates/issue-batch` | 🔐👑 | Certificate |
-| 60 | `POST` | `/admin/certificates/:id/revoke` | 🔐👑 | Certificate |
-| 61 | `GET` | `/admin/certificates` | 🔐👑 | Certificate |
-| 62 | `GET` | `/admin/certificates/print-batch` | 🔐👑 | Certificate |
-| 63 | `GET` | `/admin/deliveries` | 🔐👑 | Certificate |
-| 64 | `PATCH` | `/admin/deliveries/:id` | 🔐👑 | Certificate |
-| 65 | `POST` | `/webhooks/shipping/:courier` | HMAC | Certificate |
-| 66 | `GET` | `/notifications` | 🔐 | Notification |
-| 67 | `PUT` | `/notifications/:id/read` | 🔐 | Notification |
-| 68 | `GET` | `/locations/provinces` | 🔓 | Location |
-| 69 | `GET` | `/locations/provinces/:id/wards` | 🔓 | Location |
-| 70 | `GET` | `/locations/wards/:id/delivery-coverage` | 🔓 | Location |
-| 71 | `GET` | `/admin/locations/stats/candidates-by-province` | 🔐👑 | Location |
-| 72 | `POST` | `/admin/locations/wards/:id/merge` | 🔐👑 | Location |
-| 73 | `GET` | `/admin/audit-logs` | 🔐👑 | Audit |
+| 40 | `POST` | `/admin/exam-periods/:id/publish` | 🔐👑 | Exam |
+| 41 | `POST` | `/admin/exam-periods/:id/unpublish` | 🔐👑 | Exam |
+| 42 | `POST` | `/admin/exam-periods/:id/close-registration` | 🔐👑 | Exam |
+| 43 | `POST` | `/admin/exam-periods/:id/reopen-registration` | 🔐👑 | Exam |
+| 44 | `POST` | `/admin/exam-periods/:id/reschedule` | 🔐👑 | Exam |
+| 45 | `POST` | `/admin/exam-periods/:id/complete` | 🔐👑 | Exam |
+| 46 | `POST` | `/admin/exam-periods/:id/cancel` | 🔐👑 | Exam |
+| 47 | `GET` | `/admin/exam-sessions` | 🔐👑 | Exam |
+| 48 | `POST` | `/admin/exam-sessions/clear-cache` | 🔐👑 | Exam |
+| 49 | `POST` | `/admin/exam-sessions/batch-create` | 🔐👑 | Exam |
+| 50 | `POST` | `/admin/exam-sessions/:id/seats/generate` | 🔐👑 | Exam |
+| 51 | `POST` | `/admin/exam-sessions/:id/publish` | 🔐👑 | Exam |
+| 52 | `POST` | `/admin/exam-sessions/:id/schedule-publish` | 🔐👑 | Exam |
+| 53 | `POST` | `/admin/exam-sessions/:id/unpublish` | 🔐👑 | Exam |
+| 54 | `POST` | `/admin/exam-sessions/:id/close-registration` | 🔐👑 | Exam |
+| 55 | `POST` | `/admin/exam-sessions/:id/reopen-registration` | 🔐👑 | Exam |
+| 56 | `POST` | `/admin/exam-sessions/:id/capacity` | 🔐👑 | Exam |
+| 57 | `POST` | `/admin/exam-sessions/:id/cancel` | 🔐👑 | Exam |
+| 58 | `DELETE` | `/admin/exam-sessions/:id/draft` | 🔐👑 | Exam |
+| 59 | `PUT` | `/admin/exam-sessions/:id` | 🔐👑 | Exam |
+| 60 | `POST` | `/me/registrations` | 🔐 | Registration |
+| 61 | `GET` | `/me/registrations` | 🔐 | Registration |
+| 62 | `POST` | `/me/registrations/:id/payment-confirm` | 🔐 | Registration |
+| 63 | `POST` | `/me/registrations/:id/transfer` | 🔐 | Registration |
+| 64 | `POST` | `/me/registrations/:id/cancel` | 🔐 | Registration |
+| 65 | `GET` | `/me/registrations/:id/admission-slip` | 🔐 | Registration |
+| 66 | `POST` | `/me/exam-sessions/:id/waitlist` | 🔐 | Registration |
+| 67 | `PATCH` | `/proctor/exam-sessions/:id/attendance/:registration_id` | 🔐 | Registration |
+| 68 | `GET` | `/admin/exam-sessions/:id/dashboard` | 🔐👑 | Registration |
+| 69 | `GET` | `/admin/payments/reconcile` | 🔐👑 | Registration |
+| 70 | `POST` | `/payments/payos/create` | 🔐 | Payment |
+| 71 | `POST` | `/payments/callback` | 🔐 | Payment |
+| 72 | `GET` | `/payments` | 🔐 | Payment |
+| 73 | `GET` | `/results/:registration_id` | 🔐 | Result |
+| 74 | `POST` | `/rechecks` | 🔐 | Result |
+| 75 | `POST` | `/admin/results` | 🔐👑 | Result |
+| 76 | `GET` | `/admin/payments` | 🔐👑 | Payment |
+| 77 | `GET` | `/admin/payments/export` | 🔐👑 | Payment |
+| 78 | `POST` | `/admin/payments/:id/confirm` | 🔐👑 | Payment |
+| 79 | `POST` | `/admin/payments/:id/sync` | 🔐👑 | Payment |
+| 80 | `POST` | `/admin/payments/:id/cancel` | 🔐👑 | Payment |
+| 81 | `POST` | `/admin/payments/:id/mark-refund` | 🔐👑 | Payment |
+| 82 | `POST` | `/admin/payments/:id/confirm-refund` | 🔐👑 | Payment |
+| 83 | `GET` | `/admin/payments/evidence-upload-signature` | 🔐👑 | Payment |
+| 84 | `POST` | `/admin/payments/:id/top-up` | 🔐👑 | Payment |
+| 85 | `POST` | `/admin/payments/:id/resolve-overpayment` | 🔐👑 | Payment |
+| 86 | `GET` | `/admin/payments/double-charges` | 🔐👑 | Payment |
+| 87 | `POST` | `/admin/payments/resolve-double-charge` | 🔐👑 | Payment |
+| 88 | `GET` | `/admin/payments/suspense` | 🔐👑 | Payment |
+| 89 | `POST` | `/admin/payments/suspense` | 🔐👑 | Payment |
+| 90 | `POST` | `/admin/payments/suspense/:id/match` | 🔐👑 | Payment |
+| 91 | `POST` | `/admin/payments/suspense/import` | 🔐👑 | Payment |
+| 92 | `GET` | `/me/certificates` | 🔐 | Certificate |
+| 93 | `GET` | `/me/certificates/:id` | 🔐 | Certificate |
+| 94 | `GET` | `/me/certificates/:id/pdf` | 🔐 | Certificate |
+| 95 | `POST` | `/me/certificates/:id/deliveries` | 🔐 | Certificate |
+| 96 | `GET` | `/me/certificates/:id/deliveries` | 🔐 | Certificate |
+| 97 | `POST` | `/me/certificates/:id/reissue-request` | 🔐 | Certificate |
+| 98 | `PATCH` | `/me/deliveries/:delivery_id` | 🔐 | Certificate |
+| 99 | `GET` | `/public/certificates/verify` | 🔓 | Certificate |
+| 100 | `POST` | `/admin/certificates/:id/issue` | 🔐👑 | Certificate |
+| 101 | `POST` | `/admin/certificates/issue-batch` | 🔐👑 | Certificate |
+| 102 | `POST` | `/admin/certificates/:id/revoke` | 🔐👑 | Certificate |
+| 103 | `GET` | `/admin/certificates` | 🔐👑 | Certificate |
+| 104 | `GET` | `/admin/certificates/print-batch` | 🔐👑 | Certificate |
+| 105 | `GET` | `/admin/deliveries` | 🔐👑 | Certificate |
+| 106 | `PATCH` | `/admin/deliveries/:id` | 🔐👑 | Certificate |
+| 107 | `POST` | `/webhooks/shipping/:courier` | HMAC | Certificate |
+| 108 | `GET` | `/notifications` | 🔐 | Notification |
+| 109 | `PUT` | `/notifications/:id/read` | 🔐 | Notification |
+| 110 | `GET` | `/locations/provinces` | 🔓 | Location |
+| 111 | `GET` | `/locations/provinces/:id/wards` | 🔓 | Location |
+| 112 | `GET` | `/locations/wards/:id/delivery-coverage` | 🔓 | Location |
+| 113 | `GET` | `/admin/locations/stats/candidates-by-province` | 🔐👑 | Location |
+| 114 | `POST` | `/admin/locations/wards/:id/merge` | 🔐👑 | Location |
+| 115 | `GET` | `/admin/audit-logs` | 🔐👑 | Audit |
 
 > **Chú thích:** 🔓 = Public | 🔐 = JWT | 🔐👑 = JWT + Admin | HMAC = Webhook signature
 

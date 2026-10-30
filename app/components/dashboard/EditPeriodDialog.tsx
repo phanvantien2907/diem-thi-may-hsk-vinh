@@ -3,6 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useFetcher } from "react-router";
 import type { ExamPeriod } from "~/types/exam";
+import { getPeriodLockReason } from "~/lib/exam-status";
 import {
   Dialog,
   DialogContent,
@@ -46,6 +47,8 @@ export function EditPeriodDialog({
 }: EditPeriodDialogProps) {
   const fetcher = useFetcher<{ success?: boolean; message?: string; error?: string }>();
   const isDraft = period?.status === "draft";
+  const lockReason = getPeriodLockReason(period);
+  const isLocked = lockReason !== null;
 
   const {
     register,
@@ -103,6 +106,14 @@ export function EditPeriodDialog({
   if (!period) return null;
 
   const onSubmit = (data: UpdateExamPeriodFormValues) => {
+    if (isLocked) {
+      toast.add({
+        type: "error",
+        title: "Không thể chỉnh sửa đợt thi",
+        description: lockReason ?? "Đợt thi đang ở trạng thái không cho phép chỉnh sửa.",
+      });
+      return;
+    }
     fetcher.submit(
       {
         intent: "update-period",
@@ -137,8 +148,21 @@ export function EditPeriodDialog({
 
         <form onSubmit={handleSubmit(onSubmit)}>
           <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
+            {/* Chặn hoàn toàn khi đợt thi đã bị khóa (đóng đăng ký/hủy/hoàn thành/hết hạn) */}
+            {isLocked && (
+              <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 dark:bg-rose-950/40 dark:border-rose-900/60 dark:text-rose-300 text-xs flex items-start gap-2.5">
+                <LockIcon className="size-4 shrink-0 mt-0.5 text-rose-600" />
+                <div className="space-y-1">
+                  <p className="font-semibold text-xs">Đợt thi đã bị khóa</p>
+                  <p className="text-[11px] leading-relaxed">
+                    {lockReason} Mọi thao tác chỉnh sửa đợt thi và các ca thi con đều không được phép.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Cảnh báo an toàn nếu đợt thi không phải draft */}
-            {!isDraft && (
+            {!isDraft && !isLocked && (
               <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 dark:bg-amber-950/40 dark:border-amber-900/60 dark:text-amber-300 text-xs flex items-start gap-2.5">
                 <AlertTriangleIcon className="size-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
                 <div className="space-y-1">
@@ -167,7 +191,8 @@ export function EditPeriodDialog({
               </Label>
               <Input
                 id="edit-period-name"
-                className="h-9 rounded-xl text-xs"
+                disabled={isLocked}
+                className={`h-9 rounded-xl text-xs ${isLocked ? "bg-muted cursor-not-allowed text-muted-foreground" : ""}`}
                 {...register("name")}
               />
               {errors.name && <p className="text-[11px] text-destructive font-medium">{errors.name.message}</p>}
@@ -180,7 +205,7 @@ export function EditPeriodDialog({
                   <Label htmlFor="edit-period-start-date" className="text-xs font-semibold text-foreground">
                     Ngày bắt đầu thi
                   </Label>
-                  {!isDraft && (
+                  {!isDraft && !isLocked && (
                     <span title="Đã khóa">
                       <LockIcon className="size-3 text-muted-foreground" />
                     </span>
@@ -189,8 +214,8 @@ export function EditPeriodDialog({
                 <Input
                   id="edit-period-start-date"
                   type="date"
-                  disabled={!isDraft}
-                  className={`h-9 rounded-xl text-xs ${!isDraft ? "bg-muted cursor-not-allowed text-muted-foreground" : ""}`}
+                  disabled={!isDraft || isLocked}
+                  className={`h-9 rounded-xl text-xs ${!isDraft || isLocked ? "bg-muted cursor-not-allowed text-muted-foreground" : ""}`}
                   {...register("start_date")}
                 />
               </div>
@@ -200,7 +225,7 @@ export function EditPeriodDialog({
                   <Label htmlFor="edit-period-end-date" className="text-xs font-semibold text-foreground">
                     Ngày kết thúc thi
                   </Label>
-                  {!isDraft && (
+                  {!isDraft && !isLocked && (
                     <span title="Đã khóa">
                       <LockIcon className="size-3 text-muted-foreground" />
                     </span>
@@ -209,8 +234,8 @@ export function EditPeriodDialog({
                 <Input
                   id="edit-period-end-date"
                   type="date"
-                  disabled={!isDraft}
-                  className={`h-9 rounded-xl text-xs ${!isDraft ? "bg-muted cursor-not-allowed text-muted-foreground" : ""}`}
+                  disabled={!isDraft || isLocked}
+                  className={`h-9 rounded-xl text-xs ${!isDraft || isLocked ? "bg-muted cursor-not-allowed text-muted-foreground" : ""}`}
                   {...register("end_date")}
                 />
               </div>
@@ -223,7 +248,7 @@ export function EditPeriodDialog({
                   <Label htmlFor="edit-period-reg-start" className="text-xs font-semibold text-foreground">
                     Thời điểm mở đăng ký
                   </Label>
-                  {!isDraft && (
+                  {!isDraft && !isLocked && (
                     <span title="Đã khóa">
                       <LockIcon className="size-3 text-muted-foreground" />
                     </span>
@@ -232,8 +257,8 @@ export function EditPeriodDialog({
                 <Input
                   id="edit-period-reg-start"
                   type="datetime-local"
-                  disabled={!isDraft}
-                  className={`h-9 rounded-xl text-xs ${!isDraft ? "bg-muted cursor-not-allowed text-muted-foreground" : ""}`}
+                  disabled={!isDraft || isLocked}
+                  className={`h-9 rounded-xl text-xs ${!isDraft || isLocked ? "bg-muted cursor-not-allowed text-muted-foreground" : ""}`}
                   {...register("registration_start")}
                 />
               </div>
@@ -243,7 +268,7 @@ export function EditPeriodDialog({
                   <Label htmlFor="edit-period-reg-deadline" className="text-xs font-semibold text-foreground">
                     Hạn chót đóng đăng ký
                   </Label>
-                  {!isDraft && (
+                  {!isDraft && !isLocked && (
                     <span title="Đã khóa">
                       <LockIcon className="size-3 text-muted-foreground" />
                     </span>
@@ -252,8 +277,8 @@ export function EditPeriodDialog({
                 <Input
                   id="edit-period-reg-deadline"
                   type="datetime-local"
-                  disabled={!isDraft}
-                  className={`h-9 rounded-xl text-xs ${!isDraft ? "bg-muted cursor-not-allowed text-muted-foreground" : ""}`}
+                  disabled={!isDraft || isLocked}
+                  className={`h-9 rounded-xl text-xs ${!isDraft || isLocked ? "bg-muted cursor-not-allowed text-muted-foreground" : ""}`}
                   {...register("registration_deadline")}
                 />
               </div>
@@ -267,7 +292,8 @@ export function EditPeriodDialog({
               <Textarea
                 id="edit-period-desc"
                 rows={2}
-                className="text-xs rounded-xl"
+                disabled={isLocked}
+                className={`text-xs rounded-xl ${isLocked ? "bg-muted cursor-not-allowed text-muted-foreground" : ""}`}
                 {...register("description")}
               />
             </div>
@@ -280,7 +306,8 @@ export function EditPeriodDialog({
               <Textarea
                 id="edit-period-instructions"
                 rows={2}
-                className="text-xs rounded-xl"
+                disabled={isLocked}
+                className={`text-xs rounded-xl ${isLocked ? "bg-muted cursor-not-allowed text-muted-foreground" : ""}`}
                 {...register("instructions")}
               />
             </div>
@@ -299,7 +326,7 @@ export function EditPeriodDialog({
             <Button
               type="submit"
               size="sm"
-              disabled={isSubmitting}
+              disabled={isSubmitting || isLocked}
               className="rounded-full cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-medium h-9 w-full sm:w-auto shadow-2xs"
             >
               {isSubmitting ? (
