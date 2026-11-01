@@ -124,6 +124,7 @@ import {
   formatGender,
   formatDateOrBadge,
 } from "~/components/dashboard/CandidateDetailDialog";
+import { maskAddress, maskDocumentNumber, maskEmail, maskPhoneNumber } from "~/lib/mask";
 
 export { EmptyFieldBadge, renderFieldOrBadge, formatGender, formatDateOrBadge };
 
@@ -1311,7 +1312,7 @@ export default function QuanLyHoSoDangKyPage() {
                         <div className="flex flex-col gap-0.5">
                           {c.latest_document?.doc_number ? (
                             <span className="font-mono text-xs font-semibold text-foreground">
-                              {c.latest_document.doc_number}
+                              {maskDocumentNumber(c.latest_document.doc_number)}
                             </span>
                           ) : (
                             <EmptyFieldBadge />
@@ -1347,7 +1348,7 @@ export default function QuanLyHoSoDangKyPage() {
                       <TableCell>
                         <div className="min-w-0">
                           <span className="font-mono text-xs text-foreground font-medium">
-                            {renderFieldOrBadge(c.phone)}
+                            {renderFieldOrBadge(maskPhoneNumber(c.phone))}
                           </span>
                         </div>
                       </TableCell>
@@ -1746,7 +1747,7 @@ export default function QuanLyHoSoDangKyPage() {
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground mt-0.5">
               Thí sinh: <span className="font-semibold text-foreground">{candidateToReject?.full_name || <EmptyFieldBadge />}</span>
-              {" • CCCD: "}{candidateToReject?.latest_document?.doc_number || <EmptyFieldBadge />}
+              {" • CCCD: "}{candidateToReject?.latest_document?.doc_number ? maskDocumentNumber(candidateToReject.latest_document.doc_number) : <EmptyFieldBadge />}
             </DialogDescription>
           </DialogHeader>
 
@@ -1843,7 +1844,7 @@ export default function QuanLyHoSoDangKyPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Xác nhận phê duyệt lại hồ sơ</AlertDialogTitle>
             <AlertDialogDescription>
-              Hồ sơ thí sinh <strong>{candidateToReapprove?.full_name}</strong> (CCCD: {candidateToReapprove?.latest_document?.doc_number || "—"}) hiện đang ở trạng thái từ chối. Bạn có chắc chắn muốn phê duyệt lại hồ sơ này hợp lệ để thí sinh đủ điều kiện dự thi?
+              Hồ sơ thí sinh <strong>{candidateToReapprove?.full_name}</strong> (CCCD: {maskDocumentNumber(candidateToReapprove?.latest_document?.doc_number)}) hiện đang ở trạng thái từ chối. Bạn có chắc chắn muốn phê duyệt lại hồ sơ này hợp lệ để thí sinh đủ điều kiện dự thi?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1922,7 +1923,7 @@ export default function QuanLyHoSoDangKyPage() {
                       <div className="space-y-1">
                         <p className="font-semibold text-sm">Giấy tờ duy nhất & Hợp lệ</p>
                         <p>
-                          Số giấy tờ <span className="font-mono font-bold">{targetDocNumber}</span> là duy nhất, không trùng lặp với bất kỳ thí sinh nào khác trên hệ thống.
+                          Số giấy tờ <span className="font-mono font-bold">{maskDocumentNumber(targetDocNumber)}</span> là duy nhất, không trùng lặp với bất kỳ thí sinh nào khác trên hệ thống.
                         </p>
                       </div>
                     </div>
@@ -1950,7 +1951,7 @@ export default function QuanLyHoSoDangKyPage() {
                       <span>
                         {targetDocNumber && matchedTarget ? (
                           <>
-                            Cảnh báo: Số giấy tờ <span className="font-mono font-bold">{targetDocNumber}</span> đang bị trùng lặp trên <span className="font-bold">{matchedTarget.count}</span> hồ sơ thí sinh!
+                            Cảnh báo: Số giấy tờ <span className="font-mono font-bold">{maskDocumentNumber(targetDocNumber)}</span> đang bị trùng lặp trên <span className="font-bold">{matchedTarget.count}</span> hồ sơ thí sinh!
                           </>
                         ) : (
                           <>
@@ -1979,7 +1980,7 @@ export default function QuanLyHoSoDangKyPage() {
                                 className={isCurrentTarget ? "bg-amber-50/60 dark:bg-amber-950/30" : ""}
                               >
                                 <TableCell className="font-mono text-xs font-semibold">
-                                  {item.doc_number}
+                                  {maskDocumentNumber(item.doc_number)}
                                   {isCurrentTarget && (
                                     <Badge variant="outline" className="ml-2 text-[10px] rounded-full border-amber-500 text-amber-600">
                                       Đang kiểm tra

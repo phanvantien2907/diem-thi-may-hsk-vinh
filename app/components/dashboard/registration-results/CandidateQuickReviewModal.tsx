@@ -34,6 +34,7 @@ import { Badge } from "~/components/ui/badge";
 import { Label } from "~/components/ui/label";
 import { Textarea } from "~/components/ui/textarea";
 import { toast } from "~/components/ui/toast";
+import { maskAddress, maskDocumentNumber, maskEmail, maskPhoneNumber } from "~/lib/mask";
 import type { AdminCandidateResponseDTO } from "~/types/admin";
 
 interface CandidateQuickReviewModalProps {
@@ -172,28 +173,36 @@ export function CandidateQuickReviewModal({
   return (
     <>
       <Dialog open={open} onOpenChange={handleClose}>
-        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col p-6">
-          <DialogHeader>
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 rounded-full bg-primary/10 text-primary">
-                <ShieldCheckIcon className="size-5" />
+        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col p-6 gap-0">
+          <DialogHeader className="pb-3 border-b">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-full bg-primary/10 text-primary shrink-0">
+                  <ShieldCheckIcon className="size-5" />
+                </div>
+                <div>
+                  <DialogTitle className="text-base sm:text-lg font-bold text-foreground">
+                    Chi tiết Hồ sơ Thí sinh
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+                    Đối chiếu thông tin cá nhân, giấy tờ tùy thân và thẩm định điều kiện dự thi HSK.
+                  </DialogDescription>
+                </div>
               </div>
-              <div>
-                <DialogTitle className="text-base sm:text-lg">
-                  Xét duyệt Hồ sơ Thí sinh (Soft-lock 5 phút & Proof-of-View)
-                </DialogTitle>
-                <DialogDescription className="text-xs">
-                  Truy cập xem ảnh giấy tờ gốc tuân thủ Nghị định 13/2023/NĐ-CP (ghi log <code>VIEW_PII</code>).
-                </DialogDescription>
-              </div>
+              <Badge
+                variant="outline"
+                className="rounded-full px-2.5 py-0.5 text-[11px] font-medium border-emerald-500/30 text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 shrink-0"
+              >
+                Bảo mật PII • Nghị định 13/2023
+              </Badge>
             </div>
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto py-2 space-y-4">
+          <div className="flex-1 overflow-y-auto py-4 space-y-4">
             {isLoading ? (
               <div className="py-16 flex flex-col items-center justify-center gap-2 text-muted-foreground text-xs">
                 <Loader2Icon className="size-6 animate-spin text-primary" />
-                <span>Đang tải thông tin chi tiết và cấp quyền xem PII...</span>
+                <span>Đang tải thông tin chi tiết hồ sơ thí sinh...</span>
               </div>
             ) : !candidate ? (
               <div className="py-16 text-center text-muted-foreground text-xs">
@@ -201,24 +210,13 @@ export function CandidateQuickReviewModal({
               </div>
             ) : (
               <>
-                {/* Thông tin cá nhân */}
-                <div className="bg-muted/40 border rounded-lg p-3 text-xs grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Họ và tên:</span>
-                    <span className="font-semibold text-foreground text-sm">
-                      {candidate.full_name}
-                      {candidate.full_name_cn ? ` (${candidate.full_name_cn})` : ""}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Ngày sinh & Giới tính:</span>
-                    <span className="font-medium text-foreground">
-                      {candidate.dob ? new Date(candidate.dob).toLocaleDateString("vi-VN") : "—"} (
-                      {candidate.gender === "male" ? "Nam" : candidate.gender === "female" ? "Nữ" : "Khác"})
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Trạng thái giấy tờ:</span>
+                {/* Section 1: Thông tin nhân thân thí sinh */}
+                <div className="rounded-xl border bg-card/60 p-4 space-y-3">
+                  <div className="flex items-center justify-between border-b pb-2">
+                    <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <UserCheckIcon className="size-4 text-primary" />
+                      <span>Thông tin nhân thân thí sinh</span>
+                    </h4>
                     <Badge
                       variant={
                         doc?.verification_status === "verified"
@@ -227,7 +225,7 @@ export function CandidateQuickReviewModal({
                           ? "destructive"
                           : "secondary"
                       }
-                      className="mt-0.5 text-xs"
+                      className="text-[11px] font-medium"
                     >
                       {doc?.verification_status === "verified"
                         ? "Đã duyệt hợp lệ"
@@ -237,40 +235,106 @@ export function CandidateQuickReviewModal({
                     </Badge>
                   </div>
 
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Số điện thoại:</span>
-                    <span className="font-mono font-medium text-foreground">{candidate.phone || "—"}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Email liên hệ:</span>
-                    <span className="font-medium text-foreground">{candidate.email || "—"}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Cấp độ đăng ký:</span>
-                    <span className="font-medium text-foreground">{candidate.exam_level || candidate.target_exam_level || "—"}</span>
-                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
+                    <div>
+                      <span className="text-muted-foreground text-xs font-medium block">Họ và tên đầy đủ</span>
+                      <span className="font-semibold text-foreground text-sm block mt-0.5">
+                        {candidate.full_name}
+                      </span>
+                    </div>
 
-                  {doc && (
-                    <>
-                      <div>
-                        <span className="text-muted-foreground block text-[11px]">Loại & Số giấy tờ:</span>
-                        <span className="font-mono font-semibold text-foreground">
-                          {doc.doc_type?.toUpperCase()}: {doc.doc_number}
-                        </span>
+                    <div>
+                      <span className="text-muted-foreground text-xs font-medium block">Tên tiếng Trung</span>
+                      <span className="font-semibold text-foreground text-sm block mt-0.5">
+                        {candidate.full_name_cn || "—"}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-muted-foreground text-xs font-medium block">Ngày sinh & Giới tính</span>
+                      <span className="font-medium text-foreground block mt-0.5">
+                        {candidate.dob ? new Date(candidate.dob).toLocaleDateString("vi-VN") : "—"} (
+                        {candidate.gender === "male" ? "Nam" : candidate.gender === "female" ? "Nữ" : "Khác"})
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-muted-foreground text-xs font-medium block">Quốc tịch & Dân tộc</span>
+                      <span className="font-medium text-foreground block mt-0.5">
+                        {candidate.nationality || "Việt Nam"} {candidate.ethnicity ? `• ${candidate.ethnicity}` : ""}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-muted-foreground text-xs font-medium block">Số điện thoại liên hệ</span>
+                      <span className="font-mono font-semibold text-foreground block mt-0.5">
+                        {maskPhoneNumber(candidate.phone)}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-muted-foreground text-xs font-medium block">Hộp thư điện tử (Email)</span>
+                      <span className="font-medium text-foreground block mt-0.5 break-all">
+                        {maskEmail(candidate.email)}
+                      </span>
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <span className="text-muted-foreground text-xs font-medium block">Cấp độ đăng ký dự thi</span>
+                      <div className="mt-1">
+                        {candidate.exam_level || candidate.target_exam_level ? (
+                          <Badge variant="outline" className="font-medium text-xs py-0.5 px-2.5">
+                            {candidate.exam_level || candidate.target_exam_level}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
                       </div>
-                      <div>
-                        <span className="text-muted-foreground block text-[11px]">Ngày cấp & Nơi cấp:</span>
-                        <span className="text-foreground">
-                          {doc.issue_date ? new Date(doc.issue_date).toLocaleDateString("vi-VN") : "—"} • {doc.issue_place || "—"}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block text-[11px]">Địa chỉ:</span>
-                        <span className="text-foreground truncate block">{doc.address_detail || "—"}</span>
-                      </div>
-                    </>
-                  )}
+                    </div>
+                  </div>
                 </div>
+
+                {/* Section 2: Giấy tờ tùy thân & Cư trú */}
+                {doc && (
+                  <div className="rounded-xl border bg-card/60 p-4 space-y-3">
+                    <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5 border-b pb-2">
+                      <FileTextIcon className="size-4 text-primary" />
+                      <span>Thông tin giấy tờ tùy thân ({doc.doc_type === "passport" ? "Hộ chiếu" : "Căn cước công dân"})</span>
+                    </h4>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
+                      <div>
+                        <span className="text-muted-foreground text-xs font-medium block">
+                          Số giấy tờ ({doc.doc_type === "passport" ? "Passport No." : "Số CCCD"})
+                        </span>
+                        <span className="font-mono font-bold text-foreground text-sm block mt-0.5">
+                          {maskDocumentNumber(doc.doc_number)}
+                        </span>
+                      </div>
+
+                      <div>
+                        <span className="text-muted-foreground text-xs font-medium block">Ngày cấp</span>
+                        <span className="font-medium text-foreground block mt-0.5">
+                          {doc.issue_date ? new Date(doc.issue_date).toLocaleDateString("vi-VN") : "—"}
+                        </span>
+                      </div>
+
+                      <div className="sm:col-span-2">
+                        <span className="text-muted-foreground text-xs font-medium block">Nơi cấp</span>
+                        <span className="font-medium text-foreground block mt-0.5">
+                          {doc.issue_place || "—"}
+                        </span>
+                      </div>
+
+                      <div className="sm:col-span-2">
+                        <span className="text-muted-foreground text-xs font-medium block">Địa chỉ thường trú / cư trú</span>
+                        <span className="font-medium text-foreground block mt-0.5">
+                          {maskAddress(doc.address_detail)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {doc?.rejection_reason && (
                   <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-xs text-destructive">
@@ -278,29 +342,36 @@ export function CandidateQuickReviewModal({
                   </div>
                 )}
 
-                {/* Khung ảnh giấy tờ */}
-                <div className="space-y-2">
-                  <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                {/* Section 3: Khung ảnh chứng thực đối soát đồng bộ */}
+                <div className="rounded-xl border bg-card/60 p-4 space-y-3">
+                  <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5 border-b pb-2">
                     <ImageIcon className="size-4 text-primary" />
-                    <span>Hình ảnh hồ sơ dự thi (Kiểm tra kỹ trước khi duyệt)</span>
+                    <span>Ảnh chứng thực đối soát (Thẩm định giấy tờ gốc)</span>
                   </h4>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     {/* Ảnh chân dung 3x4 */}
-                    <div className="border rounded-lg p-2.5 bg-card flex flex-col items-center gap-2 text-center">
-                      <span className="text-[11px] font-medium text-muted-foreground">Ảnh chân dung 3x4</span>
-                      <div className="w-full aspect-[3/4] max-w-[140px] bg-muted/30 rounded-md overflow-hidden border flex items-center justify-center relative group">
+                    <div className="h-52 rounded-xl border bg-background p-2.5 flex flex-col justify-between">
+                      <div className="flex items-center justify-between pb-1.5">
+                        <span className="text-xs font-medium text-foreground">Ảnh chân dung 3x4</span>
+                        {doc?.portrait_image_url && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-emerald-600 border-emerald-500/30">
+                            Đã tải
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="w-full flex-1 rounded-lg overflow-hidden bg-muted/40 border flex items-center justify-center relative group p-1">
                         {doc?.portrait_image_url ? (
                           <>
                             <img
                               src={doc.portrait_image_url}
                               alt="Ảnh chân dung"
-                              className="w-full h-full object-cover"
+                              className="max-h-full max-w-full object-contain rounded"
                             />
                             <button
                               type="button"
                               onClick={() => setActivePhoto(doc.portrait_image_url!)}
-                              className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs cursor-pointer gap-1"
+                              className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium cursor-pointer gap-1.5"
                             >
                               <EyeIcon className="size-4" />
                               <span>Phóng to</span>
@@ -313,20 +384,27 @@ export function CandidateQuickReviewModal({
                     </div>
 
                     {/* Mặt trước CCCD/Hộ chiếu */}
-                    <div className="border rounded-lg p-2.5 bg-card flex flex-col items-center gap-2 text-center">
-                      <span className="text-[11px] font-medium text-muted-foreground">Mặt trước CCCD / Hộ chiếu</span>
-                      <div className="w-full aspect-[16/10] bg-muted/30 rounded-md overflow-hidden border flex items-center justify-center relative group">
+                    <div className="h-52 rounded-xl border bg-background p-2.5 flex flex-col justify-between">
+                      <div className="flex items-center justify-between pb-1.5">
+                        <span className="text-xs font-medium text-foreground">Mặt trước CCCD/Hộ chiếu</span>
+                        {doc?.front_image_url && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-emerald-600 border-emerald-500/30">
+                            Đã tải
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="w-full flex-1 rounded-lg overflow-hidden bg-muted/40 border flex items-center justify-center relative group p-1">
                         {doc?.front_image_url ? (
                           <>
                             <img
                               src={doc.front_image_url}
-                              alt="Mặt trước"
-                              className="w-full h-full object-cover"
+                              alt="Mặt trước CCCD"
+                              className="max-h-full max-w-full object-contain rounded"
                             />
                             <button
                               type="button"
                               onClick={() => setActivePhoto(doc.front_image_url!)}
-                              className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs cursor-pointer gap-1"
+                              className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium cursor-pointer gap-1.5"
                             >
                               <EyeIcon className="size-4" />
                               <span>Phóng to</span>
@@ -339,28 +417,35 @@ export function CandidateQuickReviewModal({
                     </div>
 
                     {/* Mặt sau CCCD */}
-                    <div className="border rounded-lg p-2.5 bg-card flex flex-col items-center gap-2 text-center">
-                      <span className="text-[11px] font-medium text-muted-foreground">Mặt sau CCCD</span>
-                      <div className="w-full aspect-[16/10] bg-muted/30 rounded-md overflow-hidden border flex items-center justify-center relative group">
+                    <div className="h-52 rounded-xl border bg-background p-2.5 flex flex-col justify-between">
+                      <div className="flex items-center justify-between pb-1.5">
+                        <span className="text-xs font-medium text-foreground">Mặt sau CCCD</span>
+                        {doc?.back_image_url && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-emerald-600 border-emerald-500/30">
+                            Đã tải
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="w-full flex-1 rounded-lg overflow-hidden bg-muted/40 border flex items-center justify-center relative group p-1">
                         {doc?.back_image_url ? (
                           <>
                             <img
                               src={doc.back_image_url}
-                              alt="Mặt sau"
-                              className="w-full h-full object-cover"
+                              alt="Mặt sau CCCD"
+                              className="max-h-full max-w-full object-contain rounded"
                             />
                             <button
                               type="button"
                               onClick={() => setActivePhoto(doc.back_image_url!)}
-                              className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs cursor-pointer gap-1"
+                              className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium cursor-pointer gap-1.5"
                             >
                               <EyeIcon className="size-4" />
                               <span>Phóng to</span>
                             </button>
                           </>
                         ) : (
-                          <span className="text-xs text-muted-foreground">
-                            {doc?.doc_type === "passport" ? "Không yêu cầu (Hộ chiếu)" : "Chưa có ảnh"}
+                          <span className="text-xs text-muted-foreground text-center">
+                            {doc?.doc_type === "passport" ? "Hộ chiếu không có mặt sau" : "Chưa có ảnh"}
                           </span>
                         )}
                       </div>

@@ -27,6 +27,7 @@ import type {
   AuditLogEntryDTO,
   AuditLogEntityTable,
 } from "~/types/admin";
+import { maskAddress, maskDocumentNumber, maskEmail, maskPhoneNumber } from "~/lib/mask";
 
 const PAGE_SIZE = 10; // Rule 7: Modal lịch sử thao tác = 10 bản ghi / trang
 
@@ -79,6 +80,16 @@ function stringifyValue(value: unknown): string {
   }
 }
 
+function maskDiffField(key: string, val: string): string {
+  if (val === "—" || !val) return val;
+  const lowerKey = key.toLowerCase();
+  if (lowerKey.includes("phone")) return maskPhoneNumber(val);
+  if (lowerKey.includes("doc_number") || lowerKey.includes("cccd")) return maskDocumentNumber(val);
+  if (lowerKey.includes("email")) return maskEmail(val);
+  if (lowerKey.includes("address")) return maskAddress(val);
+  return val;
+}
+
 /** Liệt kê các trường thay đổi giữa old_value và new_value */
 function diffValues(
   oldValue: Record<string, unknown> | null,
@@ -87,9 +98,15 @@ function diffValues(
   const keys = new Set<string>([...Object.keys(oldValue ?? {}), ...Object.keys(newValue ?? {})]);
   const rows: { key: string; from: string; to: string }[] = [];
   keys.forEach((key) => {
-    const from = stringifyValue(oldValue?.[key]);
-    const to = stringifyValue(newValue?.[key]);
-    if (from !== to) rows.push({ key, from, to });
+    const rawFrom = stringifyValue(oldValue?.[key]);
+    const rawTo = stringifyValue(newValue?.[key]);
+    if (rawFrom !== rawTo) {
+      rows.push({
+        key,
+        from: maskDiffField(key, rawFrom),
+        to: maskDiffField(key, rawTo),
+      });
+    }
   });
   return rows;
 }

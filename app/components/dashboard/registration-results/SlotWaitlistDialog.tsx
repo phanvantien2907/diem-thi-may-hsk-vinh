@@ -27,6 +27,7 @@ import {
   PaginationPrevious,
 } from "~/components/ui/pagination";
 import type { AdminWaitlistItemDTO, SlotRegistrationStatsDTO } from "~/types/registration-results";
+import { maskEmail } from "~/lib/mask";
 
 interface SlotWaitlistDialogProps {
   open: boolean;
@@ -149,7 +150,7 @@ export function SlotWaitlistDialog({
                       </TableCell>
                       <TableCell>
                         <div className="font-medium text-foreground">{item.full_name}</div>
-                        <div className="text-muted-foreground text-[11px]">{item.email}</div>
+                        <div className="text-muted-foreground text-[11px] font-mono">{maskEmail(item.email)}</div>
                         {item.is_multi_slot && (
                           <Badge variant="secondary" className="text-[10px] h-4 mt-0.5">
                             Đã đk {item.registered_slot_count} ca khác
