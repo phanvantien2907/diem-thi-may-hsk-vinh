@@ -17,6 +17,7 @@ export default [
     route("quan-ly-ky-thi-ca-thi", "routes/admin/quan-ly-ky-thi-ca-thi.tsx"),
     route("quan-ly-ho-so-dang-ky", "routes/admin/quan-ly-ho-so-dang-ky.tsx"),
     route("quan-ly-giao-dich-thanh-toan", "routes/admin/quan-ly-giao-dich-thanh-toan.tsx"),
+    route("ket-qua-dang-ky", "routes/admin/ket-qua-dang-ky.tsx"),
   ]),
 
   layout("routes/(auth)/layout.tsx", [
@@ -34,6 +35,11 @@ export default [
   route("internal/admin/candidates/export", "routes/internal.admin.candidates.export.ts"),
   route("internal/admin/candidates/:id", "routes/internal.admin.candidates.$id.ts"),
   route("internal/admin/exam-periods/:id", "routes/internal.admin.exam-periods.$id.ts"),
+  route("internal/admin/registration-results/sessions/:session_id/registrations", "routes/internal.admin.registration-results.sessions.$session_id.registrations.ts"),
+  route("internal/admin/registration-results/sessions/:session_id/waitlist", "routes/internal.admin.registration-results.sessions.$session_id.waitlist.ts"),
+  route("internal/admin/registration-results/sessions/:session_id/summary", "routes/internal.admin.registration-results.sessions.$session_id.summary.ts"),
+  route("internal/admin/registration-results/discrepancies", "routes/internal.admin.registration-results.discrepancies.ts"),
+  route("internal/admin/registration-results/export", "routes/internal.admin.registration-results.export.ts"),
 
   // ── Catch-all 404 route ───────────────────────────────────────────────────
   route("*", "routes/$.tsx"),

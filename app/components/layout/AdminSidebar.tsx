@@ -13,6 +13,7 @@ import {
   SearchIcon,
   HistoryIcon,
   SettingsIcon,
+  ClipboardCheckIcon,
 } from "lucide-react";
 import { LogoutDialog } from "~/components/layout/logout-dialog";
 import { AdminAuditLogDialog } from "~/components/layout/AdminAuditLogDialog";
@@ -61,6 +62,12 @@ export const ADMIN_NAV_ITEMS = [
     label: "Hồ sơ đăng ký",
     href: "/quan-ly-ho-so-dang-ky",
     icon: UsersRoundIcon,
+    badge: null,
+  },
+  {
+    label: "Kết quả đăng ký",
+    href: "/ket-qua-dang-ky",
+    icon: ClipboardCheckIcon,
     badge: "Mới",
   },
   {

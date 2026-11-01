@@ -42,6 +42,7 @@ import {
   ActivityIcon,
   FileCodeIcon,
   DatabaseIcon,
+  ClipboardCheckIcon,
 } from "lucide-react";
 import { toast } from "~/components/ui/toast";
 
@@ -149,6 +150,15 @@ export function AppCommandMenu({
                 <UsersRoundIcon className="size-4 text-primary" />
                 <span>Quản lý Hồ sơ Đăng ký</span>
                 <CommandShortcut>G H</CommandShortcut>
+              </CommandItem>
+
+              <CommandItem
+                value="Kết quả đăng ký ket qua dang ky dot thi ca thi si so bao cao xuat danh sach pdf excel"
+                onSelect={() => handleSelect(() => navigate("/ket-qua-dang-ky"))}
+              >
+                <ClipboardCheckIcon className="size-4 text-primary" />
+                <span>Kết quả Đăng ký</span>
+                <CommandShortcut>G R</CommandShortcut>
               </CommandItem>
 
               <CommandItem

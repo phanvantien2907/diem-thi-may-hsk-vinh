@@ -696,19 +696,52 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 ---
 
-### 2.13. [Admin] Xóa tài khoản
+### 2.13. [Admin] Vô hiệu hóa / Xóa tài khoản & Khôi phục tài khoản
 
 | | |
 |---|---|
-| **Endpoint** | `DELETE /api/v1/admin/delete-account/:id` |
+| **Endpoint** | `DELETE /api/v1/admin/delete-account/:id` (hoặc `POST /api/v1/admin/accounts/:id/deactivate`) |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Admin vô hiệu hóa tài khoản của người dùng |
+| **Use-case** | Admin vô hiệu hóa tài khoản thí sinh/người dùng kèm xác nhận danh tính, thu hồi toàn bộ phiên JWT tức thì và xử lý dây chuyền các đơn đăng ký thi |
 
 **Path Params:**
 
 | Param | Kiểu | Mô tả |
 |---|---|---|
-| `id` | `integer` | ID tài khoản cần xóa |
+| `id` | `integer` | ID tài khoản cần vô hiệu hóa |
+
+**Request Body:**
+
+```json
+{
+  "confirm_account_id": 50,
+  "confirm_identity": "040123456060",
+  "reason": "Tài khoản trùng lặp theo yêu cầu xác minh",
+  "paid_resolution": "block"
+}
+```
+
+| Field | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `confirm_account_id` | `integer` | ✅ | Khớp với `:id` | ID tài khoản xác nhận |
+| `confirm_identity` | `string` | ✅ | Khớp với `username` (CCCD), `email` hoặc `full_name` | Chuỗi xác nhận danh tính chống xóa nhầm |
+| `reason` | `string` | ✅ | 5–500 ký tự | Lý do vô hiệu hóa (ghi vào `audit_logs`) |
+| `paid_resolution` | `string` | ❌ | `block` (mặc định) hoặc `refund` | Cách xử lý nếu thí sinh có đơn đã thanh toán (`confirmed`) |
+
+**Cơ chế xử lý dây chuyền (Registration & Session Cascade):**
+1. **Phiên đăng nhập & JWT:** Thu hồi toàn bộ `auth_sessions` (`auth_session_revoked_at = NOW()`) và vô hiệu hóa ngay lập tức mọi JWT Access Token đang hoạt động của tài khoản qua bộ lọc `middleware.JWTAuth`.
+2. **Đơn chưa thanh toán (`pending_payment`):** Tự động chuyển sang `cancelled` và giải phóng ghế `held -> available`.
+3. **Đơn đã thanh toán (`confirmed`):**
+   - Nếu `paid_resolution = "block"` (mặc định): Chặn thao tác với `HTTP 409 Conflict`.
+   - Nếu `paid_resolution = "refund"`: Hủy đơn, giải phóng ghế `booked -> available` và chuyển trạng thái thanh toán sang `pending_refund`.
+
+**Khôi phục tài khoản đã vô hiệu hóa (`POST /api/v1/admin/accounts/:id/reactivate`):**
+
+```json
+{
+  "reason": "Khôi phục tài khoản sau khi xác minh bổ sung"
+}
+```
 
 **Response (200 OK):**
 
@@ -716,7 +749,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 {
   "success": true,
   "data": {
-    "message": "Đã xóa tài khoản"
+    "message": "Đã vô hiệu hóa tài khoản và thu hồi toàn bộ phiên đăng nhập"
   },
   "error": null,
   "meta": null
@@ -1199,6 +1232,7 @@ font này ở Front-end.
 `GET /api/v1/admin/candidates?exam_date=2026-11-27&page=1&limit=20`
 
 **Response (200 OK):** Mảng `AdminCandidateResponseDTO` + `meta` phân trang.
+> **Bảo mật dữ liệu cá nhân (Nghị định 13/2023/NĐ-CP):** Trong API danh sách (`GET /api/v1/admin/candidates`), các trường PII nhạy cảm gồm `phone` và `latest_document.doc_number` luôn được che mặt nạ ở tầng DTO (ví dụ: `"090***567"`, `"040***060"`). Dữ liệu gốc không che chỉ được trả về tại API chi tiết `GET /api/v1/admin/candidates/:id` và mọi lượt truy cập đều được ghi nhận bắt buộc vào `audit_logs` (`action = "VIEW_PII"`).
 
 ```json
 {
@@ -1217,7 +1251,7 @@ font này ở Front-end.
       "birthplace": null,
       "mother_tongue": null,
       "chinese_study_years": 3,
-      "phone": "0901234567",
+      "phone": "090***567",
       "email": "nguyenvana@email.com",
       "exam_level": "HSK 4",
       "target_exam_level": "HSK 4",
@@ -1225,7 +1259,7 @@ font này ở Front-end.
         "id": 1,
         "candidate_id": 1,
         "doc_type": "cccd",
-        "doc_number": "012345678901",
+        "doc_number": "012***901",
         "issue_date": "2021-06-15T00:00:00Z",
         "issue_place": "Cục Cảnh sát QLHC về TTXH",
         "front_image_url": "...",
@@ -1325,38 +1359,38 @@ bao gồm cả hồ sơ chưa có giấy tờ mới nhất và các hồ sơ có
 - `exam_date` không đúng định dạng `YYYY-MM-DD`: HTTP `400`.
 - Không có quyền admin: HTTP `401` hoặc `403`.
 
-### 3.10. [Admin] Xem chi tiết thí sinh
+### 3.10. [Admin] Xem chi tiết thí sinh (Kèm Soft Lock 5 phút & Audit Log VIEW_PII)
 
 | | |
 |---|---|
 | **Endpoint** | `GET /api/v1/admin/candidates/:id` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Admin xem chi tiết hồ sơ một thí sinh |
+| **Use-case** | Admin mở xem chi tiết hồ sơ, kiểm tra ảnh giấy tờ gốc và dữ liệu PII đầy đủ trước khi phê duyệt |
 
 **Path Params:** `id` — ID thí sinh (`integer`)
 
-**Response (200 OK):** Trả về `AdminCandidateResponseDTO`.
-
-Response chi tiết sử dụng cùng đầy đủ contract với API danh sách (thông tin hồ sơ,
-tài khoản, cấp thi và `latest_document`). Các trường chưa có dữ liệu được trả về
-explicitly với giá trị `null`, không bị loại bỏ khỏi JSON. `exam_level` và
-`target_exam_level` hiện được lấy từ cấp của lần đăng ký thi gần nhất; hệ thống
-chưa có cột mục tiêu riêng. Trường `full_name_cn` chứa họ tên tiếng Trung của
-thí sinh và trả về `null` nếu chưa được cập nhật.
+**Cơ chế Bảo mật & Đồng thời:**
+1. **Audit Trail (Nghị định 13/2023):** Mỗi lần gọi API này, hệ thống tự động ghi 1 bản ghi `VIEW_PII` vào `audit_logs` với ID của Admin truy cập.
+2. **Soft Lock (5 phút):** Tự động cấp khóa tạm thời 5 phút (`review_lock`) cho Admin đang mở hồ sơ. Nếu Admin khác mở cùng hồ sơ trong thời gian này, `review_lock.is_locked_by_other = true` sẽ được trả về và các thao tác duyệt/từ chối của Admin thứ 2 sẽ bị chặn với `HTTP 409 Conflict`. Khi đóng popup xét duyệt, FE có thể gọi `DELETE /api/v1/admin/candidates/:id/lock` để nhả khóa sớm.
+3. **Approval Gatekeeping (Proof-of-View):** Admin bắt buộc phải gọi API xem chi tiết này trước thì mới được phép gọi `POST /api/v1/admin/candidates/:id/approve`.
 
 ---
 
-### 3.9. [Admin] Duyệt giấy tờ
+### 3.10b. [Admin] Duyệt giấy tờ (Strict Gatekeeping + Duplicate Hard Blocker + Optimistic Lock)
 
 | | |
 |---|---|
 | **Endpoint** | `POST /api/v1/admin/candidates/:id/approve` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Admin phê duyệt giấy tờ thí sinh |
+| **Use-case** | Admin phê duyệt giấy tờ thí sinh (`pending -> verified`) |
 
 **Path Params:** `id` — ID thí sinh (`integer`)
 
-**Request Body:** Không cần.
+**Các chốt chặn bắt buộc (Hard Blockers — trả về `HTTP 409 Conflict` nếu vi phạm):**
+1. **Chặn duyệt mù từ màn hình danh sách:** Phải mở `GET /api/v1/admin/candidates/:id` kiểm tra ảnh giấy tờ trước khi duyệt.
+2. **Chặn duyệt trực tiếp hồ sơ đã bị từ chối (`rejected`):** Hồ sơ `rejected` không thể duyệt trực tiếp; thí sinh phải nộp lại hoặc Admin phải gọi `POST /api/v1/admin/candidates/:id/reopen-review` (Mở lại xét duyệt).
+3. **Chặn cứng trùng số CCCD/Hộ chiếu (Step 3):** Nếu số giấy tờ trùng với bất kỳ hồ sơ thí sinh đang hoạt động nào khác, thao tác duyệt bị chặn cứng (`HTTP 409 Conflict`) cho đến khi xử lý gộp hồ sơ qua `POST /api/v1/admin/candidates/merge`.
+4. **Optimistic Locking:** Chỉ cập nhật khi trạng thái hiện tại là `pending` (`WHERE id = $1 AND status = 'pending'`). Nếu Admin khác vừa duyệt/từ chối trước đó (`0 rows affected`), trả về `HTTP 409 Conflict`.
 
 **Response (200 OK):**
 
@@ -1371,51 +1405,48 @@ thí sinh và trả về `null` nếu chưa được cập nhật.
 
 ---
 
-### 3.10. [Admin] Từ chối giấy tờ
+### 3.10c. [Admin] Từ chối giấy tờ, Thu hồi phê duyệt & Mở lại xét duyệt
 
-| | |
-|---|---|
-| **Endpoint** | `POST /api/v1/admin/candidates/:id/reject` |
-| **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Admin từ chối giấy tờ thí sinh (kèm lý do) |
-
-**Path Params:** `id` — ID thí sinh (`integer`)
-
-**Request Body:**
-
-```json
-{
-  "reason": "Ảnh CCCD bị mờ, không đọc được thông tin"
-}
-```
-
-| Field | Kiểu | Bắt buộc | Validate | Mô tả |
-|---|---|---|---|---|
-| `reason` | `string` | ✅ | Tối đa 500 ký tự | Lý do từ chối |
+| Endpoint | Chuyển trạng thái | Mô tả |
+|---|---|---|
+| `POST /api/v1/admin/candidates/:id/reject` | `pending -> rejected` | Từ chối hồ sơ đang chờ duyệt (bắt buộc `reason`). |
+| `POST /api/v1/admin/candidates/:id/revoke-approval` | `verified -> rejected` | **Thu hồi phê duyệt:** Bắt buộc `reason` (5–500 ký tự). Tự động hủy các đơn `pending_payment` và nhả ghế `held -> available`. Với đơn đã thanh toán (`confirmed`), mặc định chặn (`paid_resolution: "block"` -> `409 Conflict`) hoặc chuyển thanh toán sang `pending_refund` và nhả ghế khi truyền `"paid_resolution": "refund"`. |
+| `POST /api/v1/admin/candidates/:id/reopen-review` | `rejected -> pending` | **Mở lại xét duyệt:** Bắt buộc `reason` (5–500 ký tự), đưa hồ sơ bị từ chối về lại `pending` và ghi `REOPEN_REVIEW` vào `audit_logs`. |
 
 ---
 
-### 3.11. [Admin] Danh sách hồ sơ trùng
+### 3.11. [Admin] Danh sách hồ sơ trùng & Gộp hồ sơ (`fn_merge_candidate_profiles`)
 
 | | |
 |---|---|
-| **Endpoint** | `GET /api/v1/admin/candidates/duplicates` |
+| **Endpoint phát hiện** | `GET /api/v1/admin/candidates/duplicates` |
+| **Endpoint gộp hồ sơ** | `POST /api/v1/admin/candidates/merge` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Phát hiện các thí sinh dùng chung số giấy tờ |
+| **Use-case** | Phát hiện và gộp nguyên tử (atomic) hồ sơ thí sinh bị trùng số CCCD/Hộ chiếu thông qua `fn_merge_candidate_profiles` |
 
-**Response (200 OK):**
+**Request Body (`POST /api/v1/admin/candidates/merge`):**
+
+```json
+{
+  "primary_candidate_id": 10,
+  "duplicate_candidate_id": 25,
+  "reason": "Gộp 2 hồ sơ trùng số CCCD 038200001234"
+}
+```
+
+**Response (`POST /api/v1/admin/candidates/merge` — 200 OK):**
 
 ```json
 {
   "success": true,
-  "data": [
-    {
-      "doc_number": "012345678901",
-      "doc_type": "cccd",
-      "candidate_ids": [1, 5, 12],
-      "count": 3
-    }
-  ],
+  "data": {
+    "primary_candidate_id": 10,
+    "duplicate_candidate_id": 25,
+    "duplicate_account_id": 250,
+    "moved_registrations_count": 1,
+    "cancelled_registrations_count": 1,
+    "reason": "Gộp 2 hồ sơ trùng số CCCD 038200001234"
+  },
   "error": null,
   "meta": null
 }
@@ -1978,15 +2009,12 @@ Worker nền (`SyncStoredStatuses`) tự chuyển `scheduled` → `open` khi t�
 |---|---|
 | **Endpoint** | `POST /api/v1/admin/exam-sessions/:id/unpublish` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Hủy hẹn công khai ca thi (`scheduled` → `draft`) |
+| **Use-case** | Ẩn ca thi (`scheduled`/`open` → `draft`), hủy hẹn công khai |
 
 **Request Body:** Không cần.
 
-**Điều kiện (Strict State Transition):**
-- Chỉ ca thi đang ở trạng thái `scheduled` (đang hẹn giờ công khai) mới được phép thu hồi về `draft`.
-- Ca thi đang ở trạng thái mở đăng ký (`open`) **TUYỆT ĐỐI KHÔNG ĐƯỢC HOÀN TÁC VỀ BẢN NHÁP (`draft`)**.
-- Bất kỳ nỗ lực nào nhằm chuyển ca thi `open` về `draft` sẽ bị từ chối với HTTP 409 `INVALID_STATE_TRANSITION`.
-- Các trạng thái khác (`closed`, `completed`, `cancelled`) trả 409.
+**Điều kiện:** `scheduled` → luôn được (hủy hẹn). `open` → chỉ khi **0 đăng ký**.
+Các trạng thái khác trả 409.
 
 **Response (200 OK):**
 
@@ -2043,10 +2071,7 @@ Worker nền (`SyncStoredStatuses`) tự chuyển `scheduled` → `open` khi t�
 
 | Field | Kiểu | Bắt buộc | Validate | Mô tả |
 |---|---|---|---|---|
-| `registration_deadline` | `string` | ❌ | RFC 3339, phải ở tương lai | Hạn đăng ký mới (bắt buộc nếu đóng vì hết hạn `deadline`) |
-
-> [!IMPORTANT]
-> **Payload / DTO Mapping:** Nếu không cập nhật `registration_deadline` (ví dụ đóng thủ công `manual`), gửi body rỗng `{}` hoặc bỏ trường này. **Tuyệt đối không gửi chuỗi rỗng `""`** vì sẽ gây lỗi kiểm thực định dạng ngày RFC 3339 phía backend.
+| `registration_deadline` | `string` | ❌ | RFC 3339, phải ở tương lai | Hạn đăng ký mới |
 
 **Điều kiện mở lại:**
 
@@ -2095,17 +2120,14 @@ Worker nền (`SyncStoredStatuses`) tự chuyển `scheduled` → `open` khi t�
 |---|---|
 | **Endpoint** | `POST /api/v1/admin/exam-sessions/:id/cancel` |
 | **Auth** | 🔐 JWT + Admin |
-| **Use-case** | Hủy một ca thi / slot thi (`open` → `cancelled`) |
+| **Use-case** | Hủy một ca thi (`open`/`closed` → `cancelled`) |
 
 **Path Params:** `id` — ID ca thi (`integer`)
 
 **Request Body:** Không cần.
 
-**Điều kiện (Cancellation Restriction & Locking Rule):**
-- **Cancellation Restriction:** Ca thi / slot thi **CHỈ có thể bị hủy nếu trạng thái hiện tại là `open` (registration open)**.
-- **Locking Rule & Immutability:** Một khi ca thi đã đóng đăng ký (`closed`), lịch thi và danh sách slot thi trở thành **bất biến (strictly immutable)**. Mọi nỗ lực hủy ca thi đã đóng (`closed`) bị khóa hoàn toàn và hệ thống sẽ ném lỗi HTTP 409 `INVALID_STATE_TRANSITION`.
-- Ca thi `draft` / `scheduled` phải dùng chức năng Xóa ca thi nháp ([4.16](#416-admin-xóa-ca-thi-nháp)).
-- Ca thi đã hoàn thành (`completed`) hoặc đã hủy (`cancelled`) trả về 409.
+**Điều kiện:** chỉ `open` hoặc `closed`. `draft`/`scheduled` phải dùng Xóa nháp
+([4.16](#416-admin-xóa-ca-thi-nháp)); `completed`/`cancelled` trả 409.
 
 **Response (200 OK):**
 
@@ -2362,10 +2384,8 @@ Worker nền (`SyncStoredStatuses`) tự chuyển `scheduled` → `open` khi t�
 
 **Request Body:** Không cần.
 
-**Điều kiện (Strict State Transition):**
-- Chỉ được phép thực hiện khi đợt thi ở trạng thái `published` (đã công bố nhưng chưa đến thời gian mở đăng ký).
-- Một khi đợt thi đã chuyển sang trạng thái mở đăng ký (`registration_open`), **tuyệt đối không được hoàn tác về bản nháp (`draft`)**.
-- Các trạng thái khác (`registration_closed`, `completed`, `cancelled`) trả 409.
+**Điều kiện:** `published` → luôn được. `registration_open` → chỉ khi **0 đăng ký**.
+Các trạng thái khác trả 409.
 
 **Response (200 OK):** `ExamPeriodResponseDTO` với `status = "draft"`.
 
@@ -2412,10 +2432,7 @@ Worker nền (`SyncStoredStatuses`) tự chuyển `scheduled` → `open` khi t�
 
 | Field | Kiểu | Bắt buộc | Validate | Mô tả |
 |---|---|---|---|---|
-| `registration_deadline` | `string` | ✅ | RFC 3339, phải ở **tương lai** | Hạn chót mới (bắt buộc) |
-
-> [!IMPORTANT]
-> **Payload / DTO Requirement:** Trường `registration_deadline` là bắt buộc, phải là chuỗi thời gian định dạng RFC 3339 hợp lệ và nằm ở tương lai (sau `now()`). Tuyệt đối không gửi chuỗi rỗng `""` hay null.
+| `registration_deadline` | `string` | ✅ | RFC 3339, phải ở **tương lai** | Hạn chót mới |
 
 **Cascade:** chỉ các ca con có `closed_reason = "period_closed"` quay về `open`;
 ca đóng vì `full` hoặc `manual`/`deadline` **giữ nguyên**.
@@ -2804,6 +2821,76 @@ ngược lại 409.
 **Ví dụ:** `GET /api/v1/admin/payments/reconcile?date=2026-09-07`
 
 **Response (200 OK):** Mảng `PaymentReconcileItemDTO`.
+
+---
+
+### 5.11. [Admin] Kết quả Đăng ký theo Đợt thi (Batch) & Ca thi (Slot)
+
+Phân hệ **Kết quả Đăng ký (Registration Results)** cho phép Admin theo dõi dữ liệu đăng ký theo từng đợt thi (`exam_periods`) và từng ca thi (`exam_sessions`), lọc thí sinh đủ/chưa đủ điều kiện, nhận diện thí sinh đăng ký 1 hay nhiều ca, xem danh sách chờ, kiểm tra lệch dữ liệu ghế/đơn đăng ký, xuất PDF/Excel và thao tác hủy/chuyển ca/duyệt hồ sơ (qua shortcut tới module Candidate Profile).
+
+#### 5.11.1. Danh sách kết quả đăng ký theo đợt thi
+- **Endpoint:** `GET /api/v1/admin/registration-results/periods`
+- **Auth:** 🔐 JWT + Admin
+- **Query Params:** `page` (mặc định `1`), `limit` (mặc định `20`, tối đa `100`), `status` (`draft`, `published`, `registration_open`, `registration_closed`, `completed`, `cancelled`, `all`), `search` (mã hoặc tên đợt thi).
+- **Response (200 OK):** Mảng `PeriodRegistrationSummaryDTO` kèm `meta` phân trang. Mỗi đợt thi chứa danh sách `slots` (`SlotRegistrationStatsDTO`), danh sách cảnh báo `alerts` (`SessionAlertDTO`) và số ca bị lệch dữ liệu (`discrepancy_count`).
+
+#### 5.11.2. Chi tiết kết quả đăng ký của một đợt thi
+- **Endpoint:** `GET /api/v1/admin/registration-results/periods/:period_id`
+- **Auth:** 🔐 JWT + Admin
+- **Response (200 OK):** `PeriodRegistrationSummaryDTO` (sử dụng 1 truy vấn gom nhóm duy nhất `slotStatsGroupQuery` cho toàn bộ các ca thi thuộc đợt).
+
+#### 5.11.3. Thống kê thời gian thực & cảnh báo của một ca thi
+- **Endpoint:** `GET /api/v1/admin/registration-results/sessions/:session_id/summary`
+- **Auth:** 🔐 JWT + Admin
+- **Response (200 OK):** `SlotRegistrationStatsDTO` gồm số lượng `confirmed_count`, `pending_payment_count`, `booked_seats`, `held_seats`, `available_seats`, `waitlist_count`, `single_slot_count`, `multi_slot_count`, `eligible_count`, `ineligible_count`, `pending_review_count`, `has_discrepancy`, `discrepancy` và `alerts` (`nearly_full`, `too_few_registrants`, `ineligible_docs_near_exam`, `seat_discrepancy`).
+
+#### 5.11.4. Danh sách thí sinh đăng ký trong ca thi (Phân trang + Che PII + Shortcut duyệt hồ sơ)
+- **Endpoint:** `GET /api/v1/admin/registration-results/sessions/:session_id/registrations`
+- **Auth:** 🔐 JWT + Admin
+- **Query Params:**
+  - `page`, `limit`: Phân trang (không tải toàn bộ ca thi cùng lúc).
+  - `search`: Tìm theo họ tên, tên tiếng Trung, email, SĐT, CCCD, số ghế.
+  - `registration_status`: `pending_payment` | `confirmed` | `cancelled` | `all`.
+  - `verification_status`: `pending` | `verified` | `rejected` | `missing` | `all`.
+  - `eligibility`: `eligible` (đủ điều kiện) | `ineligible` (không đạt/thiếu hồ sơ/lệch thanh toán) | `pending_review` (chờ duyệt/chờ thanh toán) | `all`.
+  - `slot_scope`: `single` (đăng ký 1 ca) | `multiple` (đăng ký nhiều ca) | `all`.
+- **Bảo mật PII (Nghị định 13/2023):** Trường `masked_phone` (`091***678`) và `masked_doc_number` (`040***234`) luôn được che trong danh sách. Để xem toàn bộ thông tin gốc + ảnh giấy tờ và phê duyệt/từ chối hồ sơ, FE gọi trực tiếp các đường dẫn trong `profile_shortcuts`:
+  - `detail_and_acquire_lock_url`: `GET /api/v1/admin/candidates/:id` (ghi log `VIEW_PII`, cấp khóa mềm 5 phút và ghi nhận Proof-of-View).
+  - `approve_document_url`: `POST /api/v1/admin/candidates/:id/approve`
+  - `reject_document_url`: `POST /api/v1/admin/candidates/:id/reject`
+  - `revoke_approval_url`: `POST /api/v1/admin/candidates/:id/revoke-approval`
+  - `reopen_review_url`: `POST /api/v1/admin/candidates/:id/reopen-review`
+  - `release_lock_url`: `DELETE /api/v1/admin/candidates/:id/lock`
+
+#### 5.11.5. Danh sách chờ (Waitlist) của ca thi
+- **Endpoint:** `GET /api/v1/admin/registration-results/sessions/:session_id/waitlist`
+- **Auth:** 🔐 JWT + Admin
+- **Query Params:** `page`, `limit`.
+- **Response (200 OK):** Mảng `AdminWaitlistItemDTO` có `queue_position` (vị trí xếp hàng tính bằng `ROW_NUMBER() OVER (... ORDER BY joined_at ASC)`), thông tin thí sinh đã che PII và `profile_shortcuts`.
+
+#### 5.11.6. Kiểm tra sai lệch dữ liệu (Discrepancy Check)
+- **Endpoint:** `GET /api/v1/admin/registration-results/discrepancies`
+- **Auth:** 🔐 JWT + Admin
+- **Query Params:** `period_id` (tùy chọn), `session_id` (tùy chọn).
+- **Response (200 OK):** Mảng `SlotDiscrepancyDTO` liệt kê các ca thi có `confirmed_registrations != booked_seats`, `pending_payment_registrations != held_seats`, hoặc `unpaid_confirmed_registrations > 0`.
+
+#### 5.11.7. Xuất danh sách đăng ký (PDF / Excel CSV)
+- **Endpoint:** `GET /api/v1/admin/registration-results/export`
+- **Auth:** 🔐 JWT + Admin
+- **Query Params:** `period_id` hoặc `session_id` (bắt buộc ít nhất 1), `format` (`pdf` | `excel` | `csv`), `eligibility`, `registration_status`, `slot_scope`, `search`.
+- **Response (200 OK):** File binary `.pdf` (font Unicode Việt-Trung `NotoSerifSC`) hoặc `.csv` (có UTF-8 BOM mở trực tiếp bằng Microsoft Excel), đồng thời ghi nhận `EXPORT` trong `audit_logs`.
+
+#### 5.11.8. Admin hủy đăng ký thi (Nhả ghế & kích hoạt hoàn tiền)
+- **Endpoint:** `POST /api/v1/admin/registrations/:id/cancel`
+- **Auth:** 🔐 JWT + Admin
+- **Request Body:** `{ "reason": "Lý do hủy (tối thiểu 3 ký tự)", "evidence_urls": ["https://..."] }`
+- **Hành vi:** Tái sử dụng `payment.Service.AdminCancelPaymentAs` nếu đơn đã có giao dịch (`success` → `pending_refund`, `pending` → `cancelled`, nhả ghế về `available`), hoặc hủy trực tiếp trong transaction ACID nếu đơn chưa phát sinh giao dịch, và phát sự kiện WebSocket `registration_cancelled`.
+
+#### 5.11.9. Admin chuyển ca thi cho thí sinh
+- **Endpoint:** `POST /api/v1/admin/registrations/:id/transfer`
+- **Auth:** 🔐 JWT + Admin
+- **Request Body:** `{ "new_exam_session_id": 102, "reason": "Lý do chuyển ca" }`
+- **Hành vi:** Tái sử dụng hàm PostgreSQL `fn_transfer_registration` để giữ ghế mới, nhả ghế cũ, bảo toàn trạng thái thanh toán, ghi `audit_logs` và phát sự kiện WebSocket `registration_transferred`.
 
 ---
 
