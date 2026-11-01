@@ -3,6 +3,7 @@ import {
   AlertTriangleIcon,
   CheckCircle2Icon,
   EyeIcon,
+  EyeOffIcon,
   FileTextIcon,
   ImageIcon,
   Loader2Icon,
@@ -35,6 +36,7 @@ import { Label } from "~/components/ui/label";
 import { Textarea } from "~/components/ui/textarea";
 import { toast } from "~/components/ui/toast";
 import { maskAddress, maskDocumentNumber, maskEmail, maskPhoneNumber } from "~/lib/mask";
+import { CandidateSecurePhotoCard } from "~/components/dashboard/CandidateSecurePhotoCard";
 import type { AdminCandidateResponseDTO } from "~/types/admin";
 
 interface CandidateQuickReviewModalProps {
@@ -54,6 +56,43 @@ export function CandidateQuickReviewModal({
   const [isLoading, setIsLoading] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [activePhoto, setActivePhoto] = React.useState<string | null>(null);
+
+  // Trạng thái mở xem ảnh bảo mật thị giác (Visual PII Protection §NĐ 13/2023)
+  const [revealedImages, setRevealedImages] = React.useState<Record<string, boolean>>({});
+
+  // Tự động che mờ lại khi đóng dialog hoặc đổi thí sinh
+  React.useEffect(() => {
+    if (!open) {
+      setRevealedImages({});
+    }
+  }, [open]);
+
+  React.useEffect(() => {
+    setRevealedImages({});
+  }, [candidateId]);
+
+  const toggleImageReveal = (key: string) => {
+    setRevealedImages((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
+  const hasAnyRevealed = Boolean(
+    revealedImages["front"] || revealedImages["back"] || revealedImages["portrait"]
+  );
+
+  const toggleAllImages = () => {
+    if (hasAnyRevealed) {
+      setRevealedImages({});
+    } else {
+      setRevealedImages({
+        front: true,
+        back: true,
+        portrait: true,
+      });
+    }
+  };
 
   // Sub-dialog states for strict confirmation
   const [confirmAction, setConfirmAction] = React.useState<"approve" | "reject" | "revoke" | "reopen" | null>(null);
@@ -342,114 +381,67 @@ export function CandidateQuickReviewModal({
                   </div>
                 )}
 
-                {/* Section 3: Khung ảnh chứng thực đối soát đồng bộ */}
+                {/* Section 3: Khung ảnh chứng thực đối soát có cơ chế bảo vệ PII Click-to-Reveal */}
                 <div className="rounded-xl border bg-card/60 p-4 space-y-3">
-                  <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5 border-b pb-2">
-                    <ImageIcon className="size-4 text-primary" />
-                    <span>Ảnh chứng thực đối soát (Thẩm định giấy tờ gốc)</span>
-                  </h4>
+                  <div className="flex items-center justify-between pb-1 border-b">
+                    <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <ImageIcon className="size-4 text-primary" />
+                      <span>Ảnh chứng thực đối soát (Thẩm định giấy tờ gốc)</span>
+                    </h4>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={toggleAllImages}
+                      className="h-6 px-2 text-[11px] rounded-full text-muted-foreground hover:text-foreground cursor-pointer gap-1"
+                    >
+                      {hasAnyRevealed ? (
+                        <>
+                          <EyeOffIcon className="size-3" />
+                          <span>Ẩn tất cả</span>
+                        </>
+                      ) : (
+                        <>
+                          <EyeIcon className="size-3" />
+                          <span>Hiện tất cả</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    {/* Ảnh chân dung 3x4 */}
-                    <div className="h-52 rounded-xl border bg-background p-2.5 flex flex-col justify-between">
-                      <div className="flex items-center justify-between pb-1.5">
-                        <span className="text-xs font-medium text-foreground">Ảnh chân dung 3x4</span>
-                        {doc?.portrait_image_url && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-emerald-600 border-emerald-500/30">
-                            Đã tải
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="w-full flex-1 rounded-lg overflow-hidden bg-muted/40 border flex items-center justify-center relative group p-1">
-                        {doc?.portrait_image_url ? (
-                          <>
-                            <img
-                              src={doc.portrait_image_url}
-                              alt="Ảnh chân dung"
-                              className="max-h-full max-w-full object-contain rounded"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setActivePhoto(doc.portrait_image_url!)}
-                              className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium cursor-pointer gap-1.5"
-                            >
-                              <EyeIcon className="size-4" />
-                              <span>Phóng to</span>
-                            </button>
-                          </>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">Chưa có ảnh</span>
-                        )}
-                      </div>
-                    </div>
-
                     {/* Mặt trước CCCD/Hộ chiếu */}
-                    <div className="h-52 rounded-xl border bg-background p-2.5 flex flex-col justify-between">
-                      <div className="flex items-center justify-between pb-1.5">
-                        <span className="text-xs font-medium text-foreground">Mặt trước CCCD/Hộ chiếu</span>
-                        {doc?.front_image_url && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-emerald-600 border-emerald-500/30">
-                            Đã tải
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="w-full flex-1 rounded-lg overflow-hidden bg-muted/40 border flex items-center justify-center relative group p-1">
-                        {doc?.front_image_url ? (
-                          <>
-                            <img
-                              src={doc.front_image_url}
-                              alt="Mặt trước CCCD"
-                              className="max-h-full max-w-full object-contain rounded"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setActivePhoto(doc.front_image_url!)}
-                              className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium cursor-pointer gap-1.5"
-                            >
-                              <EyeIcon className="size-4" />
-                              <span>Phóng to</span>
-                            </button>
-                          </>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">Chưa có ảnh</span>
-                        )}
-                      </div>
-                    </div>
+                    <CandidateSecurePhotoCard
+                      title="Mặt trước CCCD/Hộ chiếu"
+                      imageUrl={doc?.front_image_url}
+                      alt="Mặt trước CCCD"
+                      isRevealed={Boolean(revealedImages["front"])}
+                      onToggleReveal={() => toggleImageReveal("front")}
+                      onPreview={setActivePhoto}
+                      emptyText="Chưa có ảnh"
+                    />
 
                     {/* Mặt sau CCCD */}
-                    <div className="h-52 rounded-xl border bg-background p-2.5 flex flex-col justify-between">
-                      <div className="flex items-center justify-between pb-1.5">
-                        <span className="text-xs font-medium text-foreground">Mặt sau CCCD</span>
-                        {doc?.back_image_url && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-emerald-600 border-emerald-500/30">
-                            Đã tải
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="w-full flex-1 rounded-lg overflow-hidden bg-muted/40 border flex items-center justify-center relative group p-1">
-                        {doc?.back_image_url ? (
-                          <>
-                            <img
-                              src={doc.back_image_url}
-                              alt="Mặt sau CCCD"
-                              className="max-h-full max-w-full object-contain rounded"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setActivePhoto(doc.back_image_url!)}
-                              className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium cursor-pointer gap-1.5"
-                            >
-                              <EyeIcon className="size-4" />
-                              <span>Phóng to</span>
-                            </button>
-                          </>
-                        ) : (
-                          <span className="text-xs text-muted-foreground text-center">
-                            {doc?.doc_type === "passport" ? "Hộ chiếu không có mặt sau" : "Chưa có ảnh"}
-                          </span>
-                        )}
-                      </div>
-                    </div>
+                    <CandidateSecurePhotoCard
+                      title="Mặt sau CCCD"
+                      imageUrl={doc?.back_image_url}
+                      alt="Mặt sau CCCD"
+                      isRevealed={Boolean(revealedImages["back"])}
+                      onToggleReveal={() => toggleImageReveal("back")}
+                      onPreview={setActivePhoto}
+                      emptyText={doc?.doc_type === "passport" ? "Hộ chiếu không có mặt sau" : "Chưa có ảnh"}
+                    />
+
+                    {/* Ảnh chân dung 3x4 */}
+                    <CandidateSecurePhotoCard
+                      title="Ảnh thẻ chân dung 3x4"
+                      imageUrl={doc?.portrait_image_url}
+                      alt="Ảnh thẻ chân dung"
+                      isRevealed={Boolean(revealedImages["portrait"])}
+                      onToggleReveal={() => toggleImageReveal("portrait")}
+                      onPreview={setActivePhoto}
+                      emptyText="Chưa có ảnh"
+                    />
                   </div>
                 </div>
               </>
