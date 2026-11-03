@@ -2272,12 +2272,18 @@ export default function QuanLyKyThiCaThiPage() {
         setSelectedPeriodIdForDetail(null);
         setSessionToEdit(null);
         setCloseRegTarget(null);
+        setPeriodForAction(null);
+        setIsPeriodActionAlertOpen(false);
+        setPeriodActionType(null);
       } else if (actionFetcher.data.error) {
         toast.add({
           type: "error",
           title: "Không thể hoàn tất thao tác",
           description: actionFetcher.data.error,
         });
+        setPeriodForAction(null);
+        setIsPeriodActionAlertOpen(false);
+        setPeriodActionType(null);
       }
     }
   }, [actionFetcher.data]);
@@ -2367,9 +2373,6 @@ export default function QuanLyKyThiCaThiPage() {
   };
 
   const handleConfirmPeriodAction = (period: ExamPeriod, actionType: PeriodConfirmationType) => {
-    setIsPeriodActionAlertOpen(false);
-    setPeriodForAction(null);
-    setPeriodActionType(null);
     const intentMap: Record<PeriodConfirmationType, string> = {
       publish: "publish-period",
       unpublish: "unpublish-period",
@@ -2806,7 +2809,7 @@ export default function QuanLyKyThiCaThiPage() {
                       const lockReason = getPeriodLockReason(period);
                       const isLocked = lockReason !== null;
                       const canEdit = canPeriod(period, "edit");
-                      const canPublish = canPeriod(period, "publish");
+                      const canPublish = period.status === "draft";
                       const canUnpublish = canPeriod(period, "unpublish");
                       const canReopenReg = canPeriod(period, "reopen_registration");
                       const canComplete = canPeriod(period, "complete");
@@ -4529,6 +4532,7 @@ export default function QuanLyKyThiCaThiPage() {
           }
         }}
         onConfirm={handleConfirmPeriodAction}
+        isSubmitting={actionFetcher.state === "submitting"}
       />
 
       {/* ── AlertDialog: Session Completion Safeguard (Bất khả đảo ngược) ──── */}

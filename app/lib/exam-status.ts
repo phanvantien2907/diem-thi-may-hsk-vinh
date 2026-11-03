@@ -183,6 +183,9 @@ export function canPeriod(
     if (action === "unpublish" && period.status !== "published") {
       return false;
     }
+    if (action === "publish") {
+      return period.status === "draft";
+    }
     if (action === "edit") {
       return (
         period.available_actions.includes("edit") ||
@@ -208,7 +211,7 @@ export function canPeriod(
       return status === "registration_open";
 
     case "publish":
-      return status === "draft" && (period.session_count ?? 0) > 0;
+      return status === "draft";
 
     case "unpublish":
       // Chỉ cho phép thu hồi công bố khi đợt thi chưa mở đăng ký ('published'). Khi đã mở đăng ký thì không thể hoàn tác về draft.

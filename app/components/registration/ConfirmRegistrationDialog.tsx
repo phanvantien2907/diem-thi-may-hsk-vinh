@@ -7,6 +7,8 @@
  * Pattern: AlertDialog (shadcn) — chặn tương tác nền.
  * Button: rounded-full, cursor-pointer theo project rules.
  */
+import * as React from "react";
+import { Loader2Icon } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,7 +38,23 @@ export function ConfirmRegistrationDialog({
   isSubmitting,
   onConfirm,
 }: ConfirmRegistrationDialogProps) {
+  // Ref khóa tức thời ở cấp độ pointer/click event để chặn hoàn toàn double-click trước khi React re-render
+  const isClickLockedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (!open) {
+      isClickLockedRef.current = false;
+    }
+  }, [open]);
+
   if (!session) return null;
+
+  const handleActionClick = (e: React.MouseEvent | React.PointerEvent) => {
+    e.preventDefault();
+    if (isSubmitting || isClickLockedRef.current) return;
+    isClickLockedRef.current = true;
+    onConfirm();
+  };
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -102,12 +120,14 @@ export function ConfirmRegistrationDialog({
           <AlertDialogAction
             className="rounded-full cursor-pointer"
             disabled={isSubmitting}
-            onClick={(e) => {
-              // Ngăn AlertDialog tự đóng — ta tự xử lý sau khi submit xong
-              e.preventDefault();
-              onConfirm();
+            onClick={handleActionClick}
+            onPointerDown={(e) => {
+              if (isSubmitting || isClickLockedRef.current) {
+                e.preventDefault();
+              }
             }}
           >
+            {isSubmitting && <Loader2Icon className="size-4 animate-spin mr-1.5" />}
             {isSubmitting ? "Đang xử lý..." : "Xác nhận đăng ký"}
           </AlertDialogAction>
         </AlertDialogFooter>

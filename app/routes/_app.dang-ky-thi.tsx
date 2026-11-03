@@ -438,6 +438,7 @@ const RegistrationContent = React.memo(function RegistrationContent({
   const [selectedSession, setSelectedSession] = React.useState<ExamSessionWithSlots | null>(null);
   const [isDialogOpen, setIsDialogOpen] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const isSubmittingRef = React.useRef(false);
   const [registrations, setRegistrations] = React.useState(initialRegistrations);
   const [payingId, setPayingId] = React.useState<number | null>(null);
   const [payosCheckoutData, setPayosCheckoutData] = React.useState<{ url: string; amount?: number; orderCode?: string } | null>(null);
@@ -795,14 +796,22 @@ const RegistrationContent = React.memo(function RegistrationContent({
       return;
     }
     if (!selectedSession) return;
-
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     setIsSubmitting(true);
+
     try {
+      const idempotencyKey =
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `idemp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
       const res = await fetch(`${apiBaseUrl}/api/v1/me/registrations`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
+          "Idempotency-Key": idempotencyKey,
         },
         body: JSON.stringify({ exam_session_id: selectedSession.id }),
       });
@@ -812,28 +821,36 @@ const RegistrationContent = React.memo(function RegistrationContent({
         const errorMsg =
           errorData?.msg || errorData?.error || "Có lỗi xảy ra, vui lòng thử lại.";
         toast.add({ type: "error", title: errorMsg });
-        setIsSubmitting(false);
         return;
       }
 
       const result = await res.json();
       const newRegistration = result.data as ExamRegistration;
 
-      // Cập nhật danh sách đăng ký local
-      setRegistrations((prev) => [newRegistration, ...prev]);
+      // Cập nhật danh sách đăng ký local (khử trùng lặp bản ghi nếu đã tồn tại)
+      setRegistrations((prev) => {
+        const exists = prev.some((r) => r.id === newRegistration.id);
+        if (exists) {
+          return prev.map((r) => (r.id === newRegistration.id ? newRegistration : r));
+        }
+        return [newRegistration, ...prev];
+      });
 
       // Đóng dialog + reset selection
       setIsDialogOpen(false);
       setSelectedSession(null);
-      setIsSubmitting(false);
 
       // Hiện toast thành công
-      toast.add({ type: "success", title: "Đăng ký thi thành công!", description: "Ghế đã được giữ trong 15 phút." });
-
-
+      toast.add({
+        type: "success",
+        title: "Đăng ký thi thành công!",
+        description: "Ghế đã được giữ trong 15 phút.",
+      });
     } catch (error) {
       console.error("[Registration] Submit error:", error);
       toast.add({ type: "error", title: "Không thể kết nối đến máy chủ. Vui lòng thử lại." });
+    } finally {
+      isSubmittingRef.current = false;
       setIsSubmitting(false);
     }
   }, [selectedSession, token, navigate]);

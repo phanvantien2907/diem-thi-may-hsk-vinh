@@ -47,7 +47,7 @@ export function PeriodActionConfirmationDialog({
       iconBoxClass: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
       title: `Xác nhận công bố đợt thi "${period.name}"?`,
       description:
-        "Đợt thi sẽ chuyển sang trạng thái đã công bố (published). Khi đợt thi được công bố thành công, các ca thi con hợp lệ thuộc đợt sẽ đủ điều kiện để hẹn giờ hoặc mở cổng công khai tiếp nhận thí sinh.",
+        "Bạn có chắc chắn muốn công bố đợt thi này? Sau khi công bố, đợt thi sẽ hiển thị với thí sinh và không thể đưa về lại bản nháp.",
       confirmText: "Xác nhận công bố",
       confirmButtonClass:
         "bg-primary text-primary-foreground hover:bg-primary/90",
