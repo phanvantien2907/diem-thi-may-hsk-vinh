@@ -1,5 +1,5 @@
 import * as React from "react";
-import { CheckCircle2Icon, DownloadIcon, FileSpreadsheetIcon, FileTextIcon, Loader2Icon } from "lucide-react";
+import { CheckCircle2Icon, DownloadIcon, FileCode2Icon, FileSpreadsheetIcon, FileTextIcon, Loader2Icon } from "lucide-react";
 import { cn } from "cn";
 import { Button } from "~/components/ui/button";
 import {
@@ -35,16 +35,21 @@ export function ExportRegistrationsDialog({
   period,
   session,
 }: ExportRegistrationsDialogProps) {
-  const [format, setFormat] = React.useState<"excel" | "pdf" | "csv">("excel");
+  const [format, setFormat] = React.useState<"excel" | "pdf" | "json">("excel");
   const [eligibility, setEligibility] = React.useState<string>("all");
   const [regStatus, setRegStatus] = React.useState<string>("all");
   const [slotScope, setSlotScope] = React.useState<string>("all");
   const [search, setSearch] = React.useState<string>("");
   const [isExporting, setIsExporting] = React.useState(false);
+  const abortControllerRef = React.useRef<AbortController | null>(null);
 
   React.useEffect(() => {
     if (!open) {
       setSearch("");
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
     }
   }, [open]);
 
@@ -58,7 +63,15 @@ export function ExportRegistrationsDialog({
       return;
     }
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 60000); // 60s client-side timeout
+
     setIsExporting(true);
+    let blobUrl: string | null = null;
+
     try {
       const params = new URLSearchParams();
       if (session?.session_id) {
@@ -77,7 +90,10 @@ export function ExportRegistrationsDialog({
 
       const downloadUrl = `/internal/admin/registration-results/export?${params.toString()}`;
 
-      const res = await fetch(downloadUrl);
+      const res = await fetch(downloadUrl, {
+        signal: controller.signal,
+      });
+
       if (!res.ok) {
         const errorJson = await res.json().catch(() => null);
         throw new Error(errorJson?.error || "Không thể tải tệp xuất dữ liệu.");
@@ -85,7 +101,7 @@ export function ExportRegistrationsDialog({
 
       const blob = await res.blob();
       const contentDisposition = res.headers.get("content-disposition");
-      let filename = `danh_sach_dang_ky_${new Date().toISOString().slice(0, 10)}.${format === "pdf" ? "pdf" : "csv"}`;
+      let filename = `ket-qua-dang-ky-${new Date().toISOString().slice(0, 10)}.${format === "pdf" ? "pdf" : format === "json" ? "txt" : "xlsx"}`;
       if (contentDisposition) {
         const utf8Match = contentDisposition.match(/filename\*=utf-8''([^;]+)/i);
         const standardMatch = contentDisposition.match(/filename="?([^";]+)"?/);
@@ -100,14 +116,13 @@ export function ExportRegistrationsDialog({
         }
       }
 
-      const blobUrl = window.URL.createObjectURL(blob);
+      blobUrl = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = blobUrl;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      window.URL.revokeObjectURL(blobUrl);
 
       toast.add({
         type: "success",
@@ -116,13 +131,31 @@ export function ExportRegistrationsDialog({
       });
       onOpenChange(false);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Đã xảy ra lỗi khi xuất danh sách.";
+      let message = "Đã xảy ra lỗi khi xuất danh sách.";
+      if (err instanceof DOMException && err.name === "AbortError") {
+        message = "Yêu cầu tải xuống đã quá thời gian chờ (timeout) hoặc bị hủy. Vui lòng thử lại.";
+      } else if (
+        err instanceof TypeError &&
+        (err.message.includes("fetch") ||
+          err.message.includes("network") ||
+          err.message.includes("Failed to fetch"))
+      ) {
+        message = "Tải xuống thất bại do mất kết nối mạng. Vui lòng kiểm tra đường truyền và thử lại.";
+      } else if (err instanceof Error) {
+        message = err.message;
+      }
+
       toast.add({
         type: "error",
         title: "Xuất dữ liệu thất bại",
         description: message,
       });
     } finally {
+      clearTimeout(timeoutId);
+      if (blobUrl) {
+        window.URL.revokeObjectURL(blobUrl);
+      }
+      abortControllerRef.current = null;
       setIsExporting(false);
     }
   };
@@ -158,7 +191,7 @@ export function ExportRegistrationsDialog({
                 Định dạng tệp xuất
               </Label>
               <span className="text-[11px] font-medium text-primary bg-primary/10 px-2 py-0.5 rounded-full">
-                {format === "excel" ? "Bảng tính Excel (.csv)" : format === "pdf" ? "Văn bản PDF (.pdf)" : "Tệp dữ liệu CSV (.csv)"}
+                {format === "excel" ? "Bảng tính Excel (.xlsx)" : format === "pdf" ? "Văn bản PDF (.pdf)" : "Dữ liệu JSON (.txt)"}
               </span>
             </div>
 
@@ -174,8 +207,8 @@ export function ExportRegistrationsDialog({
                 )}
               >
                 <FileSpreadsheetIcon className={cn("size-5 mb-1.5", format === "excel" ? "text-primary" : "text-muted-foreground")} />
-                <span className="text-xs font-medium">Excel (CSV)</span>
-                <span className="text-[10px] opacity-75 mt-0.5">UTF-8 có BOM</span>
+                <span className="text-xs font-medium">Excel (.xlsx)</span>
+                <span className="text-[10px] opacity-75 mt-0.5">Native OpenXML</span>
               </button>
 
               <button
@@ -195,16 +228,16 @@ export function ExportRegistrationsDialog({
 
               <button
                 type="button"
-                onClick={() => setFormat("csv")}
+                onClick={() => setFormat("json")}
                 className={cn(
                   "flex flex-col items-center justify-center p-3 rounded-xl border text-center transition-all cursor-pointer relative",
-                  format === "csv"
+                  format === "json"
                     ? "border-primary bg-primary/10 text-primary ring-2 ring-primary/20 shadow-xs font-semibold"
                     : "border-border bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground"
                 )}
               >
-                <DownloadIcon className={cn("size-5 mb-1.5", format === "csv" ? "text-primary" : "text-muted-foreground")} />
-                <span className="text-xs font-medium">CSV thuần</span>
+                <FileCode2Icon className={cn("size-5 mb-1.5", format === "json" ? "text-primary" : "text-muted-foreground")} />
+                <span className="text-xs font-medium">JSON (.txt)</span>
                 <span className="text-[10px] opacity-75 mt-0.5">Dữ liệu thô</span>
               </button>
             </div>
@@ -213,10 +246,10 @@ export function ExportRegistrationsDialog({
               <CheckCircle2Icon className="size-4 text-primary shrink-0" />
               <span>
                 {format === "excel"
-                  ? "Bảng mã UTF-8 có BOM, mở trực tiếp bằng Microsoft Excel không bị lỗi phông chữ tiếng Việt hoặc tiếng Trung."
+                  ? "Tệp bảng tính Native Excel (.xlsx) chuẩn OpenXML, tự động định dạng và phân chia cột, tương thích hoàn hảo Microsoft Excel và WPS Office."
                   : format === "pdf"
                   ? "Tích hợp phông NotoSerifSC hiển thị chữ Hán và tiếng Việt sắc nét, chuẩn khổ A4 sẵn sàng để in ấn."
-                  : "Tệp văn bản thuần phân tách bằng dấu phẩy, dung lượng nhẹ, dễ dàng nhập liệu vào hệ thống khác."}
+                  : "Tệp văn bản JSON có thụt dòng chuẩn (pretty-printed), định dạng .txt tiện đọc, lưu trữ và lập trình tự động."}
               </span>
             </div>
           </div>

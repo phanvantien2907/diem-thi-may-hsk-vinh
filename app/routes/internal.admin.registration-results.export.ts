@@ -46,16 +46,22 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
 
     const headers = new Headers();
-    const contentType =
-      res.headers.get("content-type") ??
-      (format === "pdf" ? "application/pdf" : "text/csv; charset=utf-8");
+    const fallbackContentType =
+      format === "pdf"
+        ? "application/pdf"
+        : format === "json" || format === "txt"
+        ? "text/plain; charset=utf-8"
+        : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+    const contentType = res.headers.get("content-type") ?? fallbackContentType;
     headers.set("Content-Type", contentType);
 
     const disposition = res.headers.get("content-disposition");
     if (disposition) {
       headers.set("Content-Disposition", disposition);
     } else {
-      const filename = `danh_sach_dang_ky_${new Date().toISOString().slice(0, 10)}.${format === "pdf" ? "pdf" : "csv"}`;
+      const ext = format === "pdf" ? "pdf" : format === "json" || format === "txt" ? "txt" : "xlsx";
+      const filename = `ket-qua-dang-ky-${new Date().toISOString().slice(0, 10)}.${ext}`;
       headers.set("Content-Disposition", `attachment; filename="${filename}"`);
     }
     headers.set("Cache-Control", "no-store");
