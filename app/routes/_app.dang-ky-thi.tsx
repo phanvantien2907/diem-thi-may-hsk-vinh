@@ -157,11 +157,18 @@ export async function loader({ request }: Route.LoaderArgs) {
         const res = await fetch(`${API_BASE_URL}/api/v1/exam-sessions/${session.id}/seats`);
         const json = (await res.json()) as ApiResponse<ExamSeat[]>;
         const seats = json.data || [];
-        const available = seats.filter((s) => s.status === "available").length;
-        slotsMap[session.id] = available;
+        if (seats.length > 0) {
+          slotsMap[session.id] = seats.filter((s) => s.status === "available").length;
+        } else {
+          slotsMap[session.id] =
+            session.available_seats ??
+            session.available_slots ??
+            Math.max(0, (session.capacity ?? 0) - (session.registered_count ?? 0));
+        }
       } catch {
-        // Fallback: nếu API seats chưa sẵn sàng, dùng capacity
-        slotsMap[session.id] = session.capacity ?? 0;
+        // Fallback: nếu API seats chưa sẵn sàng, dùng available_seats hoặc capacity
+        slotsMap[session.id] =
+          session.available_seats ?? session.available_slots ?? session.capacity ?? 0;
       }
     });
 
@@ -230,7 +237,8 @@ function DataWrapper({ loaderData }: { loaderData: LoaderData }) {
       .filter((s) => s.status === "open") // Chỉ hiển thị ca thi đang mở
       .map((s) => ({
         ...s,
-        available_slots: slotsMap[s.id] ?? s.capacity ?? 0,
+        available_slots:
+          slotsMap[s.id] ?? s.available_seats ?? s.available_slots ?? s.capacity ?? 0,
         exam_type_name: typeMap.get(s.exam_type_id)?.name,
       }));
   }, [sessions, examTypes, examRooms, slotsMap]);

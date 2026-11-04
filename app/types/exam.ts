@@ -82,6 +82,9 @@ export interface ExamSession {
   date: string | null;
   shift: ExamShift;
   capacity: number | null;
+  registered_count?: number;
+  available_seats?: number;
+  available_slots?: number;
   fee: number;
   registration_deadline: string | null;
   status: ExamSessionStatus;

@@ -94,7 +94,9 @@ export const ExamSessionSelector = React.memo(function ExamSessionSelector({
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {sessions.map((session) => {
         const isSelected = selectedSessionId === session.id;
-        const isFull = session.available_slots <= 0;
+        const availableSlots =
+          session.available_slots ?? session.available_seats ?? session.capacity ?? 0;
+        const isFull = availableSlots <= 0;
         const isDeadlinePassed = session.registration_deadline
           ? new Date(session.registration_deadline) < new Date()
           : false;
@@ -150,17 +152,17 @@ export const ExamSessionSelector = React.memo(function ExamSessionSelector({
 
                 {isFull ? (
                   <Badge variant="destructive" className="shrink-0">Hết chỗ</Badge>
-                ) : session.available_slots < 20 ? (
+                ) : availableSlots < 20 ? (
                   <Badge variant="destructive" className="shrink-0">
-                    Còn {session.available_slots} chỗ
+                    Còn {availableSlots} chỗ
                   </Badge>
-                ) : session.available_slots < 50 ? (
+                ) : availableSlots < 50 ? (
                   <Badge variant="outline" className="text-amber-600 border-amber-300 bg-amber-50 font-semibold shadow-sm shrink-0">
-                    Còn {session.available_slots} chỗ
+                    Còn {availableSlots} chỗ
                   </Badge>
                 ) : (
                   <Badge variant="outline" className="text-emerald-700 border-emerald-400 bg-emerald-50 font-semibold shadow-sm shrink-0">
-                    Còn {session.available_slots} chỗ
+                    Còn {availableSlots} chỗ
                   </Badge>
                 )}
               </div>

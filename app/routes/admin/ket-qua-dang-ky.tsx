@@ -1475,29 +1475,35 @@ export default function RegistrationResultsRoute() {
                                 <span>Xem & Duyệt hồ sơ gốc</span>
                               </DropdownMenuItem>
 
-                              <DropdownMenuItem
-                                className="cursor-pointer gap-2 px-2 py-1.5 whitespace-nowrap"
-                                onClick={() => {
-                                  setTransferTargetCandidate(c);
-                                  setTransferDialogOpen(true);
-                                }}
-                              >
-                                <ArrowRightLeftIcon className="size-4 text-primary shrink-0" />
-                                <span>Chuyển ca thi</span>
-                              </DropdownMenuItem>
+                              {c.registration_status !== "cancelled" &&
+                                c.payment_status !== "cancelled" &&
+                                c.payment_status !== "refunded" && (
+                                  <>
+                                    <DropdownMenuItem
+                                      className="cursor-pointer gap-2 px-2 py-1.5 whitespace-nowrap"
+                                      onClick={() => {
+                                        setTransferTargetCandidate(c);
+                                        setTransferDialogOpen(true);
+                                      }}
+                                    >
+                                      <ArrowRightLeftIcon className="size-4 text-primary shrink-0" />
+                                      <span>Chuyển ca thi</span>
+                                    </DropdownMenuItem>
 
-                              <DropdownMenuSeparator className="my-1" />
+                                    <DropdownMenuSeparator className="my-1" />
 
-                              <DropdownMenuItem
-                                className="cursor-pointer text-destructive focus:text-destructive gap-2 px-2 py-1.5 whitespace-nowrap"
-                                onClick={() => {
-                                  setCancelTargetCandidate(c);
-                                  setCancelDialogOpen(true);
-                                }}
-                              >
-                                <UserXIcon className="size-4 shrink-0" />
-                                <span>Hủy phiếu đăng ký</span>
-                              </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      className="cursor-pointer text-destructive focus:text-destructive gap-2 px-2 py-1.5 whitespace-nowrap"
+                                      onClick={() => {
+                                        setCancelTargetCandidate(c);
+                                        setCancelDialogOpen(true);
+                                      }}
+                                    >
+                                      <UserXIcon className="size-4 shrink-0" />
+                                      <span>Hủy phiếu đăng ký</span>
+                                    </DropdownMenuItem>
+                                  </>
+                                )}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </TableCell>
