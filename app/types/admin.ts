@@ -93,6 +93,10 @@ export interface CandidateDocument {
   front_image_url?: string | null;
   back_image_url?: string | null;
   portrait_image_url?: string | null;
+  has_front_image?: boolean;
+  has_back_image?: boolean;
+  has_portrait_image?: boolean;
+  pii_locked?: boolean;
   verification_status: DocumentVerificationStatus;
   rejection_reason?: string | null;
   ward_id?: number | null;

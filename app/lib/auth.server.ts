@@ -125,6 +125,7 @@ export async function requireAuth(request: Request): Promise<{ user: UserProfile
           phone: typeof data.phone === "string" ? data.phone : user.phone,
           role: isAdmin ? "Quản trị viên" : "Thí sinh",
           rawRole: isAdmin ? "admin" : (user.rawRole || "candidate"),
+          has_pii_pin: typeof data.has_pii_pin === "boolean" ? data.has_pii_pin : user.has_pii_pin,
         };
       }
     }

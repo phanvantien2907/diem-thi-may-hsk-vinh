@@ -8,10 +8,12 @@ import { AppSidebar } from "~/components/layout/AppSidebar";
 import { DashboardSkeleton } from "~/components/layout/DashboardSkeleton";
 import { ContentSkeleton } from "~/components/layout/ContentSkeleton";
 import { ProfileRejectionWarningDialog } from "~/components/candidate/ProfileRejectionWarningDialog";
+import { NotificationProvider } from "~/components/shared/NotificationProvider";
+import { NotificationBell } from "~/components/shared/NotificationBell";
 import { EyeIcon, ShieldCheckIcon } from "lucide-react";
 
 import { requireAuth } from "~/lib/auth.server";
-import { API_BASE_URL } from "~/lib/env.server";
+import { API_BASE_URL, PUBLIC_API_BASE_URL } from "~/lib/env.server";
 import type { CandidateStatusInfo, CandidateResponseDTO, DocumentResponseDTO } from "~/types/candidate";
 
 // ─── Loader — AuthGuard & Candidate Status ──────────────────────────────────
@@ -74,7 +76,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     }
   }
 
-  return { user, candidateStatus };
+  return { user, token, apiBaseUrl: PUBLIC_API_BASE_URL, candidateStatus };
 }
 
 // ─── Meta ──────────────────────────────────────────────────────────────────────
@@ -93,7 +95,7 @@ export function HydrateFallback() {
 
 // ─── Layout Component ─────────────────────────────────────────────────────────────
 export default function AppLayout() {
-  const { user, candidateStatus } = useLoaderData<typeof loader>();
+  const { user, token, apiBaseUrl, candidateStatus } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const isNavigating = navigation.state === "loading";
   const isAdmin = user.rawRole === "admin" || user.role === "Quản trị viên" || user.role === "admin";
@@ -110,67 +112,75 @@ export default function AppLayout() {
   }, [candidateStatus?.isRejected]);
 
   return (
-    <SidebarProvider>
-      {/* Modal cảnh báo bắt buộc khi hồ sơ thí sinh bị từ chối */}
-      {candidateStatus?.isRejected && (
-        <ProfileRejectionWarningDialog
-          open={isRejectionDialogOpen}
-          onOpenChange={setIsRejectionDialogOpen}
-          rejectionReason={candidateStatus.rejectionReason}
-        />
-      )}
-
-      {/* Sidebar — tự động collapse thành Sheet trên mobile */}
-      <AppSidebar user={user} candidateStatus={candidateStatus} />
-
-      {/* Main content area */}
-      <SidebarInset className="min-w-0 overflow-hidden">
-        {/* ── Top bar: Sidebar toggle + breadcrumb area ─────────────────── */}
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4 sm:px-6">
-          {/* Hamburger trigger (mobile) / collapse toggle (desktop) */}
-          <SidebarTrigger
-            className="-ml-1"
-            aria-label="Mở/đóng sidebar điều hướng"
+    <NotificationProvider token={token} apiBaseUrl={apiBaseUrl}>
+      <SidebarProvider>
+        {/* Modal cảnh báo bắt buộc khi hồ sơ thí sinh bị từ chối */}
+        {candidateStatus?.isRejected && (
+          <ProfileRejectionWarningDialog
+            open={isRejectionDialogOpen}
+            onOpenChange={setIsRejectionDialogOpen}
+            rejectionReason={candidateStatus.rejectionReason}
           />
-          <Separator orientation="vertical" className="h-5" />
-          {/* Breadcrumb slot — children có thể inject qua handle */}
-          <div
-            id="app-breadcrumb"
-            className="flex min-w-0 flex-1 items-center"
-            aria-label="Breadcrumb"
-          />
-        </header>
-
-        {/* ── Admin Preview Notice Banner ─────────────────────────────────── */}
-        {isAdmin && (
-          <div className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 backdrop-blur-md sm:px-6 dark:bg-amber-950/40">
-            <div className="flex items-center gap-2.5 text-xs text-amber-900 dark:text-amber-200">
-              <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300">
-                <EyeIcon className="size-3.5" />
-              </span>
-              <span>
-                <strong>Chế độ xem trước dành cho Quản trị viên (Chỉ đọc)</strong>: Bạn đang xem giao diện với tư cách quản trị viên. Các tính năng nộp hồ sơ, đăng ký thi, thanh toán PayOS đã bị vô hiệu hóa để bảo vệ dữ liệu thí sinh.
-              </span>
-            </div>
-            <Link
-              to="/trang-quan-tri"
-              className="inline-flex items-center gap-1.5 rounded-full bg-amber-600 px-3.5 py-1 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-amber-700 cursor-pointer shrink-0"
-            >
-              <ShieldCheckIcon className="size-3.5" />
-              Về Trang quản trị
-            </Link>
-          </div>
         )}
 
-        {/* ── Page content ────────────────────────────────────────────────── */}
-        <main className="flex min-w-0 flex-1 flex-col gap-6 p-4 sm:p-6 lg:p-8">
-          {isNavigating ? (
-            <ContentSkeleton />
-          ) : (
-            <Outlet context={{ isAdminPreview: isAdmin, user, candidateStatus }} />
+        {/* Sidebar — tự động collapse thành Sheet trên mobile */}
+        <AppSidebar user={user} candidateStatus={candidateStatus} />
+
+        {/* Main content area */}
+        <SidebarInset className="min-w-0 overflow-hidden">
+          {/* ── Top bar: Sidebar toggle + breadcrumb area + Notification Bell ── */}
+          <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b px-4 sm:px-6">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
+              {/* Hamburger trigger (mobile) / collapse toggle (desktop) */}
+              <SidebarTrigger
+                className="-ml-1"
+                aria-label="Mở/đóng sidebar điều hướng"
+              />
+              <Separator orientation="vertical" className="h-5" />
+              {/* Breadcrumb slot — children có thể inject qua handle */}
+              <div
+                id="app-breadcrumb"
+                className="flex min-w-0 flex-1 items-center"
+                aria-label="Breadcrumb"
+              />
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <NotificationBell />
+            </div>
+          </header>
+
+          {/* ── Admin Preview Notice Banner ─────────────────────────────────── */}
+          {isAdmin && (
+            <div className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 backdrop-blur-md sm:px-6 dark:bg-amber-950/40">
+              <div className="flex items-center gap-2.5 text-xs text-amber-900 dark:text-amber-200">
+                <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                  <EyeIcon className="size-3.5" />
+                </span>
+                <span>
+                  <strong>Chế độ xem trước dành cho Quản trị viên (Chỉ đọc)</strong>: Bạn đang xem giao diện với tư cách quản trị viên. Các tính năng nộp hồ sơ, đăng ký thi, thanh toán PayOS đã bị vô hiệu hóa để bảo vệ dữ liệu thí sinh.
+                </span>
+              </div>
+              <Link
+                to="/trang-quan-tri"
+                className="inline-flex items-center gap-1.5 rounded-full bg-amber-600 px-3.5 py-1 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-amber-700 cursor-pointer shrink-0"
+              >
+                <ShieldCheckIcon className="size-3.5" />
+                Về Trang quản trị
+              </Link>
+            </div>
           )}
-        </main>
-      </SidebarInset>
-    </SidebarProvider>
+
+          {/* ── Page content ────────────────────────────────────────────────── */}
+          <main className="flex min-w-0 flex-1 flex-col gap-6 p-4 sm:p-6 lg:p-8">
+            {isNavigating ? (
+              <ContentSkeleton />
+            ) : (
+              <Outlet context={{ isAdminPreview: isAdmin, user, candidateStatus }} />
+            )}
+          </main>
+        </SidebarInset>
+      </SidebarProvider>
+    </NotificationProvider>
   );
 }

@@ -12,6 +12,8 @@ import {
   Image as ImageIcon,
   RefreshCwIcon,
   ShieldCheckIcon,
+  LockIcon,
+  KeyRoundIcon,
 } from "lucide-react";
 import {
   Dialog,
@@ -25,6 +27,7 @@ import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { maskAddress, maskDocumentNumber, maskEmail, maskPhoneNumber } from "~/lib/mask";
 import { CandidateSecurePhotoCard } from "~/components/dashboard/CandidateSecurePhotoCard";
+import { useAdminPiiPinGateway } from "~/components/dashboard/AdminPiiPinGateway";
 import type { AdminCandidateResponseDTO, ApiEnvelope } from "~/types/admin";
 
 export function EmptyFieldBadge({ className }: { className?: string }) {
@@ -103,26 +106,149 @@ export function CandidateDetailDialog({
   onPreviewImage,
 }: CandidateDetailDialogProps) {
   const fetcher = useFetcher<ApiEnvelope<AdminCandidateResponseDTO>>();
+  const {
+    isPiiUnlocked,
+    piiAccessToken,
+    remainingUnlockSeconds,
+    lockEpoch,
+    requestPiiUnlock,
+    lockPiiNow,
+    openPinSetupDialog,
+  } = useAdminPiiPinGateway();
 
   // Trạng thái mở xem ảnh bảo mật thị giác (Visual PII Protection §NĐ 13/2023)
   const [revealedImages, setRevealedImages] = React.useState<Record<string, boolean>>({});
+  const [unlockedCandidate, setUnlockedCandidate] =
+    React.useState<AdminCandidateResponseDTO | null>(null);
+  const [isFetchingUnlockedPii, setIsFetchingUnlockedPii] = React.useState(false);
 
-  // Tự động che mờ lại khi đóng dialog hoặc đổi thí sinh
+  // Tự động che mờ lại khi đóng dialog, đổi thí sinh, hoặc hết hạn 5 phút mở khóa PIN
   React.useEffect(() => {
     if (!open) {
       setRevealedImages({});
+      setUnlockedCandidate(null);
     }
   }, [open]);
 
   React.useEffect(() => {
     setRevealedImages({});
-  }, [initialCandidate?.id]);
+    setUnlockedCandidate(null);
+  }, [initialCandidate?.id, lockEpoch]);
+
+  // Tải chi tiết dữ liệu mới nhất từ server khi mở dialog (§3.10)
+  React.useEffect(() => {
+    if (open && initialCandidate?.id) {
+      fetcher.load(`/internal/admin/candidates/${initialCandidate.id}`);
+    }
+  }, [open, initialCandidate?.id]);
+
+  // Hợp nhất dữ liệu: ưu tiên dữ liệu đã mở khóa PII (nếu khớp ID), sau đó đến dữ liệu mới nhất từ API
+  const baseCandidate: AdminCandidateResponseDTO | null = initialCandidate
+    ? fetcher.data?.success && fetcher.data.data
+      ? fetcher.data.data
+      : initialCandidate
+    : null;
+
+  const freshCandidate: AdminCandidateResponseDTO | null =
+    baseCandidate &&
+    unlockedCandidate &&
+    unlockedCandidate.id === baseCandidate.id &&
+    isPiiUnlocked
+      ? unlockedCandidate
+      : baseCandidate;
+
+  const fetchUnlockedCandidateData = React.useCallback(
+    async (
+      candidateId: number,
+      token: string
+    ): Promise<AdminCandidateResponseDTO | null> => {
+      setIsFetchingUnlockedPii(true);
+      try {
+        const res = await fetch(
+          `/internal/admin/candidates/${candidateId}?pii_token=${encodeURIComponent(token)}`,
+          {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+              "X-PII-Access-Token": token,
+            },
+          }
+        );
+        const payload = (await res
+          .json()
+          .catch(() => null)) as ApiEnvelope<AdminCandidateResponseDTO> | null;
+        if (
+          !res.ok ||
+          !payload?.success ||
+          !payload.data ||
+          payload.data.latest_document?.pii_locked === true
+        ) {
+          lockPiiNow();
+          return null;
+        }
+        setUnlockedCandidate(payload.data);
+        return payload.data;
+      } catch {
+        return null;
+      } finally {
+        setIsFetchingUnlockedPii(false);
+      }
+    },
+    [lockPiiNow]
+  );
+
+  if (!freshCandidate) return null;
+
+  const doc = freshCandidate.latest_document;
+  const docStatus = doc?.verification_status || "pending";
+  const isPassport = doc?.doc_type === "passport";
+  const isFetchingDetail = fetcher.state === "loading";
+
+  const hasUnlockedUrls = Boolean(
+    doc &&
+      doc.pii_locked === false &&
+      (doc.front_image_url || doc.back_image_url || doc.portrait_image_url)
+  );
 
   const toggleImageReveal = (key: string) => {
-    setRevealedImages((prev) => ({
-      ...prev,
-      [key]: !prev[key],
-    }));
+    if (revealedImages[key]) {
+      setRevealedImages((prev) => ({
+        ...prev,
+        [key]: false,
+      }));
+      return;
+    }
+
+    const candidateId = freshCandidate.id;
+
+    if (isPiiUnlocked && piiAccessToken) {
+      if (hasUnlockedUrls) {
+        setRevealedImages((prev) => ({
+          ...prev,
+          [key]: true,
+        }));
+      } else {
+        void fetchUnlockedCandidateData(candidateId, piiAccessToken).then((data) => {
+          if (data) {
+            setRevealedImages((prev) => ({
+              ...prev,
+              [key]: true,
+            }));
+          }
+        });
+      }
+      return;
+    }
+
+    requestPiiUnlock(async (token) => {
+      const data = await fetchUnlockedCandidateData(candidateId, token);
+      if (data) {
+        setRevealedImages((prev) => ({
+          ...prev,
+          [key]: true,
+        }));
+      }
+    });
   };
 
   const hasAnyRevealed = Boolean(
@@ -132,32 +258,49 @@ export function CandidateDetailDialog({
   const toggleAllImages = () => {
     if (hasAnyRevealed) {
       setRevealedImages({});
-    } else {
-      setRevealedImages({
-        front: true,
-        back: true,
-        portrait: true,
-      });
+      return;
     }
+
+    const candidateId = freshCandidate.id;
+
+    if (isPiiUnlocked && piiAccessToken) {
+      if (hasUnlockedUrls) {
+        setRevealedImages({
+          front: true,
+          back: true,
+          portrait: true,
+        });
+      } else {
+        void fetchUnlockedCandidateData(candidateId, piiAccessToken).then((data) => {
+          if (data) {
+            setRevealedImages({
+              front: true,
+              back: true,
+              portrait: true,
+            });
+          }
+        });
+      }
+      return;
+    }
+
+    requestPiiUnlock(async (token) => {
+      const data = await fetchUnlockedCandidateData(candidateId, token);
+      if (data) {
+        setRevealedImages({
+          front: true,
+          back: true,
+          portrait: true,
+        });
+      }
+    });
   };
 
-  // Tải chi tiết dữ liệu mới nhất từ server khi mở dialog (§3.10)
-  React.useEffect(() => {
-    if (open && initialCandidate?.id) {
-      fetcher.load(`/internal/admin/candidates/${initialCandidate.id}`);
-    }
-  }, [open, initialCandidate?.id]);
-
-  if (!initialCandidate) return null;
-
-  // Hợp nhất dữ liệu: ưu tiên dữ liệu mới nhất từ API, fallback dữ liệu hàng ban đầu
-  const freshCandidate: AdminCandidateResponseDTO =
-    fetcher.data?.success && fetcher.data.data ? fetcher.data.data : initialCandidate;
-
-  const doc = freshCandidate.latest_document;
-  const docStatus = doc?.verification_status || "pending";
-  const isPassport = doc?.doc_type === "passport";
-  const isFetchingDetail = fetcher.state === "loading";
+  const formatCountdown = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -344,38 +487,88 @@ export function CandidateDetailDialog({
             </div>
           </div>
 
-          {/* Section 3: Ảnh đối chiếu CCCD và chân dung có cơ chế bảo vệ PII Click-to-Reveal */}
+          {/* Section 3: Ảnh đối chiếu CCCD và chân dung có cơ chế bảo vệ PII Click-to-Reveal + PIN 6 số */}
           <div className="rounded-xl border bg-card/60 p-3.5 space-y-3">
-            <div className="flex items-center justify-between pb-0.5">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                <ImageIcon className="size-3.5 text-primary" />
-                Ảnh chứng thực đối soát
-              </h4>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={toggleAllImages}
-                className="h-6 px-2 text-[11px] rounded-full text-muted-foreground hover:text-foreground cursor-pointer gap-1"
-              >
-                {hasAnyRevealed ? (
-                  <>
-                    <EyeOffIcon className="size-3" />
-                    <span>Ẩn tất cả</span>
-                  </>
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-0.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                  <ImageIcon className="size-3.5 text-primary" />
+                  Ảnh chứng thực đối soát
+                </h4>
+                {isPiiUnlocked ? (
+                  <Badge
+                    variant="outline"
+                    className="rounded-full px-2 py-0.5 text-[10px] font-medium border-emerald-500/30 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-300 flex items-center gap-1"
+                  >
+                    <ShieldCheckIcon className="size-3" />
+                    <span>Mở khóa PIN ({formatCountdown(remainingUnlockSeconds)})</span>
+                  </Badge>
                 ) : (
-                  <>
-                    <EyeIcon className="size-3" />
-                    <span>Hiện tất cả</span>
-                  </>
+                  <Badge
+                    variant="outline"
+                    className="rounded-full px-2 py-0.5 text-[10px] font-medium border-amber-500/30 text-amber-700 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-300 flex items-center gap-1"
+                  >
+                    <LockIcon className="size-2.5" />
+                    <span>Yêu cầu PIN 6 số</span>
+                  </Badge>
                 )}
-              </Button>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                {isPiiUnlocked && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => lockPiiNow(true)}
+                    className="h-6 px-2 text-[10px] rounded-full text-amber-700 border-amber-300 hover:bg-amber-50 dark:text-amber-300 dark:border-amber-800 dark:hover:bg-amber-950/40 cursor-pointer gap-1"
+                    title="Khóa ngay phiên xem ảnh PII"
+                  >
+                    <LockIcon className="size-2.5" />
+                    <span>Khóa ngay</span>
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={openPinSetupDialog}
+                  className="h-6 px-2 text-[10px] rounded-full text-muted-foreground hover:text-foreground cursor-pointer gap-1"
+                  title="Đổi mã PIN bảo mật PII 6 chữ số"
+                >
+                  <KeyRoundIcon className="size-2.5" />
+                  <span>Đổi PIN</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleAllImages}
+                  disabled={isFetchingUnlockedPii}
+                  className="h-6 px-2 text-[11px] rounded-full text-muted-foreground hover:text-foreground cursor-pointer gap-1"
+                >
+                  {hasAnyRevealed ? (
+                    <>
+                      <EyeOffIcon className="size-3" />
+                      <span>Ẩn tất cả</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeIcon className="size-3" />
+                      <span>Hiện tất cả</span>
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {/* Mặt trước CCCD/Hộ chiếu */}
               <CandidateSecurePhotoCard
                 title="Mặt trước CCCD/Hộ chiếu"
                 imageUrl={doc?.front_image_url}
+                hasImage={Boolean(doc?.has_front_image ?? doc?.front_image_url)}
+                isPiiLocked={!isPiiUnlocked}
+                isLoadingImage={isFetchingUnlockedPii}
                 alt="Mặt trước CCCD"
                 isRevealed={Boolean(revealedImages["front"])}
                 onToggleReveal={() => toggleImageReveal("front")}
@@ -387,6 +580,9 @@ export function CandidateDetailDialog({
               <CandidateSecurePhotoCard
                 title="Mặt sau CCCD"
                 imageUrl={doc?.back_image_url}
+                hasImage={Boolean(doc?.has_back_image ?? doc?.back_image_url)}
+                isPiiLocked={!isPiiUnlocked}
+                isLoadingImage={isFetchingUnlockedPii}
                 alt="Mặt sau CCCD"
                 isRevealed={Boolean(revealedImages["back"])}
                 onToggleReveal={() => toggleImageReveal("back")}
@@ -398,6 +594,9 @@ export function CandidateDetailDialog({
               <CandidateSecurePhotoCard
                 title="Ảnh thẻ chân dung 3x4"
                 imageUrl={doc?.portrait_image_url}
+                hasImage={Boolean(doc?.has_portrait_image ?? doc?.portrait_image_url)}
+                isPiiLocked={!isPiiUnlocked}
+                isLoadingImage={isFetchingUnlockedPii}
                 alt="Ảnh thẻ chân dung"
                 isRevealed={Boolean(revealedImages["portrait"])}
                 onToggleReveal={() => toggleImageReveal("portrait")}

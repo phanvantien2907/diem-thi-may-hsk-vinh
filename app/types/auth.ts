@@ -111,6 +111,7 @@ export interface UserProfile {
   phone?: string;
   role?: string;
   rawRole?: "admin" | "candidate" | "proctor" | "reviewer" | string;
+  has_pii_pin?: boolean;
 }
 
 /**
