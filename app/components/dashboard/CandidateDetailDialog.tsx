@@ -11,6 +11,7 @@ import {
   FileTextIcon,
   Image as ImageIcon,
   RefreshCwIcon,
+  RotateCcwIcon,
   ShieldCheckIcon,
   LockIcon,
   KeyRoundIcon,
@@ -90,7 +91,7 @@ export interface CandidateDetailDialogProps {
   onOpenChange: (open: boolean) => void;
   onApprove: (c: AdminCandidateResponseDTO) => void;
   onReject: (c: AdminCandidateResponseDTO) => void;
-  onReapprove?: (c: AdminCandidateResponseDTO) => void;
+  onReopenReview?: (c: AdminCandidateResponseDTO) => void;
   onRevoke?: (c: AdminCandidateResponseDTO) => void;
   onPreviewImage: (url: string) => void;
 }
@@ -101,7 +102,7 @@ export function CandidateDetailDialog({
   onOpenChange,
   onApprove,
   onReject,
-  onReapprove,
+  onReopenReview,
   onRevoke,
   onPreviewImage,
 }: CandidateDetailDialogProps) {
@@ -618,7 +619,7 @@ export function CandidateDetailDialog({
             Đóng cửa sổ
           </Button>
 
-          {/* Các nút hành động nghiệp vụ tương thích trạng thái */}
+          {/* Các nút hành động nghiệp vụ tương thích trạng thái (Strict State Machine) */}
           <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
             {docStatus === "pending" && (
               <>
@@ -639,7 +640,7 @@ export function CandidateDetailDialog({
                   className="rounded-full cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-medium h-9 w-full sm:w-auto shadow-2xs"
                 >
                   <CheckCircle2Icon className="size-3.5 mr-1" />
-                  Phê duyệt hợp lệ
+                  Duyệt hồ sơ
                 </Button>
               </>
             )}
@@ -657,15 +658,16 @@ export function CandidateDetailDialog({
               </Button>
             )}
 
-            {docStatus === "rejected" && onReapprove && (
+            {docStatus === "rejected" && onReopenReview && (
               <Button
                 type="button"
+                variant="outline"
                 size="sm"
-                onClick={() => onReapprove(freshCandidate)}
-                className="rounded-full cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-medium h-9 w-full sm:w-auto shadow-2xs"
+                onClick={() => onReopenReview(freshCandidate)}
+                className="rounded-full cursor-pointer text-xs h-9 text-amber-600 border-amber-300 dark:text-amber-400 dark:border-amber-800 hover:bg-amber-50 dark:hover:bg-amber-950/40 w-full sm:w-auto font-medium"
               >
-                <CheckCircle2Icon className="size-3.5 mr-1" />
-                Phê duyệt lại
+                <RotateCcwIcon className="size-3.5 mr-1" />
+                Mở lại xét duyệt
               </Button>
             )}
           </div>

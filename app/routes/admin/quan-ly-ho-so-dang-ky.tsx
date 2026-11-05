@@ -4,7 +4,11 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import type { Route } from "./+types/quan-ly-ho-so-dang-ky";
 import { requireAdminAuth } from "~/lib/auth.server";
 import { API_BASE_URL } from "~/lib/env.server";
-import { rejectCandidateSchema, type RejectCandidateFormValues } from "~/lib/schemas/admin-candidate";
+import {
+  rejectCandidateSchema,
+  deactivateAccountSchema,
+  type RejectCandidateFormValues,
+} from "~/lib/schemas/admin-candidate";
 import { CandidateAuditLogDialog } from "~/components/dashboard/CandidateAuditLogDialog";
 import type {
   AdminCandidateResponseDTO,
@@ -77,16 +81,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "~/components/ui/alert-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -170,7 +164,7 @@ function getCandidateActions(c: AdminCandidateResponseDTO): CandidateRowActions 
   return {
     canApprove: Boolean(doc) && status === "pending",
     canReject: Boolean(doc) && status === "pending",
-    canReapprove: Boolean(doc) && status === "rejected",
+    canReopenReview: Boolean(doc) && status === "rejected",
     canRevoke: Boolean(doc) && status === "verified",
     canCheckDuplicate: Boolean(doc?.doc_number),
     canCopyDocNumber: Boolean(doc?.doc_number),
@@ -191,7 +185,13 @@ function copyToClipboard(value: string, title: string) {
   );
 }
 
-type CandidateIntent = "approve" | "reject" | "reapprove" | "revoke" | "disable-account" | "clear-cache";
+type CandidateIntent =
+  | "approve"
+  | "reject"
+  | "reopen-review"
+  | "revoke"
+  | "disable-account"
+  | "clear-cache";
 
 type ActionResult =
   | { success: true; intent: CandidateIntent; message: string; error?: undefined }
@@ -517,6 +517,14 @@ export async function action({ request }: Route.ActionArgs) {
 
   if (intent === "approve") {
     if (!candidateId) return { error: "Thiếu ID thí sinh" };
+    // Ghi nhận proof-of-view hồ sơ trước khi gọi endpoint approve (yêu cầu bảo mật của Backend)
+    await fetch(`${API_BASE_URL}/api/v1/admin/candidates/${candidateId}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }).catch(() => null);
+
     const res = await fetch(`${API_BASE_URL}/api/v1/admin/candidates/${candidateId}/approve`, {
       method: "POST",
       headers: {
@@ -533,33 +541,22 @@ export async function action({ request }: Route.ActionArgs) {
     return { success: true, intent: "approve", message: "Đã phê duyệt hồ sơ thí sinh thành công." };
   }
 
-  if (intent === "reapprove") {
-    if (!candidateId) return { error: "Thiếu ID thí sinh" };
-    const res = await fetch(`${API_BASE_URL}/api/v1/admin/candidates/${candidateId}/approve`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-    }).catch(() => null);
-
-    if (!res || !res.ok) {
-      const err = await res?.json().catch(() => null);
-      return { error: err?.msg || "Không thể phê duyệt lại hồ sơ thí sinh." };
-    }
-    await clearCandidatesCache();
-    return { success: true, intent: "reapprove", message: "Đã phê duyệt lại hồ sơ thí sinh thành công." };
-  }
-
-  if (intent === "reject" || intent === "revoke") {
+  if (intent === "reject" || intent === "revoke" || intent === "reopen-review") {
     if (!candidateId) return { error: "Thiếu ID thí sinh" };
     const reasonRaw = formData.get("reason")?.toString() || "";
     const parsed = rejectCandidateSchema.safeParse({ reason: reasonRaw });
     if (!parsed.success) {
-      return { error: parsed.error.issues[0]?.message || "Lý do không hợp lệ (tối đa 500 ký tự)." };
+      return { error: parsed.error.issues[0]?.message || "Lý do không hợp lệ (tối thiểu 5 ký tự, tối đa 500 ký tự)." };
     }
 
-    const res = await fetch(`${API_BASE_URL}/api/v1/admin/candidates/${candidateId}/reject`, {
+    const endpointPath =
+      intent === "revoke"
+        ? `/api/v1/admin/candidates/${candidateId}/revoke-approval`
+        : intent === "reopen-review"
+          ? `/api/v1/admin/candidates/${candidateId}/reopen-review`
+          : `/api/v1/admin/candidates/${candidateId}/reject`;
+
+    const res = await fetch(`${API_BASE_URL}${endpointPath}`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -573,7 +570,11 @@ export async function action({ request }: Route.ActionArgs) {
       return {
         error:
           err?.msg ||
-          (intent === "revoke" ? "Không thể thu hồi phê duyệt hồ sơ." : "Không thể từ chối hồ sơ thí sinh."),
+          (intent === "revoke"
+            ? "Không thể thu hồi phê duyệt hồ sơ."
+            : intent === "reopen-review"
+              ? "Không thể mở lại xét duyệt hồ sơ."
+              : "Không thể từ chối hồ sơ thí sinh."),
       };
     }
     await clearCandidatesCache();
@@ -582,19 +583,42 @@ export async function action({ request }: Route.ActionArgs) {
       intent,
       message:
         intent === "revoke"
-          ? "Đã thu hồi phê duyệt và gửi thông báo tới thí sinh."
-          : "Đã gửi thông báo từ chối hồ sơ tới thí sinh.",
+          ? "Đã thu hồi phê duyệt và chuyển hồ sơ về trạng thái chờ duyệt."
+          : intent === "reopen-review"
+            ? "Đã mở lại xét duyệt hồ sơ và gửi thông báo tới thí sinh."
+            : "Đã gửi thông báo từ chối hồ sơ tới thí sinh.",
     };
   }
 
   if (intent === "disable-account") {
     const accountId = formData.get("account_id")?.toString();
+    const confirmIdentity = formData.get("confirm_identity")?.toString() || "";
+    const reason = formData.get("reason")?.toString() || "";
     if (!accountId) return { error: "Thiếu ID tài khoản cần vô hiệu hóa" };
+
+    const parsed = deactivateAccountSchema.safeParse({
+      confirm_identity: confirmIdentity,
+      reason,
+    });
+    if (!parsed.success) {
+      return {
+        error:
+          parsed.error.issues[0]?.message ||
+          "Vui lòng cung cấp đầy đủ thông tin xác nhận danh tính và lý do vô hiệu hóa.",
+      };
+    }
+
     const res = await fetch(`${API_BASE_URL}/api/v1/admin/delete-account/${accountId}`, {
       method: "DELETE",
       headers: {
         Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({
+        confirm_account_id: Number(accountId),
+        confirm_identity: parsed.data.confirm_identity,
+        reason: parsed.data.reason,
+      }),
     }).catch(() => null);
 
     if (!res || !res.ok) {
@@ -677,9 +701,9 @@ export default function QuanLyHoSoDangKyPage() {
   const [auditLogCandidate, setAuditLogCandidate] = React.useState<AdminCandidateResponseDTO | null>(null);
   const [isAuditLogOpen, setIsAuditLogOpen] = React.useState(false);
 
-  // State Dialog Từ chối / Thu hồi kèm lý do (RHF + Zod theo chuẩn dự án)
+  // State Dialog Từ chối / Thu hồi / Mở lại xét duyệt kèm lý do (RHF + Zod theo chuẩn dự án)
   const [candidateToReject, setCandidateToReject] = React.useState<AdminCandidateResponseDTO | null>(null);
-  const [rejectMode, setRejectMode] = React.useState<"reject" | "revoke">("reject");
+  const [rejectMode, setRejectMode] = React.useState<"reject" | "revoke" | "reopen-review">("reject");
   const [isRejectDialogOpen, setIsRejectDialogOpen] = React.useState(false);
 
   const {
@@ -693,13 +717,11 @@ export default function QuanLyHoSoDangKyPage() {
     defaultValues: { reason: "" },
   });
 
-  // State Dialog Phê duyệt lại hồ sơ đã từ chối
-  const [candidateToReapprove, setCandidateToReapprove] = React.useState<AdminCandidateResponseDTO | null>(null);
-  const [isReapproveAlertOpen, setIsReapproveAlertOpen] = React.useState(false);
-
   // State Dialog Vô hiệu hóa tài khoản thí sinh (§2.13)
   const [candidateToDisable, setCandidateToDisable] = React.useState<AdminCandidateResponseDTO | null>(null);
   const [isDisableAlertOpen, setIsDisableAlertOpen] = React.useState(false);
+  const [disableConfirmIdentity, setDisableConfirmIdentity] = React.useState("");
+  const [disableReason, setDisableReason] = React.useState("");
 
   // State Dialog Quét hồ sơ trùng lặp (API §3.11)
   const [isDuplicateDialogOpen, setIsDuplicateDialogOpen] = React.useState(false);
@@ -735,10 +757,11 @@ export default function QuanLyHoSoDangKyPage() {
           description: data.message || "Hệ thống đã cập nhật trạng thái hồ sơ.",
         });
         setIsRejectDialogOpen(false);
-        setIsReapproveAlertOpen(false);
         setIsDisableAlertOpen(false);
         setIsDetailOpen(false);
         resetRejectForm({ reason: "" });
+        setDisableConfirmIdentity("");
+        setDisableReason("");
       } else if (data.error) {
         toast.add({
           type: "error",
@@ -816,20 +839,25 @@ export default function QuanLyHoSoDangKyPage() {
     );
   };
 
-  // Mở Dialog Từ chối / Thu hồi
-  const handleOpenReject = (candidate: AdminCandidateResponseDTO, mode: "reject" | "revoke" = "reject") => {
+  // Mở Dialog Từ chối / Thu hồi / Mở lại xét duyệt
+  const handleOpenReject = (
+    candidate: AdminCandidateResponseDTO,
+    mode: "reject" | "revoke" | "reopen-review" = "reject"
+  ) => {
     setCandidateToReject(candidate);
     setRejectMode(mode);
     resetRejectForm({
       reason:
         mode === "revoke"
           ? "Thu hồi phê duyệt để thí sinh chụp lại ảnh giấy tờ rõ nét hơn"
-          : "Ảnh CCCD bị mờ, không đọc được thông tin",
+          : mode === "reopen-review"
+            ? "Mở lại xét duyệt hồ sơ sau khi rà soát bổ sung thông tin thí sinh"
+            : "Ảnh CCCD bị mờ, không đọc được thông tin",
     });
     setIsRejectDialogOpen(true);
   };
 
-  // Xác nhận từ chối / thu hồi (qua form validation)
+  // Xác nhận từ chối / thu hồi / mở lại xét duyệt (qua form validation)
   const onSubmitReject = (data: RejectCandidateFormValues) => {
     if (!candidateToReject) return;
     fetcher.submit(
@@ -842,30 +870,41 @@ export default function QuanLyHoSoDangKyPage() {
     );
   };
 
-  // Mở Dialog Phê duyệt lại
-  const handleOpenReapprove = (candidate: AdminCandidateResponseDTO) => {
-    setCandidateToReapprove(candidate);
-    setIsReapproveAlertOpen(true);
-  };
-
-  const handleConfirmReapprove = () => {
-    if (!candidateToReapprove) return;
-    fetcher.submit(
-      { intent: "reapprove", candidate_id: String(candidateToReapprove.id) },
-      { method: "post" }
-    );
-  };
-
-  // Mở Dialog Vô hiệu hóa tài khoản
+  // Mở Dialog Vô hiệu hóa tài khoản (Bắt buộc nhập confirm_identity & reason)
   const handleOpenDisableAccount = (candidate: AdminCandidateResponseDTO) => {
     setCandidateToDisable(candidate);
+    setDisableConfirmIdentity("");
+    setDisableReason("");
     setIsDisableAlertOpen(true);
   };
 
-  const handleConfirmDisableAccount = () => {
-    if (!candidateToDisable || !candidateToDisable.account_id) return;
+  const isDisableValid = React.useMemo(() => {
+    if (!candidateToDisable || !candidateToDisable.account_id) return false;
+    const trimmedIdentity = disableConfirmIdentity.trim().toLowerCase();
+    const trimmedReason = disableReason.trim();
+    if (!trimmedIdentity || trimmedReason.length < 5) return false;
+
+    const fullName = (candidateToDisable.full_name || "").trim().toLowerCase();
+    const docNum = (candidateToDisable.latest_document?.doc_number || "").trim().toLowerCase();
+    const email = (candidateToDisable.email || "").trim().toLowerCase();
+
+    return (
+      (Boolean(fullName) && trimmedIdentity === fullName) ||
+      (Boolean(docNum) && !docNum.includes("*") && trimmedIdentity === docNum) ||
+      (Boolean(email) && !email.includes("*") && trimmedIdentity === email)
+    );
+  }, [candidateToDisable, disableConfirmIdentity, disableReason]);
+
+  const handleConfirmDisableAccount = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!candidateToDisable || !candidateToDisable.account_id || !isDisableValid) return;
     fetcher.submit(
-      { intent: "disable-account", account_id: String(candidateToDisable.account_id) },
+      {
+        intent: "disable-account",
+        account_id: String(candidateToDisable.account_id),
+        confirm_identity: disableConfirmIdentity.trim(),
+        reason: disableReason.trim(),
+      },
       { method: "post" }
     );
   };
@@ -1198,25 +1237,23 @@ export default function QuanLyHoSoDangKyPage() {
 
               {/* Filter Dropdowns Group */}
               <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-                {/* Lọc Cấp độ HSK */}
+                {/* Lọc Cấp độ HSK (Chỉ hiển thị từ HSK 3 trở lên) */}
                 <Select
                   value={level || "all"}
                   onValueChange={(val) => updateParams({ level: val, page: null })}
                 >
-                  <SelectTrigger className="h-9 w-full sm:w-44 rounded-full px-3 text-xs cursor-pointer">
-                    <SelectValue placeholder="Mọi cấp độ HSK">
+                  <SelectTrigger className="h-9 w-full sm:w-52 rounded-full px-3 text-xs cursor-pointer">
+                    <SelectValue placeholder="Tất cả cấp độ >= HSK 3">
                       {(val) => {
                         const current = val ?? level;
-                        if (!current || current === "all") return "Mọi cấp độ HSK";
-                        return current;
+                        if (!current || current === "all") return "Tất cả cấp độ >= HSK 3";
+                        return current === "HSKK" ? "HSKK Khẩu ngữ" : current;
                       }}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent className="rounded-xl">
                     <SelectGroup>
-                      <SelectItem value="all" className="cursor-pointer text-xs">Mọi cấp độ HSK</SelectItem>
-                      <SelectItem value="HSK 1" className="cursor-pointer text-xs">HSK 1</SelectItem>
-                      <SelectItem value="HSK 2" className="cursor-pointer text-xs">HSK 2</SelectItem>
+                      <SelectItem value="all" className="cursor-pointer text-xs">Tất cả cấp độ &gt;= HSK 3</SelectItem>
                       <SelectItem value="HSK 3" className="cursor-pointer text-xs">HSK 3</SelectItem>
                       <SelectItem value="HSK 4" className="cursor-pointer text-xs">HSK 4</SelectItem>
                       <SelectItem value="HSK 5" className="cursor-pointer text-xs">HSK 5</SelectItem>
@@ -1508,7 +1545,7 @@ export default function QuanLyHoSoDangKyPage() {
                                     )}
                                   </DropdownMenuGroup>
 
-                                  {(actions.canApprove || actions.canReject || actions.canRevoke || actions.canReapprove) && (
+                                  {(actions.canApprove || actions.canReject || actions.canRevoke || actions.canReopenReview) && (
                                     <>
                                       <DropdownMenuSeparator className="my-1" />
                                       <DropdownMenuLabel className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider px-2 py-1">
@@ -1521,7 +1558,7 @@ export default function QuanLyHoSoDangKyPage() {
                                             onClick={() => handleQuickApprove(c)}
                                           >
                                             <CheckCircle2Icon className="size-3.5 mr-2" />
-                                            Phê duyệt giấy tờ
+                                            Duyệt hồ sơ
                                           </DropdownMenuItem>
                                         )}
                                         {actions.canReject && (
@@ -1543,13 +1580,13 @@ export default function QuanLyHoSoDangKyPage() {
                                             Thu hồi phê duyệt
                                           </DropdownMenuItem>
                                         )}
-                                        {actions.canReapprove && (
+                                        {actions.canReopenReview && (
                                           <DropdownMenuItem
-                                            className="cursor-pointer text-xs rounded-lg font-medium text-emerald-600 dark:text-emerald-400 focus:text-emerald-600 focus:bg-emerald-50 dark:focus:bg-emerald-950/40"
-                                            onClick={() => handleOpenReapprove(c)}
+                                            className="cursor-pointer text-xs rounded-lg font-medium text-blue-600 dark:text-blue-400 focus:text-blue-600 focus:bg-blue-50 dark:focus:bg-blue-950/40"
+                                            onClick={() => handleOpenReject(c, "reopen-review")}
                                           >
-                                            <CheckCircle2Icon className="size-3.5 mr-2" />
-                                            Phê duyệt lại
+                                            <RotateCcwIcon className="size-3.5 mr-2" />
+                                            Mở lại xét duyệt
                                           </DropdownMenuItem>
                                         )}
                                       </DropdownMenuGroup>
@@ -1707,9 +1744,9 @@ export default function QuanLyHoSoDangKyPage() {
           setIsDetailOpen(false);
           handleOpenReject(c, "reject");
         }}
-        onReapprove={(c) => {
+        onReopenReview={(c) => {
           setIsDetailOpen(false);
-          handleOpenReapprove(c);
+          handleOpenReject(c, "reopen-review");
         }}
         onRevoke={(c) => {
           setIsDetailOpen(false);
@@ -1725,7 +1762,7 @@ export default function QuanLyHoSoDangKyPage() {
         onOpenChange={setIsAuditLogOpen}
       />
 
-      {/* ── 6. Dialog Từ Chối / Thu Hồi Kèm Lý Do (RHF + Zod) ──────────────── */}
+      {/* ── 6. Dialog Từ Chối / Thu Hồi / Mở Lại Xét Duyệt Kèm Lý Do (RHF + Zod) ─ */}
       <Dialog open={isRejectDialogOpen} onOpenChange={setIsRejectDialogOpen}>
         <DialogContent className="max-w-xl max-h-[90vh] overflow-hidden p-0">
           <DialogHeader className="p-6 pb-4 pr-12 border-b bg-muted/20">
@@ -1735,15 +1772,25 @@ export default function QuanLyHoSoDangKyPage() {
                 className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
                   rejectMode === "revoke"
                     ? "text-amber-600 border-amber-300 bg-amber-50 dark:bg-amber-950/40 dark:border-amber-900/60"
-                    : "text-destructive border-destructive/20 bg-destructive/5"
+                    : rejectMode === "reopen-review"
+                      ? "text-blue-600 border-blue-300 bg-blue-50 dark:bg-blue-950/40 dark:border-blue-900/60"
+                      : "text-destructive border-destructive/20 bg-destructive/5"
                 }`}
               >
-                {rejectMode === "revoke" ? "Thu hồi phê duyệt" : "Từ chối hồ sơ"}
+                {rejectMode === "revoke"
+                  ? "Thu hồi phê duyệt"
+                  : rejectMode === "reopen-review"
+                    ? "Mở lại xét duyệt"
+                    : "Từ chối hồ sơ"}
               </Badge>
               <span className="text-xs text-muted-foreground">• Thẩm định giấy tờ</span>
             </div>
             <DialogTitle className="text-xl font-bold text-foreground">
-              {rejectMode === "revoke" ? "Thu hồi phê duyệt hồ sơ thí sinh" : "Từ chối hồ sơ thí sinh"}
+              {rejectMode === "revoke"
+                ? "Thu hồi phê duyệt hồ sơ thí sinh"
+                : rejectMode === "reopen-review"
+                  ? "Mở lại xét duyệt hồ sơ thí sinh"
+                  : "Từ chối hồ sơ thí sinh"}
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground mt-0.5">
               Thí sinh: <span className="font-semibold text-foreground">{candidateToReject?.full_name || <EmptyFieldBadge />}</span>
@@ -1758,20 +1805,27 @@ export default function QuanLyHoSoDangKyPage() {
                   Lý do thường gặp (Nhấp để chọn nhanh):
                 </Label>
                 <div className="flex flex-wrap gap-1.5">
-                  {[
-                    "Ảnh CCCD bị mờ, không đọc được thông tin",
-                    "Thông tin họ tên/ngày sinh không khớp với CCCD",
-                    "Ảnh chân dung không đúng quy cách 3x4",
-                    "Giấy tờ tùy thân đã hết hạn sử dụng",
-                    ...(rejectMode === "revoke"
-                      ? ["Thu hồi phê duyệt để thí sinh chụp lại ảnh giấy tờ rõ nét hơn"]
-                      : []),
-                  ].map((reason) => (
+                  {(rejectMode === "reopen-review"
+                    ? [
+                        "Mở lại xét duyệt hồ sơ sau khi rà soát bổ sung thông tin thí sinh",
+                        "Thí sinh đã giải trình hợp lệ, chuyển về trạng thái chờ duyệt để thẩm định lại",
+                        "Phát hiện nhầm lẫn khi từ chối, mở lại xét duyệt giấy tờ tùy thân",
+                      ]
+                    : [
+                        "Ảnh CCCD bị mờ, không đọc được thông tin",
+                        "Thông tin họ tên/ngày sinh không khớp với CCCD",
+                        "Ảnh chân dung không đúng quy cách 3x4",
+                        "Giấy tờ tùy thân đã hết hạn sử dụng",
+                        ...(rejectMode === "revoke"
+                          ? ["Thu hồi phê duyệt để thí sinh chụp lại ảnh giấy tờ rõ nét hơn"]
+                          : []),
+                      ]
+                  ).map((reason) => (
                     <button
                       key={reason}
                       type="button"
                       onClick={() => setRejectValue("reason", reason, { shouldValidate: true })}
-                      className="text-[11px] px-2.5 py-1 rounded-full border bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
+                      className="text-[11px] px-2.5 py-1 rounded-full border bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer transition-colors text-left"
                     >
                       {reason}
                     </button>
@@ -1781,13 +1835,17 @@ export default function QuanLyHoSoDangKyPage() {
 
               <div className="space-y-1.5">
                 <Label htmlFor="reason-input" className="text-xs font-semibold text-foreground">
-                  Nội dung lý do chi tiết <span className="text-destructive">*</span>
+                  Nội dung lý do chi tiết (tối thiểu 5 ký tự) <span className="text-destructive">*</span>
                 </Label>
                 <Textarea
                   id="reason-input"
                   rows={3}
                   {...registerReject("reason")}
-                  placeholder="Nhập lý do cụ thể để thí sinh biết cần bổ sung hoặc chụp lại giấy tờ..."
+                  placeholder={
+                    rejectMode === "reopen-review"
+                      ? "Nhập lý do mở lại xét duyệt để lưu vào nhật ký hệ thống..."
+                      : "Nhập lý do cụ thể để thí sinh biết cần bổ sung hoặc chụp lại giấy tờ..."
+                  }
                   className="text-xs rounded-xl"
                 />
                 {rejectErrors.reason && (
@@ -1796,7 +1854,9 @@ export default function QuanLyHoSoDangKyPage() {
                   </p>
                 )}
                 <p className="text-[11px] text-muted-foreground">
-                  Thông báo này sẽ được gửi trực tiếp đến hộp thư và tài khoản của thí sinh.
+                  {rejectMode === "reopen-review"
+                    ? "Hồ sơ sẽ chuyển về trạng thái 'Chờ duyệt' để quản trị viên thẩm định lại."
+                    : "Thông báo này sẽ được gửi trực tiếp đến hộp thư và tài khoản của thí sinh."}
                 </p>
               </div>
             </div>
@@ -1818,13 +1878,20 @@ export default function QuanLyHoSoDangKyPage() {
                 className={`rounded-full cursor-pointer text-xs h-9 w-full sm:w-auto font-medium ${
                   rejectMode === "revoke"
                     ? "bg-amber-600 text-white hover:bg-amber-700"
-                    : "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    : rejectMode === "reopen-review"
+                      ? "bg-blue-600 text-white hover:bg-blue-700"
+                      : "bg-destructive text-destructive-foreground hover:bg-destructive/90"
                 }`}
               >
                 {rejectMode === "revoke" ? (
                   <>
                     <Undo2Icon className="size-3.5 mr-1.5" />
                     Xác nhận thu hồi
+                  </>
+                ) : rejectMode === "reopen-review" ? (
+                  <>
+                    <RotateCcwIcon className="size-3.5 mr-1.5" />
+                    Xác nhận mở lại xét duyệt
                   </>
                 ) : (
                   <>
@@ -1838,48 +1905,122 @@ export default function QuanLyHoSoDangKyPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── 6.1. AlertDialog Xác nhận Phê duyệt lại ────────────────────────── */}
-      <AlertDialog open={isReapproveAlertOpen} onOpenChange={setIsReapproveAlertOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Xác nhận phê duyệt lại hồ sơ</AlertDialogTitle>
-            <AlertDialogDescription>
-              Hồ sơ thí sinh <strong>{candidateToReapprove?.full_name}</strong> (CCCD: {maskDocumentNumber(candidateToReapprove?.latest_document?.doc_number)}) hiện đang ở trạng thái từ chối. Bạn có chắc chắn muốn phê duyệt lại hồ sơ này hợp lệ để thí sinh đủ điều kiện dự thi?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="rounded-full cursor-pointer hover:bg-muted">Hủy</AlertDialogCancel>
-            <AlertDialogAction
-              className="rounded-full cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90"
-              onClick={handleConfirmReapprove}
-            >
-              Xác nhận phê duyệt
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* ── 6.2. Dialog Xác nhận Vô hiệu hóa tài khoản thí sinh (§2.13) ──────── */}
+      <Dialog open={isDisableAlertOpen} onOpenChange={setIsDisableAlertOpen}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-hidden p-0">
+          <DialogHeader className="p-6 pb-4 pr-12 border-b bg-destructive/5">
+            <div className="flex items-center gap-2 mb-1">
+              <Badge
+                variant="outline"
+                className="rounded-full px-2.5 py-0.5 text-xs font-semibold text-destructive border-destructive/30 bg-destructive/10"
+              >
+                Vùng nguy hiểm
+              </Badge>
+              <span className="text-xs text-muted-foreground">• Tài khoản #{candidateToDisable?.account_id}</span>
+            </div>
+            <DialogTitle className="text-xl font-bold text-foreground">
+              Vô hiệu hóa tài khoản thí sinh
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+              Thao tác này sẽ khóa ngay lập tức phiên đăng nhập hiện tại và ngăn thí sinh{" "}
+              <strong className="text-foreground">{candidateToDisable?.full_name}</strong> truy cập hệ thống.
+            </DialogDescription>
+          </DialogHeader>
 
-      {/* ── 6.2. AlertDialog Xác nhận Vô hiệu hóa tài khoản thí sinh (§2.13) ── */}
-      <AlertDialog open={isDisableAlertOpen} onOpenChange={setIsDisableAlertOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Vô hiệu hóa tài khoản thí sinh</AlertDialogTitle>
-            <AlertDialogDescription>
-              Bạn có chắc chắn muốn vô hiệu hóa tài khoản của thí sinh <strong>{candidateToDisable?.full_name}</strong> (Mã tài khoản: #{candidateToDisable?.account_id})? Thao tác này sẽ khóa phiên đăng nhập và ngăn thí sinh truy cập hệ thống theo đúng quy chuẩn bảo mật.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="rounded-full cursor-pointer hover:bg-muted">Hủy</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              className="rounded-full cursor-pointer"
-              onClick={handleConfirmDisableAccount}
-            >
-              Vô hiệu hóa tài khoản
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+          <form onSubmit={handleConfirmDisableAccount}>
+            <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
+              <div className="rounded-xl border border-amber-200 bg-amber-50/70 dark:border-amber-900/60 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300 space-y-1">
+                <p className="font-semibold flex items-center gap-1.5">
+                  <AlertTriangleIcon className="size-3.5 shrink-0" />
+                  Yêu cầu xác thực danh tính tài khoản cần vô hiệu hóa
+                </p>
+                <p className="text-[11px] leading-relaxed">
+                  Để tránh thao tác nhầm lẫn, vui lòng nhập chính xác{" "}
+                  <strong className="font-semibold">Họ và tên</strong>{" "}
+                  {candidateToDisable?.full_name ? (
+                    <button
+                      type="button"
+                      onClick={() => setDisableConfirmIdentity(candidateToDisable.full_name || "")}
+                      className="underline font-semibold cursor-pointer hover:text-amber-950 dark:hover:text-amber-100"
+                      title="Nhấp để điền nhanh họ tên"
+                    >
+                      ({candidateToDisable.full_name})
+                    </button>
+                  ) : null}{" "}
+                  hoặc <strong className="font-semibold">Số CCCD/Hộ chiếu</strong> của thí sinh.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="disable-confirm-identity" className="text-xs font-semibold text-foreground">
+                  Xác nhận danh tính (<code className="text-[11px]">confirm_identity</code>){" "}
+                  <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="disable-confirm-identity"
+                  value={disableConfirmIdentity}
+                  onChange={(e) => setDisableConfirmIdentity(e.target.value)}
+                  placeholder={`Nhập "${candidateToDisable?.full_name || "Họ tên hoặc số CCCD"}" để xác nhận`}
+                  className="h-9 rounded-xl text-xs"
+                  autoComplete="off"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="disable-reason" className="text-xs font-semibold text-foreground">
+                  Lý do vô hiệu hóa (tối thiểu 5 ký tự) <span className="text-destructive">*</span>
+                </Label>
+                <div className="flex flex-wrap gap-1.5 mb-1.5">
+                  {[
+                    "Giả mạo giấy tờ tùy thân khi đăng ký dự thi",
+                    "Tài khoản trùng lặp hoặc spam đăng ký ca thi",
+                    "Vi phạm quy chế khảo thí HSK Đại học Vinh",
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setDisableReason(preset)}
+                      className="text-[11px] px-2.5 py-1 rounded-full border bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+                <Textarea
+                  id="disable-reason"
+                  rows={3}
+                  value={disableReason}
+                  onChange={(e) => setDisableReason(e.target.value)}
+                  placeholder="Nhập lý do cụ thể (ít nhất 5 ký tự) để ghi nhận vào nhật ký kiểm toán..."
+                  className="text-xs rounded-xl"
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="p-4 border-t bg-muted/40 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 shrink-0">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsDisableAlertOpen(false)}
+                className="rounded-full cursor-pointer hover:bg-muted text-xs h-9 w-full sm:w-auto"
+              >
+                Hủy bỏ
+              </Button>
+              <Button
+                type="submit"
+                variant="destructive"
+                size="sm"
+                disabled={!isDisableValid || fetcher.state !== "idle"}
+                className="rounded-full cursor-pointer text-xs h-9 w-full sm:w-auto font-medium"
+              >
+                <UserXIcon className="size-3.5 mr-1.5" />
+                Xác nhận vô hiệu hóa
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* ── 7. Dialog Quét Hồ Sơ Trùng Lặp ─────────────────────────────────── */}
       <Dialog open={isDuplicateDialogOpen} onOpenChange={setIsDuplicateDialogOpen}>
@@ -2188,25 +2329,19 @@ export default function QuanLyHoSoDangKyPage() {
                   <SelectContent className="rounded-xl">
                     <SelectGroup>
                       <SelectItem value="all" className="cursor-pointer text-xs sm:text-sm">
-                        Mọi cấp độ thi
-                      </SelectItem>
-                      <SelectItem value="HSK 1" className="cursor-pointer text-xs sm:text-sm">
-                        HSK 1
-                      </SelectItem>
-                      <SelectItem value="HSK 2" className="cursor-pointer text-xs sm:text-sm">
-                        HSK 2
+                        Tất cả cấp độ &gt;= HSK 3
                       </SelectItem>
                       <SelectItem value="HSK 3" className="cursor-pointer text-xs sm:text-sm">
-                        HSK 3 & HSKK Sơ cấp
+                        HSK 3 &amp; HSKK Sơ cấp
                       </SelectItem>
                       <SelectItem value="HSK 4" className="cursor-pointer text-xs sm:text-sm">
-                        HSK 4 & HSKK Trung cấp
+                        HSK 4 &amp; HSKK Trung cấp
                       </SelectItem>
                       <SelectItem value="HSK 5" className="cursor-pointer text-xs sm:text-sm">
-                        HSK 5 & HSKK Cao cấp
+                        HSK 5 &amp; HSKK Cao cấp
                       </SelectItem>
                       <SelectItem value="HSK 6" className="cursor-pointer text-xs sm:text-sm">
-                        HSK 6 & HSKK Cao cấp
+                        HSK 6 &amp; HSKK Cao cấp
                       </SelectItem>
                       <SelectItem value="HSKK" className="cursor-pointer text-xs sm:text-sm">
                         HSKK Khẩu ngữ riêng

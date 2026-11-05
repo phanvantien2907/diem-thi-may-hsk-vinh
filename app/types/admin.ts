@@ -144,11 +144,11 @@ export interface DuplicateCandidateItem {
   count: number;
 }
 
-/** Ma trận hành động hiển thị trong dropdown của từng hồ sơ */
+/** Ma trận hành động hiển thị trong dropdown của từng hồ sơ (Strict State Machine) */
 export interface CandidateRowActions {
   canApprove: boolean;
   canReject: boolean;
-  canReapprove: boolean;
+  canReopenReview: boolean;
   canRevoke: boolean;
   canCheckDuplicate: boolean;
   canCopyDocNumber: boolean;
@@ -157,7 +157,7 @@ export interface CandidateRowActions {
   canDisableAccount: boolean;
 }
 
-// ─── Nhật ký hệ thống — API_DOCUMENTATION.md §11.1 ───────────────────────────
+// ─── Nhật ký hệ thống — API_DOCUMENTATION.md §11.1 & §3.10d ──────────────────
 export type AuditLogAction =
   | "CREATE"
   | "UPDATE"
@@ -172,6 +172,12 @@ export type AuditLogAction =
   | "EXPORT"
   | "APPROVE"
   | "REJECT"
+  | "REVOKE_APPROVAL"
+  | "REOPEN_REVIEW"
+  | "VIEW_PII"
+  | "DEACTIVATE_ACCOUNT"
+  | "REACTIVATE_ACCOUNT"
+  | "MERGE"
   | "RECHECK";
 
 export type AuditLogEntityTable =

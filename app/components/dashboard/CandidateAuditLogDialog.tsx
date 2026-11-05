@@ -29,7 +29,7 @@ import type {
 } from "~/types/admin";
 import { maskAddress, maskDocumentNumber, maskEmail, maskPhoneNumber } from "~/lib/mask";
 
-const PAGE_SIZE = 10; // Rule 7: Modal lịch sử thao tác = 10 bản ghi / trang
+const PAGE_SIZE = 5; // Hỗ trợ phân trang lịch sử thao tác (5 bản ghi / trang)
 
 type AuditScope = Extract<AuditLogEntityTable, "candidates" | "candidate_documents">;
 
@@ -38,6 +38,8 @@ const ACTION_LABELS: Record<string, string> = {
   UPDATE: "Cập nhật",
   DELETE: "Xóa",
   SOFT_DELETE: "Vô hiệu hóa",
+  DEACTIVATE_ACCOUNT: "Vô hiệu hóa tài khoản",
+  REACTIVATE_ACCOUNT: "Khôi phục tài khoản",
   RESTORE: "Khôi phục",
   LOGIN: "Đăng nhập",
   LOGOUT: "Đăng xuất",
@@ -47,6 +49,10 @@ const ACTION_LABELS: Record<string, string> = {
   EXPORT: "Xuất dữ liệu",
   APPROVE: "Phê duyệt",
   REJECT: "Từ chối",
+  REVOKE_APPROVAL: "Thu hồi phê duyệt",
+  REOPEN_REVIEW: "Mở lại xét duyệt",
+  VIEW_PII: "Xem dữ liệu PII",
+  MERGE: "Gộp hồ sơ trùng",
   RECHECK: "Phúc khảo",
 };
 
@@ -54,8 +60,13 @@ const ACTION_LABELS: Record<string, string> = {
 const ACTION_TONE: Record<string, string> = {
   APPROVE:
     "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800/60",
+  REOPEN_REVIEW:
+    "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800/60",
+  REVOKE_APPROVAL:
+    "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800/60",
   REJECT: "bg-destructive/10 text-destructive border-destructive/30",
   SOFT_DELETE: "bg-destructive/10 text-destructive border-destructive/30",
+  DEACTIVATE_ACCOUNT: "bg-destructive/10 text-destructive border-destructive/30",
   DELETE: "bg-destructive/10 text-destructive border-destructive/30",
 };
 
@@ -122,35 +133,34 @@ export function CandidateAuditLogDialog({ candidate, open, onOpenChange }: Candi
   const [scope, setScope] = React.useState<AuditScope>("candidate_documents");
   const [page, setPage] = React.useState(1);
 
-  const documentId = candidate?.latest_document?.id ?? null;
-  const entityId = scope === "candidates" ? candidate?.id ?? null : documentId;
+  const candidateId = candidate?.id ?? null;
 
   // Reset về trang 1 & tab giấy tờ mỗi khi mở cho thí sinh khác (Rule 7)
   React.useEffect(() => {
     if (open) {
-      setScope(documentId ? "candidate_documents" : "candidates");
+      setScope("candidate_documents");
       setPage(1);
     }
-  }, [open, candidate?.id, documentId]);
+  }, [open, candidateId]);
 
   const { load } = fetcher;
   React.useEffect(() => {
-    if (!open || !entityId) return;
+    if (!open || !candidateId) return;
     const params = new URLSearchParams({
-      entity_table: scope,
-      entity_id: String(entityId),
+      scope,
       page: String(page),
       limit: String(PAGE_SIZE),
     });
-    load(`/internal/admin/audit-logs?${params.toString()}`);
-  }, [open, scope, entityId, page, load]);
+    load(`/internal/admin/candidates/${candidateId}/audit-logs?${params.toString()}`);
+  }, [open, scope, candidateId, page, load]);
 
   const isLoading = fetcher.state !== "idle";
   const envelope = fetcher.data;
-  const logs: AuditLogEntryDTO[] = envelope?.success && Array.isArray(envelope.data) ? envelope.data : [];
+  const logs: AuditLogEntryDTO[] =
+    envelope?.success && Array.isArray(envelope.data) ? envelope.data : [];
   const meta = envelope?.meta ?? null;
   const totalPages = Math.max(1, meta?.total_pages ?? 1);
-  const hasError = Boolean(envelope && !envelope.success);
+  const hasError = Boolean(envelope && envelope.success === false);
 
   const switchScope = (next: AuditScope) => {
     setScope(next);
@@ -183,8 +193,8 @@ export function CandidateAuditLogDialog({ candidate, open, onOpenChange }: Candi
           <div className="flex items-center gap-1.5 bg-muted/60 p-1 rounded-full w-fit max-w-full overflow-x-auto">
             {(
               [
-                { value: "candidate_documents", label: "Giấy tờ tùy thân", disabled: !documentId },
-                { value: "candidates", label: "Thông tin hồ sơ", disabled: false },
+                { value: "candidate_documents", label: "Giấy tờ tùy thân", disabled: !candidateId },
+                { value: "candidates", label: "Thông tin hồ sơ", disabled: !candidateId },
               ] as const
             ).map((item) => (
               <button
@@ -270,10 +280,12 @@ export function CandidateAuditLogDialog({ candidate, open, onOpenChange }: Candi
 
         <DialogFooter className="p-4 border-t bg-muted/40 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 shrink-0">
           <p className="text-xs text-muted-foreground text-center sm:text-left">
-            {meta && meta.total_items > 0 ? `Tổng ${meta.total_items} bản ghi • Trang ${page}/${totalPages}` : "\u00A0"}
+            {meta && meta.total_items > 0
+              ? `Tổng ${meta.total_items} bản ghi • Trang ${page}/${totalPages}`
+              : "Hiển thị 0 bản ghi"}
           </p>
           <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-2">
-            {totalPages > 1 && (
+            {(totalPages > 1 || logs.length > 0) && (
               <Pagination className="mx-0 w-auto">
                 <PaginationContent>
                   <PaginationItem>

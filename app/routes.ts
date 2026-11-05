@@ -33,6 +33,7 @@ export default [
   route("internal/admin/audit-logs", "routes/internal.admin.audit-logs.ts"),
   route("internal/admin/candidates/duplicates", "routes/internal.admin.candidates.duplicates.ts"),
   route("internal/admin/candidates/export", "routes/internal.admin.candidates.export.ts"),
+  route("internal/admin/candidates/:id/audit-logs", "routes/internal.admin.candidates.$id.audit-logs.ts"),
   route("internal/admin/candidates/:id", "routes/internal.admin.candidates.$id.ts"),
   route("internal/admin/verify-pin", "routes/internal.admin.verify-pin.ts"),
   route("internal/admin/exam-periods/:id", "routes/internal.admin.exam-periods.$id.ts"),
