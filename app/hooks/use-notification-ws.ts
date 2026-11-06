@@ -3,8 +3,10 @@ import {
   WS_CLOSE_CODE_MAX_CONN_EVICTED,
   WS_CLOSE_CODE_SESSION_TERMINATED,
   WS_CLOSE_CODE_TOKEN_EXPIRED,
+  type ForceLogoutPayload,
   type NotificationItem,
   type NotificationReadPayload,
+  type ProfileStatusUpdatedPayload,
   type WSNotificationEnvelope,
 } from "../types/notification.ts";
 
@@ -211,6 +213,8 @@ export interface UseNotificationWSOptions {
   refreshToken?: string | null;
   apiBaseUrl: string;
   onNewNotification?: (item: NotificationItem) => void;
+  onProfileStatusUpdated?: (payload: ProfileStatusUpdatedPayload) => void;
+  onForceLogout?: (payload: ForceLogoutPayload) => void;
   onTokenRefreshed?: (newAccessToken: string) => void;
   refreshTokenFn?: () => Promise<string | null>;
   fetchImpl?: typeof fetch;
@@ -222,6 +226,8 @@ export function useNotificationWS({
   refreshToken,
   apiBaseUrl,
   onNewNotification,
+  onProfileStatusUpdated,
+  onForceLogout,
   onTokenRefreshed,
   refreshTokenFn,
   fetchImpl = typeof fetch !== "undefined" ? fetch : undefined,
@@ -231,6 +237,8 @@ export function useNotificationWS({
   const [isConnected, setIsConnected] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(false);
   const [activeToken, setActiveToken] = React.useState<string | null>(token ?? null);
+  const [latestProfileStatus, setLatestProfileStatus] =
+    React.useState<ProfileStatusUpdatedPayload | null>(null);
 
   React.useEffect(() => {
     setActiveToken(token ?? null);
@@ -390,6 +398,46 @@ export function useNotificationWS({
             const eventKind = parsed?.event || parsed?.type;
             const rawPayload = parsed?.data ?? parsed?.payload;
 
+            if (eventKind === "FORCE_LOGOUT") {
+              const forcePayload = (rawPayload ?? {}) as ForceLogoutPayload;
+              unmountedRef.current = true;
+              clearReconnectTimer();
+              try {
+                if (typeof window !== "undefined") {
+                  window.localStorage?.clear();
+                  window.sessionStorage?.clear();
+                }
+              } catch {
+                // Ignore storage errors in restricted contexts
+              }
+              socket.close();
+              onForceLogout?.(forcePayload);
+              return;
+            }
+
+            if (eventKind === "PROFILE_STATUS_UPDATED" && rawPayload) {
+              const statusPayload = rawPayload as ProfileStatusUpdatedPayload;
+              if (statusPayload && typeof statusPayload.status === "string") {
+                setLatestProfileStatus(statusPayload);
+                onProfileStatusUpdated?.(statusPayload);
+                if (typeof window !== "undefined") {
+                  window.dispatchEvent(
+                    new CustomEvent("hsk:profile-status-updated", { detail: statusPayload })
+                  );
+                }
+              }
+              return;
+            }
+
+            if (eventKind === "SHIFT_CHANGED" && rawPayload) {
+              if (typeof window !== "undefined") {
+                window.dispatchEvent(
+                  new CustomEvent("hsk:shift-changed", { detail: rawPayload })
+                );
+              }
+              return;
+            }
+
             if (eventKind === "NOTIFICATION_PAYLOAD" && rawPayload) {
               const incoming = rawPayload as NotificationItem;
               if (!incoming || typeof incoming.id !== "number") return;
@@ -404,6 +452,31 @@ export function useNotificationWS({
 
               if (!isDuplicate) {
                 onNewNotification?.(incoming);
+              }
+
+              // Derive profile status update if notification is a profile review event
+              if (
+                incoming.type === "PROFILE_APPROVED" ||
+                incoming.type === "PROFILE_REJECTED" ||
+                incoming.type === "PROFILE_REOPENED"
+              ) {
+                const derivedStatus: ProfileStatusUpdatedPayload = {
+                  status:
+                    incoming.type === "PROFILE_APPROVED"
+                      ? "verified"
+                      : incoming.type === "PROFILE_REJECTED"
+                        ? "rejected"
+                        : "pending",
+                  eligible: incoming.type === "PROFILE_APPROVED",
+                  reason: incoming.content,
+                };
+                setLatestProfileStatus(derivedStatus);
+                onProfileStatusUpdated?.(derivedStatus);
+                if (typeof window !== "undefined") {
+                  window.dispatchEvent(
+                    new CustomEvent("hsk:profile-status-updated", { detail: derivedStatus })
+                  );
+                }
               }
             } else if (eventKind === "notification_read" && rawPayload) {
               // Phase 2.3: Multi-Tab Read Sync without refetching
@@ -466,6 +539,8 @@ export function useNotificationWS({
     fetchImpl,
     WebSocketImpl,
     onNewNotification,
+    onProfileStatusUpdated,
+    onForceLogout,
     performSilentTokenRefresh,
     syncMissedMessages,
   ]);
@@ -521,6 +596,7 @@ export function useNotificationWS({
     unreadCount,
     isConnected,
     isLoading,
+    latestProfileStatus,
     markAsRead,
     refreshNotifications,
   };

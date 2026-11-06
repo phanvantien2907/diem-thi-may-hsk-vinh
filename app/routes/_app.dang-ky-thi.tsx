@@ -42,6 +42,7 @@ import { ExamSessionSelector, formatCurrency } from "~/components/registration/E
 import { ConfirmRegistrationDialog } from "~/components/registration/ConfirmRegistrationDialog";
 import { RegistrationHistory } from "~/components/registration/RegistrationHistory";
 import { PaymentDetailsDialog } from "~/components/registration/PaymentDetailsDialog";
+import { useNotifications } from "~/components/shared/NotificationProvider";
 import { usePayOS, type PayOSConfig } from "@payos/payos-checkout";
 
 import {
@@ -50,7 +51,9 @@ import {
   InfoIcon,
   FileTextIcon,
   CheckCircle2Icon,
+  ClockIcon,
   EyeIcon,
+  LockIcon,
 } from "lucide-react";
 
 // ─── SEO Meta ─────────────────────────────────────────────────────────────────
@@ -435,11 +438,55 @@ const RegistrationContent = React.memo(function RegistrationContent({
 
   const outletContext = useOutletContext<{ isAdminPreview?: boolean; candidateStatus?: CandidateStatusInfo }>() || {};
   const isAdminPreview = Boolean(outletContext?.isAdminPreview);
-  const isProfileRejected = Boolean(outletContext?.candidateStatus?.isRejected);
-  const rejectionReason = outletContext?.candidateStatus?.rejectionReason;
+  const { latestProfileStatus } = useNotifications();
+
+  const [liveVerificationStatus, setLiveVerificationStatus] = React.useState<string | null>(
+    outletContext?.candidateStatus?.verificationStatus?.toLowerCase() ?? null
+  );
+  const [liveRejectionReason, setLiveRejectionReason] = React.useState<string | null>(
+    outletContext?.candidateStatus?.rejectionReason ?? null
+  );
+
+  React.useEffect(() => {
+    const nextStatus = outletContext?.candidateStatus?.verificationStatus?.toLowerCase() ?? null;
+    setLiveVerificationStatus(nextStatus);
+    setLiveRejectionReason(outletContext?.candidateStatus?.rejectionReason ?? null);
+  }, [
+    outletContext?.candidateStatus?.verificationStatus,
+    outletContext?.candidateStatus?.rejectionReason,
+  ]);
+
+  // Đồng bộ thời gian thực qua WebSocket (PROFILE_STATUS_UPDATED) không cần F5
+  React.useEffect(() => {
+    if (!latestProfileStatus?.status) return;
+    const normalized = latestProfileStatus.status.toLowerCase();
+    setLiveVerificationStatus(normalized);
+    if (latestProfileStatus.reason) {
+      setLiveRejectionReason(latestProfileStatus.reason);
+    }
+    if (revalidator.state === "idle") {
+      revalidator.revalidate();
+    }
+  }, [latestProfileStatus, revalidator]);
+
+  const isProfileRejected =
+    liveVerificationStatus === "rejected" ||
+    (Boolean(outletContext?.candidateStatus?.isRejected) &&
+      liveVerificationStatus !== "verified" &&
+      liveVerificationStatus !== "eligible" &&
+      liveVerificationStatus !== "pending");
+  const rejectionReason = liveRejectionReason ?? outletContext?.candidateStatus?.rejectionReason;
 
   // Kiểm tra tài khoản đã cập nhật thông tin cá nhân chưa
   const hasProfile = Boolean(profile && profile.id && profile.full_name && profile.dob);
+
+  // Strict State Guard: Chỉ mở khóa đăng ký khi trạng thái hồ sơ đạt chuẩn 'verified' / 'eligible'
+  const isProfileEligible =
+    isAdminPreview ||
+    liveVerificationStatus === "verified" ||
+    liveVerificationStatus === "eligible";
+  const isProfilePendingReview =
+    !isAdminPreview && hasProfile && !isProfileRejected && !isProfileEligible;
 
   // State quản lý
   const [selectedBatchDate, setSelectedBatchDate] = React.useState<string | null>(null);
@@ -503,6 +550,21 @@ const RegistrationContent = React.memo(function RegistrationContent({
     onMessage: (event: WSEvent) => {
       console.log("[WS] Received event:", event.type, event.payload);
       switch (event.type) {
+        case "PROFILE_STATUS_UPDATED": {
+          const payload = (event.payload ?? {}) as { status?: string; reason?: string };
+          if (payload.status) {
+            setLiveVerificationStatus(payload.status.toLowerCase());
+          }
+          if (payload.reason) {
+            setLiveRejectionReason(payload.reason);
+          }
+          if (revalidator.state === "idle") {
+            revalidator.revalidate();
+          }
+          break;
+        }
+        case "SHIFT_CHANGED":
+        case "registration_transferred":
         case "registration_created":
         case "registration_cancelled":
         case "payment_confirmed":
@@ -769,6 +831,15 @@ const RegistrationContent = React.memo(function RegistrationContent({
       navigate("/thong-tin-thi-sinh?rejected=true");
       return;
     }
+    if (!isProfileEligible) {
+      toast.add({
+        type: "warning",
+        title: "Hồ sơ đang chờ xét duyệt lại",
+        description:
+          "Vui lòng đợi Quản trị viên phê duyệt giấy tờ tùy thân trước khi đăng ký ca thi.",
+      });
+      return;
+    }
     if (!hasProfile) {
       toast.add({
         type: "error",
@@ -782,7 +853,15 @@ const RegistrationContent = React.memo(function RegistrationContent({
       return;
     }
     setIsDialogOpen(true);
-  }, [isAdminPreview, isProfileRejected, rejectionReason, navigate, hasProfile, selectedSession]);
+  }, [
+    isAdminPreview,
+    isProfileRejected,
+    isProfileEligible,
+    rejectionReason,
+    navigate,
+    hasProfile,
+    selectedSession,
+  ]);
 
   // Submit đăng ký thi
   const handleConfirmRegistration = React.useCallback(async () => {
@@ -794,10 +873,12 @@ const RegistrationContent = React.memo(function RegistrationContent({
       });
       return;
     }
-    if (isProfileRejected) {
+    if (isProfileRejected || !isProfileEligible) {
       toast.add({
         type: "error",
-        title: "Hồ sơ của bạn đang bị từ chối",
+        title: isProfileRejected
+          ? "Hồ sơ của bạn đang bị từ chối"
+          : "Hồ sơ đang chờ xét duyệt lại",
         description: "Thao tác đăng ký thi bị chặn do hồ sơ chưa đạt chuẩn kiểm duyệt.",
       });
       setIsDialogOpen(false);
@@ -885,6 +966,40 @@ const RegistrationContent = React.memo(function RegistrationContent({
             )}
           >
             Khắc phục hồ sơ ngay
+          </Link>
+        </div>
+      )}
+
+      {/* Banner cảnh báo hồ sơ đang chờ xét duyệt lại */}
+      {isProfilePendingReview && (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-foreground">
+          <div className="flex items-start sm:items-center gap-2.5">
+            <ClockIcon className="size-5 shrink-0 text-amber-600 mt-0.5 sm:mt-0" aria-hidden="true" />
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-semibold text-amber-800 dark:text-amber-300">
+                  Hồ sơ đang chờ xét duyệt lại
+                </p>
+                <Badge
+                  variant="outline"
+                  className="rounded-full bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-400/50 text-[11px] font-semibold"
+                >
+                  Hồ sơ đang chờ xét duyệt lại
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Giấy tờ tùy thân của bạn đang trong trạng thái chờ Quản trị viên xét duyệt. Nút đăng ký ca thi sẽ tự động mở khóa ngay khi hồ sơ được phê duyệt.
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/thong-tin-thi-sinh"
+            className={cn(
+              buttonVariants({ variant: "outline", size: "sm" }),
+              "rounded-full cursor-pointer shrink-0 font-medium border-amber-400/50 hover:bg-amber-500/15"
+            )}
+          >
+            Xem hồ sơ cá nhân
           </Link>
         </div>
       )}
@@ -993,6 +1108,15 @@ const RegistrationContent = React.memo(function RegistrationContent({
                   <span>Hồ sơ đang bị từ chối: Vui lòng khắc phục để mở khóa đăng ký</span>
                 </div>
               )}
+              {isProfilePendingReview && (
+                <Badge
+                  variant="outline"
+                  className="rounded-full px-3 py-1 text-xs font-semibold bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-400/50"
+                >
+                  <ClockIcon className="size-3.5 mr-1.5 shrink-0" aria-hidden="true" />
+                  Hồ sơ đang chờ xét duyệt lại
+                </Badge>
+              )}
               {!hasProfile && !isAdminPreview && !isProfileRejected && (
                 <div className="flex items-center gap-1.5 text-xs text-destructive font-medium">
                   <AlertTriangleIcon className="size-4 shrink-0" aria-hidden="true" />
@@ -1001,18 +1125,26 @@ const RegistrationContent = React.memo(function RegistrationContent({
               )}
               <Button
                 size="lg"
-                disabled={isAdminPreview || !hasProfile || isProfileRejected}
+                disabled={isAdminPreview || !hasProfile || isProfileRejected || !isProfileEligible}
                 className={cn(
                   "rounded-full cursor-pointer hover:bg-primary/90",
-                  (!hasProfile || isAdminPreview || isProfileRejected) && "opacity-75 cursor-not-allowed"
+                  (!hasProfile || isAdminPreview || isProfileRejected || !isProfileEligible) &&
+                    "opacity-75 cursor-not-allowed"
                 )}
                 onClick={handleOpenConfirm}
               >
-                {isAdminPreview
-                  ? "Đăng ký thi (Xem trước)"
-                  : isProfileRejected
-                  ? "Đăng ký thi (Bị khóa)"
-                  : "Đăng ký thi"}
+                {isAdminPreview ? (
+                  "Đăng ký thi (Xem trước)"
+                ) : isProfileRejected ? (
+                  "Đăng ký thi (Bị khóa)"
+                ) : !isProfileEligible ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <LockIcon className="size-4" />
+                    Hồ sơ đang chờ xét duyệt lại
+                  </span>
+                ) : (
+                  "Đăng ký thi"
+                )}
               </Button>
             </div>
           )}

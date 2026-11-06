@@ -1,5 +1,5 @@
 import * as React from "react";
-import { redirect, Outlet, useLoaderData, useNavigation, Link } from "react-router";
+import { redirect, Outlet, useLoaderData, useNavigation, useRevalidator, Link } from "react-router";
 import type { Route } from "./+types/_app";
 
 import { SidebarProvider, SidebarTrigger, SidebarInset } from "~/components/ui/sidebar";
@@ -97,6 +97,7 @@ export function HydrateFallback() {
 export default function AppLayout() {
   const { user, token, apiBaseUrl, candidateStatus } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
+  const revalidator = useRevalidator();
   const isNavigating = navigation.state === "loading";
   const isAdmin = user.rawRole === "admin" || user.role === "Quản trị viên" || user.role === "admin";
 
@@ -108,8 +109,24 @@ export default function AppLayout() {
   React.useEffect(() => {
     if (candidateStatus?.isRejected) {
       setIsRejectionDialogOpen(true);
+    } else {
+      setIsRejectionDialogOpen(false);
     }
   }, [candidateStatus?.isRejected]);
+
+  // Lắng nghe sự kiện PROFILE_STATUS_UPDATED từ WebSocket để đồng bộ trạng thái hồ sơ toàn cục
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleProfileStatusUpdated = () => {
+      if (revalidator.state === "idle") {
+        revalidator.revalidate();
+      }
+    };
+    window.addEventListener("hsk:profile-status-updated", handleProfileStatusUpdated);
+    return () => {
+      window.removeEventListener("hsk:profile-status-updated", handleProfileStatusUpdated);
+    };
+  }, [revalidator]);
 
   return (
     <NotificationProvider token={token} apiBaseUrl={apiBaseUrl}>

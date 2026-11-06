@@ -1,10 +1,24 @@
 export type NotificationType =
   | "PROFILE_REJECTED"
   | "PROFILE_APPROVED"
+  | "PROFILE_REOPENED"
+  | "SHIFT_CHANGED"
   | "EXAM_RESCHEDULED"
   | "PAYMENT_CONFIRMED"
   | "SYSTEM"
   | string;
+
+export interface ProfileStatusUpdatedPayload {
+  status: "verified" | "rejected" | "pending" | "eligible" | string;
+  eligible?: boolean;
+  reason?: string;
+}
+
+export interface ForceLogoutPayload {
+  code?: string;
+  message?: string;
+  reason?: string;
+}
 
 export interface NotificationItem {
   id: number;

@@ -10,9 +10,19 @@
  * 5. must_change_password → redirect ngay (forced flow, không cần toast)
  */
 import * as React from "react";
-import { Link, Form, redirect, data, useActionData, useNavigation, useNavigate } from "react-router";
+import {
+  Link,
+  Form,
+  redirect,
+  data,
+  useActionData,
+  useNavigation,
+  useNavigate,
+  useSearchParams,
+} from "react-router";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { ShieldAlertIcon } from "lucide-react";
 import { API_BASE_URL } from "~/lib/env.server";
 import type { Route } from "./+types/dang-nhap";
 
@@ -21,6 +31,7 @@ import type { LoginResponseData, ApiErrorResponse } from "~/types/auth";
 import { decodeJwtPayload, getTokenFromRequest } from "~/lib/auth.server";
 import { toast } from "~/components/ui/toast";
 
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
@@ -93,13 +104,21 @@ export async function action({ request }: Route.ActionArgs) {
       }
     );
 
-    // Lỗi từ server (401 sai mật khẩu, 404 không tìm thấy, 403 bị khoá...)
+    // Lỗi từ server (401 sai mật khẩu, 404 không tìm thấy, 403 bị khoá / vô hiệu hóa...)
     if (!response.ok) {
-      const errorBody = (await response.json()) as ApiErrorResponse;
+      const errorBody = (await response.json().catch(() => ({}))) as ApiErrorResponse & {
+        code?: string;
+        message?: string;
+      };
       return data(
         {
           success: false as const,
-          error: errorBody.msg ?? "Đăng nhập thất bại, vui lòng thử lại.",
+          code: errorBody.code,
+          status: response.status,
+          error:
+            errorBody.message ??
+            errorBody.msg ??
+            "Đăng nhập thất bại, vui lòng thử lại.",
           fieldErrors: undefined,
         },
         { status: response.status }
@@ -180,7 +199,20 @@ export default function LoginPage() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const isSubmitting = navigation.state === "submitting";
+
+  const isDeactivatedError =
+    searchParams.get("deactivated") === "true" ||
+    (actionData &&
+      !actionData.success &&
+      ((actionData as { code?: string }).code === "ACCOUNT_DEACTIVATED" ||
+        (actionData as { status?: number }).status === 403));
+
+  const deactivatedMessage =
+    actionData && !actionData.success && actionData.error
+      ? actionData.error
+      : "Tài khoản của bạn đã bị vô hiệu hóa. Vui lòng liên hệ Quản trị viên để được hỗ trợ.";
 
   const {
     register,
@@ -195,7 +227,10 @@ export default function LoginPage() {
     if (actionData?.error) {
       toast.add({
         type: "error",
-        title: "Đăng nhập thất bại",
+        title:
+          (actionData as { code?: string }).code === "ACCOUNT_DEACTIVATED"
+            ? "Tài khoản đã bị vô hiệu hóa"
+            : "Đăng nhập thất bại",
         description: actionData.error,
         timeout: 5000,
       });
@@ -240,6 +275,22 @@ export default function LoginPage() {
           Đăng nhập để tiếp tục sử dụng hệ thống
         </p>
       </div>
+
+      {/* Cảnh báo tài khoản bị vô hiệu hóa (HTTP 403 ACCOUNT_DEACTIVATED hoặc bị kickout) */}
+      {isDeactivatedError && !actionData?.success && (
+        <Alert
+          variant="destructive"
+          className="rounded-2xl border-destructive/40 bg-destructive/10 p-4 text-destructive"
+        >
+          <ShieldAlertIcon className="size-5 text-destructive" />
+          <AlertTitle className="font-semibold text-destructive">
+            Tài khoản đã bị vô hiệu hóa
+          </AlertTitle>
+          <AlertDescription className="text-xs leading-relaxed text-destructive/90 mt-1">
+            {deactivatedMessage}
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Thông báo chuyển hướng khi thành công */}
       {actionData?.success && (

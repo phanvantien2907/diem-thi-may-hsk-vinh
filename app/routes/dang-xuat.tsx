@@ -45,7 +45,11 @@ export async function loader({ request }: Route.LoaderArgs) {
     "user_info=; Path=/; Max-Age=0; SameSite=Lax"
   );
 
-  return redirect("/dang-nhap", { headers });
+  const url = new URL(request.url);
+  const isDeactivated = url.searchParams.get("reason") === "deactivated";
+  const target = isDeactivated ? "/dang-nhap?deactivated=true" : "/dang-nhap";
+
+  return redirect(target, { headers });
 }
 
 export default function LogoutRoute() {
