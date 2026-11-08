@@ -49,6 +49,15 @@ import {
 } from "~/components/ui/select";
 import { FormCombobox, type ComboboxOption } from "~/components/ui/form-combobox";
 import { ImageDropzone } from "~/components/candidate/ImageDropzone";
+import {
+  useOCRScanner,
+  uploadOCRDocumentFile,
+  normalizeOCRDateToISO,
+  matchProvinceByName,
+  matchWardByName,
+  splitVietnameseAddressClientFallback,
+  type OCRResultData,
+} from "~/hooks/useOCRScanner";
 import { toast } from "~/components/ui/toast";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -67,6 +76,8 @@ interface DocumentFormProps {
   onSubmit: (data: CandidateDocumentFormValues) => Promise<void>;
   /** Callback kiểm tra tính hợp lệ của ảnh chân dung (Pre-validation API 3.7) */
   onValidatePortrait?: (portraitUrl: string) => Promise<ValidatePortraitResponseDTO>;
+  /** Callback đồng bộ dữ liệu OCR (Họ tên, Ngày sinh) sang ProfileForm mà không re-render toàn trang */
+  onOCRDataExtracted?: (data: OCRResultData) => void;
   /** Disabled khi chưa có profile */
   disabled?: boolean;
   /** Số CCCD tự động điền từ tài khoản */
@@ -98,6 +109,7 @@ export const DocumentForm = React.memo(function DocumentForm({
   apiBaseUrl,
   onSubmit,
   onValidatePortrait,
+  onOCRDataExtracted,
   disabled = false,
   userCccd,
 }: DocumentFormProps) {
@@ -199,6 +211,333 @@ export const DocumentForm = React.memo(function DocumentForm({
     }
   }, [document?.doc_number, userCccd, setValue]);
 
+  // ─── Real-time WebSocket OCR Auto-Fill (Zero Full-Page Re-render) ───────────
+  const pendingOcrWardRef = React.useRef<{
+    provinceId: string;
+    ward?: string;
+    fullAddress?: string;
+    detail?: string;
+    district?: string;
+  } | null>(null);
+
+  const applyPendingWardMatch = React.useCallback(
+    (loadedWards: Ward[], provinceId: string) => {
+      const pending = pendingOcrWardRef.current;
+      if (!pending || pending.provinceId !== provinceId) return;
+      pendingOcrWardRef.current = null;
+
+      const matchedWard = matchWardByName(
+        loadedWards,
+        pending.ward,
+        pending.fullAddress
+      );
+      if (matchedWard) {
+        setValue("ward_id", matchedWard.id, {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+        const cleanDetail = (pending.detail || pending.district || "").trim();
+        setValue("address_detail", cleanDetail, {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+      } else {
+        const fallbackDetail =
+          [pending.detail, pending.ward, pending.district]
+            .filter(Boolean)
+            .join(", ") ||
+          pending.fullAddress ||
+          "";
+        if (fallbackDetail) {
+          setValue("address_detail", fallbackDetail, {
+            shouldValidate: true,
+            shouldDirty: true,
+            shouldTouch: true,
+          });
+        }
+      }
+    },
+    [setValue]
+  );
+
+  const applyOCRAddressToFields = React.useCallback(
+    (ocrData: OCRResultData) => {
+      const fullAddr = (ocrData.address || ocrData.home_town || "").trim();
+      const fallbackParts = splitVietnameseAddressClientFallback(fullAddr);
+
+      const provinceCandidate = (
+        ocrData.address_province ||
+        fallbackParts.province ||
+        ""
+      ).trim();
+      const districtCandidate = (
+        ocrData.address_district ||
+        fallbackParts.district ||
+        ""
+      ).trim();
+      const wardCandidate = (
+        ocrData.address_ward ||
+        fallbackParts.ward ||
+        ""
+      ).trim();
+      const detailCandidate = (
+        ocrData.address_detail ||
+        fallbackParts.detail ||
+        ""
+      ).trim();
+
+      const matchedProvince = matchProvinceByName(
+        provinces,
+        provinceCandidate,
+        fullAddr
+      );
+
+      if (matchedProvince) {
+        const targetProvinceId = String(matchedProvince.id);
+        if (
+          selectedProvinceId === targetProvinceId &&
+          !loadingWards &&
+          wards.length > 0
+        ) {
+          pendingOcrWardRef.current = null;
+          const matchedWard = matchWardByName(wards, wardCandidate, fullAddr);
+          if (matchedWard) {
+            setValue("ward_id", matchedWard.id, {
+              shouldValidate: true,
+              shouldDirty: true,
+              shouldTouch: true,
+            });
+            const cleanDetail = detailCandidate || districtCandidate;
+            setValue("address_detail", cleanDetail, {
+              shouldValidate: true,
+              shouldDirty: true,
+              shouldTouch: true,
+            });
+          } else {
+            const fallbackDetail =
+              [detailCandidate, wardCandidate, districtCandidate]
+                .filter(Boolean)
+                .join(", ") || fullAddr;
+            setValue("address_detail", fallbackDetail, {
+              shouldValidate: true,
+              shouldDirty: true,
+              shouldTouch: true,
+            });
+          }
+        } else {
+          pendingOcrWardRef.current = {
+            provinceId: targetProvinceId,
+            ward: wardCandidate,
+            fullAddress: fullAddr,
+            detail: detailCandidate,
+            district: districtCandidate,
+          };
+          setSelectedProvinceId(targetProvinceId);
+          setValue("ward_id", undefined);
+          setValue(
+            "address_detail",
+            detailCandidate || districtCandidate || fullAddr,
+            {
+              shouldValidate: true,
+              shouldDirty: true,
+              shouldTouch: true,
+            }
+          );
+        }
+        return;
+      }
+
+      if (detailCandidate || fullAddr) {
+        setValue("address_detail", detailCandidate || fullAddr, {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+      }
+    },
+    [loadingWards, provinces, selectedProvinceId, setValue, wards]
+  );
+
+  const applyOCRDataToDocumentFields = React.useCallback(
+    (ocrData: OCRResultData) => {
+      const cleanId = (ocrData.id_number || "").trim();
+      if (cleanId) {
+        setValue("doc_type", "cccd", {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+        setValue("doc_number", cleanId, {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+        // Tự động điền Nơi cấp chuẩn cho CCCD 12 số nếu đang trống
+        const currentIssuePlace = (watch("issue_place") || "").trim();
+        if (/^\d{12}$/.test(cleanId) && !currentIssuePlace) {
+          setValue("issue_place", "Cục Cảnh sát QLHC về TTXH", {
+            shouldValidate: true,
+            shouldDirty: true,
+            shouldTouch: true,
+          });
+        }
+      }
+      if (ocrData.issue_date) {
+        const isoIssueDate = normalizeOCRDateToISO(ocrData.issue_date);
+        if (isoIssueDate) {
+          setValue("issue_date", isoIssueDate, {
+            shouldValidate: true,
+            shouldDirty: true,
+            shouldTouch: true,
+          });
+        }
+      }
+      if (ocrData.place_of_issue) {
+        setValue("issue_place", ocrData.place_of_issue.trim(), {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+      }
+      if (
+        ocrData.address ||
+        ocrData.home_town ||
+        ocrData.address_province ||
+        ocrData.address_ward ||
+        ocrData.address_detail
+      ) {
+        applyOCRAddressToFields(ocrData);
+      }
+    },
+    [applyOCRAddressToFields, setValue, watch]
+  );
+
+  const handleOCRCompleted = React.useCallback(
+    (ocrData: OCRResultData) => {
+      applyOCRDataToDocumentFields(ocrData);
+      onOCRDataExtracted?.(ocrData);
+      toast.add({
+        type: "success",
+        title: "Đã tự động điền thông tin CMND/CCCD",
+        description: "Vui lòng kiểm tra lại các trường thông tin trước khi lưu.",
+        timeout: 4000,
+      });
+    },
+    [applyOCRDataToDocumentFields, onOCRDataExtracted]
+  );
+
+  const handleBackOCRCompleted = React.useCallback(
+    (ocrData: OCRResultData) => {
+      if (ocrData.issue_date) {
+        const isoIssueDate = normalizeOCRDateToISO(ocrData.issue_date);
+        if (isoIssueDate) {
+          setValue("issue_date", isoIssueDate, {
+            shouldValidate: true,
+            shouldDirty: true,
+            shouldTouch: true,
+          });
+        }
+      }
+      const placeOfIssue = (ocrData.place_of_issue || "").trim();
+      if (placeOfIssue) {
+        setValue("issue_place", placeOfIssue, {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+      }
+      if (
+        ocrData.address ||
+        ocrData.address_province ||
+        ocrData.address_ward
+      ) {
+        applyOCRAddressToFields(ocrData);
+      }
+      toast.add({
+        type: "success",
+        title: "Đã tự động điền thông tin mặt sau CCCD",
+        description: "Ngày cấp và nơi cấp đã được cập nhật tự động.",
+        timeout: 4000,
+      });
+    },
+    [applyOCRAddressToFields, setValue]
+  );
+
+  const {
+    status: ocrStatus,
+    progress: ocrProgress,
+    startOptimisticScan,
+    subscribeTask,
+    markFailed,
+  } = useOCRScanner({
+    apiBaseUrl,
+    token,
+    onCompleted: handleOCRCompleted,
+    onFailed: (errMsg) => {
+      toast.add({
+        type: "error",
+        title: "Quét tự động CMND/CCCD thất bại",
+        description: errMsg,
+      });
+    },
+  });
+
+  const {
+    status: backOcrStatus,
+    progress: backOcrProgress,
+    startOptimisticScan: startBackOptimisticScan,
+    subscribeTask: subscribeBackTask,
+    markFailed: markBackFailed,
+  } = useOCRScanner({
+    apiBaseUrl,
+    token,
+    onCompleted: handleBackOCRCompleted,
+    onFailed: (errMsg) => {
+      toast.add({
+        type: "error",
+        title: "Quét mặt sau CMND/CCCD thất bại",
+        description: errMsg,
+      });
+    },
+  });
+
+  const isOcrScanningFront =
+    ocrStatus === "QUEUED" || ocrStatus === "PROCESSING";
+  const isOcrScanningBack =
+    backOcrStatus === "QUEUED" || backOcrStatus === "PROCESSING";
+
+  // Đồng bộ dữ liệu OCR và file mặt trước từ khung "Quét nhanh" ở đầu trang
+  React.useEffect(() => {
+    const handleDocAutoFill = (evt: Event) => {
+      const customEvt = evt as CustomEvent<OCRResultData>;
+      if (!customEvt.detail) return;
+      applyOCRDataToDocumentFields(customEvt.detail);
+    };
+
+    const handleFrontFileSync = (evt: Event) => {
+      const customEvt = evt as CustomEvent<{ file?: File }>;
+      const file = customEvt.detail?.file;
+      if (!file) return;
+      const currentPreview = previewUrlsRef.current.front_image_url;
+      if (currentPreview && currentPreview.startsWith("blob:")) {
+        URL.revokeObjectURL(currentPreview);
+      }
+      const preview = URL.createObjectURL(file);
+      setPreviewUrls((prev) => ({ ...prev, front_image_url: preview }));
+      setPendingFiles((prev) => ({ ...prev, front_image_url: file }));
+      setValue("front_image_url", preview, { shouldValidate: true });
+    };
+
+    window.addEventListener("hsk:ocr-autofill-document", handleDocAutoFill);
+    window.addEventListener("hsk:ocr-front-file", handleFrontFileSync);
+    return () => {
+      window.removeEventListener("hsk:ocr-autofill-document", handleDocAutoFill);
+      window.removeEventListener("hsk:ocr-front-file", handleFrontFileSync);
+    };
+  }, [applyOCRDataToDocumentFields, setValue]);
+
   const portraitUrl = watch("portrait_image_url");
   const frontUrl = watch("front_image_url");
   const backUrl = watch("back_image_url");
@@ -213,6 +552,7 @@ export const DocumentForm = React.memo(function DocumentForm({
     // Reuse initial wards if the selected province is the same as the initial document's province
     if (document?.province_id && selectedProvinceId === String(document.province_id)) {
       setWards(initialWards);
+      applyPendingWardMatch(initialWards, selectedProvinceId);
       return;
     }
 
@@ -220,11 +560,13 @@ export const DocumentForm = React.memo(function DocumentForm({
     fetch(`${apiBaseUrl}/api/v1/locations/provinces/${selectedProvinceId}/wards`)
       .then((res) => res.json())
       .then((result: { data: Ward[] }) => {
-        setWards(result.data ?? []);
+        const loadedWards = result.data ?? [];
+        setWards(loadedWards);
+        applyPendingWardMatch(loadedWards, selectedProvinceId);
       })
       .catch(console.error)
       .finally(() => setLoadingWards(false));
-  }, [selectedProvinceId, apiBaseUrl, document?.province_id, initialWards]);
+  }, [selectedProvinceId, apiBaseUrl, document?.province_id, initialWards, applyPendingWardMatch]);
 
   // ─── Chọn file cục bộ (chưa gửi lên Cloudinary) ─────────────────────────────
   function handleFileSelect(
@@ -255,6 +597,48 @@ export const DocumentForm = React.memo(function DocumentForm({
     if (fieldName === "portrait_image_url") {
       setIsPortraitValidated(false);
       setSubmitError(null);
+    }
+
+    // Tự động kích hoạt pipeline WebSocket OCR khi người dùng tải lên "Ảnh mặt trước CCCD"
+    if (fieldName === "front_image_url") {
+      startOptimisticScan();
+      void uploadOCRDocumentFile(apiBaseUrl, file, token || null, fetch, "front")
+        .then((res) => {
+          void subscribeTask(res.task_id);
+        })
+        .catch((err) => {
+          const msg =
+            err instanceof Error
+              ? err.message
+              : "Không thể kết nối dịch vụ quét tự động CMND/CCCD.";
+          markFailed(msg);
+          toast.add({
+            type: "error",
+            title: "Quét tự động CMND/CCCD thất bại",
+            description: msg,
+          });
+        });
+    }
+
+    // Tự động kích hoạt pipeline WebSocket OCR khi người dùng tải lên "Ảnh mặt sau CCCD"
+    if (fieldName === "back_image_url") {
+      startBackOptimisticScan();
+      void uploadOCRDocumentFile(apiBaseUrl, file, token || null, fetch, "back")
+        .then((res) => {
+          void subscribeBackTask(res.task_id);
+        })
+        .catch((err) => {
+          const msg =
+            err instanceof Error
+              ? err.message
+              : "Không thể kết nối dịch vụ quét mặt sau CMND/CCCD.";
+          markBackFailed(msg);
+          toast.add({
+            type: "error",
+            title: "Quét mặt sau CMND/CCCD thất bại",
+            description: msg,
+          });
+        });
     }
   }
 
@@ -728,8 +1112,12 @@ export const DocumentForm = React.memo(function DocumentForm({
                 onClear={() =>
                   handleImageClear("front_image_url")
                 }
-                uploading={uploading.front_image_url}
-                uploadingText="Đang tải ảnh CCCD lên Cloudinary..."
+                uploading={uploading.front_image_url || isOcrScanningFront}
+                uploadingText={
+                  isOcrScanningFront
+                    ? `Đang quét tự động CCCD/CMND (${ocrProgress}%)...`
+                    : "Đang tải ảnh CCCD lên Cloudinary..."
+                }
                 disabled={disabled || isSaving}
                 error={errors.front_image_url?.message}
                 aspectRatio="landscape"
@@ -743,8 +1131,12 @@ export const DocumentForm = React.memo(function DocumentForm({
                 onClear={() =>
                   handleImageClear("back_image_url")
                 }
-                uploading={uploading.back_image_url}
-                uploadingText="Đang tải ảnh CCCD lên Cloudinary..."
+                uploading={uploading.back_image_url || isOcrScanningBack}
+                uploadingText={
+                  isOcrScanningBack
+                    ? `Đang quét tự động mặt sau CCCD (${backOcrProgress}%)...`
+                    : "Đang tải ảnh CCCD lên Cloudinary..."
+                }
                 disabled={disabled || isSaving}
                 error={errors.back_image_url?.message}
                 aspectRatio="landscape"
@@ -765,6 +1157,7 @@ export const DocumentForm = React.memo(function DocumentForm({
                   options={provinceOptions}
                   value={selectedProvinceId}
                   onValueChange={(val) => {
+                    pendingOcrWardRef.current = null;
                     setSelectedProvinceId(val);
                     setValue("ward_id", undefined);
                   }}

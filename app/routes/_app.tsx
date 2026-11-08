@@ -12,13 +12,37 @@ import { NotificationProvider } from "~/components/shared/NotificationProvider";
 import { NotificationBell } from "~/components/shared/NotificationBell";
 import { EyeIcon, ShieldCheckIcon } from "lucide-react";
 
-import { requireAuth } from "~/lib/auth.server";
+import { getOptionalAuth, requireAuth } from "~/lib/auth.server";
 import { API_BASE_URL, PUBLIC_API_BASE_URL } from "~/lib/env.server";
 import type { CandidateStatusInfo, CandidateResponseDTO, DocumentResponseDTO } from "~/types/candidate";
+import type { UserProfile } from "~/types/auth";
 
-// ─── Loader — AuthGuard & Candidate Status ──────────────────────────────────
+// ─── Loader — Guest-First on /thong-tin-thi-sinh, AuthGuard on other routes ─
 export async function loader({ request }: Route.LoaderArgs) {
-  const { user, token } = await requireAuth(request);
+  const url = new URL(request.url);
+  const isGuestAllowedRoute =
+    url.pathname === "/thong-tin-thi-sinh" ||
+    url.pathname.startsWith("/thong-tin-thi-sinh");
+
+  let user: UserProfile;
+  let token: string | null = null;
+
+  if (isGuestAllowedRoute) {
+    const opt = await getOptionalAuth(request);
+    token = opt.token;
+    user = opt.user ?? {
+      name: "Khách (Chưa đăng nhập)",
+      full_name: "",
+      email: "Quét CCCD để tạo hồ sơ",
+      role: "Thí sinh",
+      rawRole: "guest",
+    };
+  } else {
+    const auth = await requireAuth(request);
+    user = auth.user;
+    token = auth.token;
+  }
+
   const isAdmin = user.rawRole === "admin" || user.role === "Quản trị viên" || user.role === "admin";
 
   let candidateStatus: CandidateStatusInfo = {

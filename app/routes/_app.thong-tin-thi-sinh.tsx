@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useOutletContext, useSearchParams, useRevalidator } from "react-router";
 import type { Route } from "./+types/_app.thong-tin-thi-sinh";
-import { requireAuth } from "~/lib/auth.server";
+import { getOptionalAuth } from "~/lib/auth.server";
 import { API_BASE_URL, PUBLIC_API_BASE_URL } from "~/lib/env.server";
 
 import type {
@@ -16,9 +16,16 @@ import type { CandidateDocumentFormValues } from "~/lib/schemas/candidate";
 
 import { ProfileForm } from "~/components/candidate/ProfileForm";
 import { DocumentForm } from "~/components/candidate/DocumentForm";
+import { IdUploadDropzone } from "~/components/IdUploadDropzone";
+import {
+  useOCRScanner,
+  normalizeOCRDateToISO,
+  inferGenderFromOCR,
+  type OCRResultData,
+} from "~/hooks/useOCRScanner";
 import { toast } from "~/components/ui/toast";
 import { Skeleton } from "~/components/ui/skeleton";
-import { Card, CardHeader, CardContent } from "~/components/ui/card";
+import { Card, CardHeader, CardContent, CardTitle, CardDescription } from "~/components/ui/card";
 import { AlertTriangleIcon } from "lucide-react";
 
 type ApiErrorPayload = {
@@ -44,48 +51,57 @@ export const meta: Route.MetaFunction = () => [
 ];
 
 export async function loader({ request }: Route.LoaderArgs) {
-  const { user, token } = await requireAuth(request);
+  const { user, token } = await getOptionalAuth(request);
   const userCccd = user?.cccd || user?.username || "";
 
-  // 1. Họ và tên từ tài khoản đăng ký/đăng nhập
+  // 1. Họ và tên từ tài khoản đăng ký/đăng nhập (nếu đã đăng nhập)
   const userFullName =
     (user?.full_name && user.full_name.trim()) ||
-    (user?.name && !user.name.startsWith("Thí sinh") ? user.name.trim() : "");
+    (user?.name && !user.name.startsWith("Thí sinh") && !user.name.startsWith("Khách")
+      ? user.name.trim()
+      : "");
 
-  // Fetch candidate profile without awaiting it (Streaming)
-  const profilePromise = fetch(`${API_BASE_URL}/api/v1/me/candidate-profile`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-    .then((res) => {
-      if (res.ok) return res.json() as Promise<{ data: CandidateResponseDTO }>;
-      return null;
-    })
-    .then((result) => result?.data ?? null)
-    .catch((error) => {
-      console.error("[CandidateProfile] Error fetching profile:", error);
-      return null;
-    });
+  // Fetch candidate profile without awaiting it (Streaming) — skip if Guest Mode (!token)
+  const profilePromise: Promise<CandidateResponseDTO | null> = token
+    ? fetch(`${API_BASE_URL}/api/v1/me/candidate-profile`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((res) => {
+          if (res.ok) return res.json() as Promise<{ data: CandidateResponseDTO }>;
+          return null;
+        })
+        .then((result) => result?.data ?? null)
+        .catch((error) => {
+          console.error("[CandidateProfile] Error fetching profile:", error);
+          return null;
+        })
+    : Promise.resolve(null);
 
   // Fetch documents only if profile exists (Chained Promise for Streaming)
-  const documentPromise = profilePromise.then((profile) => {
-    if (!profile) return null;
-    return fetch(`${API_BASE_URL}/api/v1/me/candidate-profile/documents`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => {
-        if (res.ok) return res.json() as Promise<{ data: DocumentResponseDTO | DocumentResponseDTO[] }>;
-        return null;
+  const documentPromise: Promise<DocumentResponseDTO | null> = profilePromise.then(
+    (profile) => {
+      if (!profile || !token) return null;
+      return fetch(`${API_BASE_URL}/api/v1/me/candidate-profile/documents`, {
+        headers: { Authorization: `Bearer ${token}` },
       })
-      .then((result) => {
-        if (!result) return null;
-        const docData = result.data;
-        return Array.isArray(docData) ? docData[0] ?? null : docData ?? null;
-      })
-      .catch((error) => {
-        console.error("[CandidateProfile] Error fetching documents:", error);
-        return null;
-      });
-  });
+        .then((res) => {
+          if (res.ok)
+            return res.json() as Promise<{
+              data: DocumentResponseDTO | DocumentResponseDTO[];
+            }>;
+          return null;
+        })
+        .then((result) => {
+          if (!result) return null;
+          const docData = result.data;
+          return Array.isArray(docData) ? docData[0] ?? null : docData ?? null;
+        })
+        .catch((error) => {
+          console.error("[CandidateProfile] Error fetching documents:", error);
+          return null;
+        });
+    }
+  );
 
   // Fetch provinces concurrently
   const provincesPromise = fetch(`${API_BASE_URL}/api/v1/locations/provinces`)
@@ -184,7 +200,7 @@ function CandidateFormsWrapper({
   documentPromise: Promise<DocumentResponseDTO | null>;
   provincesPromise: Promise<Province[]>;
   wardsPromise: Promise<Ward[]>;
-  token: string;
+  token: string | null;
   apiBaseUrl: string;
   userCccd: string;
   userFullName: string;
@@ -199,7 +215,75 @@ function CandidateFormsWrapper({
 
   const [profile, setProfile] = React.useState(resolvedProfile);
   const [document, setDocument] = React.useState(resolvedDocument);
+  const [activeToken, setActiveToken] = React.useState<string | null>(token);
+  const [scannedCccd, setScannedCccd] = React.useState<string>(userCccd);
+  const [scannedGender, setScannedGender] = React.useState<
+    "male" | "female" | undefined
+  >(() => inferGenderFromOCR(undefined, userCccd));
   const { isAdminPreview } = useOutletContext<{ isAdminPreview?: boolean }>() || {};
+
+  React.useEffect(() => {
+    setActiveToken(token);
+  }, [token]);
+
+  // ─── Primary Call-To-Action Guest-First OCR Scanner ─────────────────────────
+  const dispatchOCRAutoFill = React.useCallback((ocrData: OCRResultData) => {
+    if (ocrData.id_number) {
+      setScannedCccd(ocrData.id_number.trim());
+    }
+    const inferredGender = inferGenderFromOCR(
+      ocrData.gender || ocrData.sex,
+      ocrData.id_number
+    );
+    if (inferredGender) {
+      setScannedGender(inferredGender);
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("hsk:ocr-autofill-profile", {
+          detail: {
+            id_number: ocrData.id_number,
+            full_name: ocrData.full_name,
+            dob: normalizeOCRDateToISO(ocrData.dob),
+            gender: inferredGender,
+          },
+        })
+      );
+      window.dispatchEvent(
+        new CustomEvent("hsk:ocr-autofill-document", {
+          detail: ocrData,
+        })
+      );
+    }
+  }, []);
+
+  const {
+    status: topOcrStatus,
+    progress: topOcrProgress,
+    error: topOcrError,
+    startOptimisticScan: startTopOptimisticScan,
+    subscribeTask: subscribeTopTask,
+    markFailed: markTopFailed,
+  } = useOCRScanner({
+    apiBaseUrl,
+    token: activeToken,
+    onCompleted: (ocrData) => {
+      dispatchOCRAutoFill(ocrData);
+      toast.add({
+        type: "success",
+        title: "Đã tự động điền thông tin CMND/CCCD",
+        description: "Vui lòng kiểm tra lại các trường thông tin trước khi lưu.",
+        timeout: 4000,
+      });
+    },
+    onFailed: (errMsg) => {
+      toast.add({
+        type: "error",
+        title: "Quét tự động CMND/CCCD thất bại",
+        description: errMsg,
+      });
+    },
+  });
 
   const isRejectedFromDoc = document?.verification_status?.toLowerCase() === "rejected";
   const isRejectedFromQuery = searchParams.get("rejected") === "true";
@@ -222,32 +306,105 @@ function CandidateFormsWrapper({
       });
       return;
     }
-    const method = isNew ? "POST" : "PATCH";
-    const url = `${apiBaseUrl}/api/v1/me/candidate-profile`;
-
-    const fields = isNew
-      ? data
-      : {
-          full_name: data.full_name,
-          full_name_cn: data.full_name_cn,
-          ethnicity: data.ethnicity,
-          religion: data.religion,
-          nationality: data.nationality,
-          chinese_study_years: data.chinese_study_years,
-        };
-    const body: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(fields)) {
-      if (value === "" || (typeof value === "number" && isNaN(value))) continue;
-      body[key] = value;
-    }
 
     try {
+      let currentToken = activeToken;
+
+      // ── Unified Guest-First Submission: Tạo tài khoản + Tạo hồ sơ cùng lúc ──
+      if (!currentToken) {
+        const cccdToRegister = (data.cccd || scannedCccd || "").trim();
+        if (!/^(\d{9}|\d{12})$/.test(cccdToRegister)) {
+          throw new Error(
+            "Vui lòng quét thẻ hoặc nhập Số CMND (9 số) / CCCD (12 số) hợp lệ để tạo hồ sơ."
+          );
+        }
+        if (!data.phone || !data.email || !data.password) {
+          throw new Error(
+            "Vui lòng điền Số điện thoại, Email và Mật khẩu để khởi tạo tài khoản và hồ sơ."
+          );
+        }
+
+        const regRes = await fetch(`${apiBaseUrl}/api/v1/auth/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cccd: cccdToRegister,
+            full_name: data.full_name,
+            phone: data.phone,
+            email: data.email,
+            password: data.password,
+          }),
+        });
+
+        const regPayload = (await regRes.json().catch(() => null)) as ApiErrorPayload | null;
+        if (!regRes.ok) {
+          throw new Error(
+            getApiErrorMessage(regPayload) ??
+              "Không thể đăng ký tài khoản. Vui lòng kiểm tra lại thông tin."
+          );
+        }
+
+        // Tự động đăng nhập ngay để lấy JWT tạo hồ sơ thí sinh
+        const loginRes = await fetch(`${apiBaseUrl}/api/v1/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            identifier: cccdToRegister,
+            password: data.password,
+          }),
+        });
+        const loginJson = (await loginRes.json().catch(() => null)) as {
+          data?: { access_token?: string };
+        } | null;
+
+        if (loginRes.ok && loginJson?.data?.access_token) {
+          currentToken = loginJson.data.access_token;
+          setActiveToken(currentToken);
+          if (typeof document !== "undefined" && typeof window !== "undefined") {
+            window.document.cookie = `session=${currentToken}; Path=/; SameSite=Lax; Max-Age=86400`;
+          }
+        }
+      }
+
+      const method = isNew ? "POST" : "PATCH";
+      const url = `${apiBaseUrl}/api/v1/me/candidate-profile`;
+
+      const fields = isNew
+        ? {
+            full_name: data.full_name,
+            full_name_cn: data.full_name_cn,
+            dob: data.dob,
+            gender: data.gender,
+            ethnicity: data.ethnicity,
+            religion: data.religion,
+            nationality: data.nationality,
+            chinese_study_years: data.chinese_study_years,
+          }
+        : {
+            full_name: data.full_name,
+            full_name_cn: data.full_name_cn,
+            ethnicity: data.ethnicity,
+            religion: data.religion,
+            nationality: data.nationality,
+            chinese_study_years: data.chinese_study_years,
+          };
+      const body: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(fields)) {
+        if (value === "" || value === undefined || (typeof value === "number" && isNaN(value)))
+          continue;
+        body[key] = value;
+      }
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (currentToken) {
+        headers["Authorization"] = `Bearer ${currentToken}`;
+      }
+
       const response = await fetch(url, {
         method,
-        headers: {
-          "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        },
+        headers,
         body: JSON.stringify(body),
       });
 
@@ -269,10 +426,12 @@ function CandidateFormsWrapper({
       setProfile(payload.data);
 
       // Xóa cache cá nhân trên Redis để đồng bộ ngay lập tức (Section 3.14 API documentation)
-      fetch(`${apiBaseUrl}/api/v1/me/candidate-profile/clear-cache`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => null);
+      if (currentToken) {
+        fetch(`${apiBaseUrl}/api/v1/me/candidate-profile/clear-cache`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${currentToken}` },
+        }).catch(() => null);
+      }
 
       if (revalidator.state === "idle") {
         revalidator.revalidate();
@@ -303,6 +462,16 @@ function CandidateFormsWrapper({
       });
       return;
     }
+    if (!activeToken) {
+      toast.add({
+        type: "warning",
+        title: "Vui lòng bấm 'Tạo hồ sơ' ở mục 1 trước",
+        description:
+          "Bạn đã có thể quét tự động CMND/CCCD. Hãy bấm 'Tạo hồ sơ' ở mục 1 trước khi lưu tài liệu đính kèm.",
+      });
+      return;
+    }
+
     const url = `${apiBaseUrl}/api/v1/me/candidate-profile/documents`;
 
     const body: Record<string, unknown> = {};
@@ -321,7 +490,7 @@ function CandidateFormsWrapper({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${activeToken}`,
         },
         body: JSON.stringify(body),
       });
@@ -346,7 +515,7 @@ function CandidateFormsWrapper({
       // Xóa cache cá nhân trên Redis để đồng bộ ngay lập tức (Section 3.14 API documentation)
       fetch(`${apiBaseUrl}/api/v1/me/candidate-profile/clear-cache`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${activeToken}` },
       }).catch(() => null);
 
       if (revalidator.state === "idle") {
@@ -406,12 +575,15 @@ function CandidateFormsWrapper({
     portraitUrl: string
   ): Promise<ValidatePortraitResponseDTO> {
     const url = `${apiBaseUrl}/api/v1/me/candidate-profile/validate-portrait`;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (activeToken) {
+      headers.Authorization = `Bearer ${activeToken}`;
+    }
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
+      headers,
       body: JSON.stringify({ portrait_image_url: portraitUrl }),
     });
 
@@ -456,9 +628,46 @@ function CandidateFormsWrapper({
         </div>
       )}
 
+      {/* ── Primary Call-To-Action: Guest-First CCCD/CMND Scanner ── */}
+      <Card className="border-primary/30 bg-primary/5 shadow-xs">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">
+            Quét nhanh CMND (9 số) / CCCD (12 số) để tự động điền hồ sơ
+          </CardTitle>
+          <CardDescription>
+            Tải ảnh mặt trước CMND/CCCD để hệ thống tự động nhận diện Số định danh, Họ và tên, Ngày sinh và Địa chỉ theo thời gian thực trước khi bấm &ldquo;Tạo hồ sơ&rdquo;.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <IdUploadDropzone
+            status={topOcrStatus}
+            progress={topOcrProgress}
+            error={topOcrError}
+            apiBaseUrl={apiBaseUrl}
+            token={activeToken}
+            disabled={Boolean(isAdminPreview)}
+            onOptimisticStart={startTopOptimisticScan}
+            onTaskCreated={(taskId) => {
+              void subscribeTopTask(taskId);
+            }}
+            onError={markTopFailed}
+            onFileSelected={(file) => {
+              if (typeof window !== "undefined") {
+                window.dispatchEvent(
+                  new CustomEvent("hsk:ocr-front-file", { detail: { file } })
+                );
+              }
+            }}
+          />
+        </CardContent>
+      </Card>
+
       <ProfileForm
         profile={profile}
+        defaultCccd={scannedCccd}
         defaultFullName={userFullName}
+        defaultGender={scannedGender}
+        isGuest={!activeToken}
         onSubmit={handleProfileSubmit}
         disabled={isAdminPreview}
       />
@@ -466,18 +675,14 @@ function CandidateFormsWrapper({
         document={document}
         provinces={resolvedProvinces}
         initialWards={resolvedWards}
-        token={token}
+        token={activeToken ?? ""}
         apiBaseUrl={apiBaseUrl}
         onSubmit={handleDocumentSubmit}
         onValidatePortrait={handleValidatePortrait}
-        disabled={profile === null || isAdminPreview}
-        userCccd={userCccd}
+        onOCRDataExtracted={dispatchOCRAutoFill}
+        disabled={Boolean(isAdminPreview)}
+        userCccd={scannedCccd}
       />
-      {profile === null && (
-        <p className="text-center text-xs text-muted-foreground">
-          Vui lòng tạo hồ sơ cá nhân trước khi cập nhật giấy tờ tùy thân.
-        </p>
-      )}
     </>
   );
 }

@@ -16,10 +16,10 @@
  * 5. Error 400 → lỗi validation từ server
  */
 import * as React from "react";
-import { Link, Form, data, useActionData, useNavigation, useNavigate } from "react-router";
+import { Link, Form, data, useActionData, useLoaderData, useNavigation, useNavigate } from "react-router";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { API_BASE_URL } from "~/lib/env.server";
+import { API_BASE_URL, PUBLIC_API_BASE_URL } from "~/lib/env.server";
 import { type Route } from "./+types/dang-ky";
 
 import { registerSchema, type RegisterFormValues } from "~/lib/schemas/auth";
@@ -30,6 +30,8 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { PasswordInput } from "~/components/auth/PasswordInput";
+import { IdUploadDropzone } from "~/components/IdUploadDropzone";
+import { useOCRScanner } from "~/hooks/useOCRScanner";
 
 // ─── SEO Meta ─────────────────────────────────────────────────────────────────
 export const meta: Route.MetaFunction = () => [
@@ -40,6 +42,13 @@ export const meta: Route.MetaFunction = () => [
       "Tạo tài khoản mới để đăng ký thi HSK máy tính tại Trường Đại học Vinh.",
   },
 ];
+
+// ─── Loader — Cung cấp apiBaseUrl cho Guest-Mode OCR Scanner ──────────────────
+export async function loader() {
+  return {
+    apiBaseUrl: PUBLIC_API_BASE_URL,
+  };
+}
 
 // ─── Action — Xử lý form submission ──────────────────────────────────────────
 export async function action({ request }: Route.ActionArgs) {
@@ -173,9 +182,8 @@ function PasswordStrengthIndicator({ password }: PasswordStrengthProps) {
         {checks.map((check) => (
           <li
             key={check.label}
-            className={`flex items-center gap-1.5 text-xs transition-colors ${
-              check.ok ? "text-green-600 dark:text-green-400" : "text-muted-foreground"
-            }`}
+            className={`flex items-center gap-1.5 text-xs transition-colors ${check.ok ? "text-green-600 dark:text-green-400" : "text-muted-foreground"
+              }`}
           >
             <span aria-hidden="true" className="shrink-0 font-medium">
               {check.ok ? "✓" : "○"}
@@ -217,6 +225,7 @@ function SuccessBanner({ onNavigate }: { onNavigate: () => void }) {
 
 // ─── Register Form Component ──────────────────────────────────────────────────
 export default function RegisterPage() {
+  const { apiBaseUrl } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const navigate = useNavigate();
@@ -225,10 +234,45 @@ export default function RegisterPage() {
   const {
     register,
     watch,
+    setValue,
     formState: { errors },
   } = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
     mode: "onBlur",
+  });
+
+  // Guest-Mode Real-time OCR Scanner
+  const ocrScanner = useOCRScanner({
+    apiBaseUrl,
+    token: null,
+    onCompleted: (ocrData) => {
+      if (ocrData.full_name) {
+        setValue("full_name", ocrData.full_name, {
+          shouldDirty: true,
+          shouldTouch: true,
+          shouldValidate: true,
+        });
+      }
+      if (ocrData.id_number) {
+        setValue("cccd", ocrData.id_number, {
+          shouldDirty: true,
+          shouldTouch: true,
+          shouldValidate: true,
+        });
+      }
+      toast.add({
+        type: "success",
+        title: "Quét CMND/CCCD thành công",
+        description: `Đã tự động điền ${ocrData.full_name || "Họ tên"} (${ocrData.id_number || "Số CMND/CCCD"}).`,
+      });
+    },
+    onFailed: (errMsg) => {
+      toast.add({
+        type: "error",
+        title: "Quét CMND/CCCD thất bại",
+        description: errMsg,
+      });
+    },
   });
 
   // Watch password để hiển thị strength indicator
@@ -290,6 +334,19 @@ export default function RegisterPage() {
           className="flex flex-col gap-4"
           aria-describedby={actionData?.error ? "register-error" : undefined}
         >
+          {/* ── Primary Call-To-Action: Guest-Mode OCR Upload Dropzone ────────── */}
+          <IdUploadDropzone
+            status={ocrScanner.status}
+            progress={ocrScanner.progress}
+            error={ocrScanner.error}
+            onOptimisticStart={ocrScanner.startOptimisticScan}
+            onTaskCreated={ocrScanner.subscribeTask}
+            onError={ocrScanner.markFailed}
+            apiBaseUrl={apiBaseUrl}
+            token={null}
+            disabled={isSubmitting}
+          />
+
           {/* ── Họ và tên ─────────────────────────────────────────────────────── */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="full_name">
@@ -322,17 +379,17 @@ export default function RegisterPage() {
             )}
           </div>
 
-          {/* ── Số CCCD ───────────────────────────────────────────────────────── */}
+          {/* ── Số CMND / CCCD ────────────────────────────────────────────────── */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="cccd">
-              Số căn cước công dân{" "}
+              Số CMND{" "}
               <span className="text-destructive" aria-hidden="true">*</span>
             </Label>
             <Input
               id="cccd"
               type="text"
               inputMode="numeric"
-              placeholder="012345678901"
+              placeholder="VD: 187654321 hoặc 038099012345"
               autoComplete="off"
               spellCheck={false}
               maxLength={12}
@@ -347,7 +404,7 @@ export default function RegisterPage() {
               {...register("cccd")}
             />
             <p id="cccd-hint" className="text-xs text-muted-foreground">
-              Nhập đúng 12 chữ số trên căn cước của bạn
+              Nhập đúng 9 chữ số (CMND cũ) hoặc 12 chữ số (CCCD gắn chip)
             </p>
             {(errors.cccd || actionData?.fieldErrors?.cccd) && (
               <p id="cccd-error" role="alert" className="text-xs text-destructive">

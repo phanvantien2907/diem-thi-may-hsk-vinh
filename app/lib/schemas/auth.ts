@@ -21,20 +21,28 @@ const passwordSchema = z
     "Mật khẩu phải có ít nhất 1 ký tự đặc biệt (!@#$%...)"
   );
 
+// ─── Legacy 9-Digit CMND & Modern 12-Digit CCCD Regex ─────────────────────────
+export const ID_NUMBER_REGEX = /^(\d{9}|\d{12})$/;
+
 // ─── Login Schema (POST /api/v1/auth/login) ───────────────────────────────────
-// identifier: không rỗng (CCCD hoặc Email, server tự detect)
+// identifier: không rỗng (CMND 9 số, CCCD 12 số hoặc Email, server tự detect)
 // password: không rỗng
 export const loginSchema = z.object({
   identifier: z
     .string()
-    .min(1, "Vui lòng nhập CCCD hoặc địa chỉ Email"),
+    .trim()
+    .min(1, "Vui lòng nhập CMND/CCCD hoặc địa chỉ Email")
+    .refine(
+      (val) => !/^\d+$/.test(val) || ID_NUMBER_REGEX.test(val),
+      "Số CMND/CCCD phải gồm đúng 9 chữ số (CMND cũ) hoặc 12 chữ số (CCCD mới)"
+    ),
   password: z
     .string()
     .min(1, "Vui lòng nhập mật khẩu"),
 });
 
 // ─── Register Schema (POST /api/v1/auth/register) ────────────────────────────
-// cccd: đúng 12 ký tự, chỉ chứa số
+// cccd: đúng 9 chữ số (CMND) hoặc 12 chữ số (CCCD), chỉ chứa số
 // phone: tối đa 20 ký tự
 // full_name: tối đa 150 ký tự
 // email: email hợp lệ, tối đa 150 ký tự
@@ -42,12 +50,16 @@ export const loginSchema = z.object({
 export const registerSchema = z.object({
   full_name: z
     .string()
+    .trim()
     .min(1, "Vui lòng nhập họ và tên")
     .max(150, "Họ tên không được vượt quá 150 ký tự"),
   cccd: z
     .string()
-    .length(12, "Số CCCD phải đúng 12 chữ số")
-    .regex(/^\d{12}$/, "Số CCCD chỉ được chứa chữ số (0-9)"),
+    .trim()
+    .regex(
+      ID_NUMBER_REGEX,
+      "Số CMND/CCCD phải gồm đúng 9 chữ số (CMND cũ) hoặc 12 chữ số (CCCD mới)"
+    ),
   phone: z
     .string()
     .min(1, "Vui lòng nhập số điện thoại")

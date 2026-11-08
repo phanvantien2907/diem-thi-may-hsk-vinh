@@ -310,13 +310,13 @@ export default function LoginPage() {
           {/* ── identifier ─────────────────────────────────────────────────── */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="identifier">
-              Email hoặc số CCCD{" "}
+              Email hoặc số CMND/CCCD{" "}
               <span className="text-destructive" aria-hidden="true">*</span>
             </Label>
             <Input
               id="identifier"
               type="text"
-              placeholder="Nhập email hoặc số CCCD…"
+              placeholder="Nhập email hoặc số CMND / CCCD"
               autoComplete="username"
               autoFocus
               spellCheck={false}

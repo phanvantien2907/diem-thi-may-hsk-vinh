@@ -54,6 +54,91 @@ export function getUserInfoFromCookie(request: Request): Partial<UserProfile> | 
 }
 
 /**
+ * Lấy thông tin xác thực tùy chọn (Optional Auth) cho các trang hỗ trợ Guest-First
+ * (như trang Quét CCCD & Đăng ký hồ sơ `/thong-tin-thi-sinh`, `/dang-ky`).
+ * - Nếu chưa đăng nhập (không có cookie `session`): trả về `{ user: null, token: null }` mà KHÔNG redirect.
+ * - Nếu đã có cookie `session`: đồng bộ với `/api/v1/me` và trả về `{ user, token }`.
+ */
+export async function getOptionalAuth(
+  request: Request
+): Promise<{ user: UserProfile | null; token: string | null }> {
+  const token = getTokenFromRequest(request);
+  if (!token) {
+    return { user: null, token: null };
+  }
+
+  let user: UserProfile = {
+    name: "Thí sinh dự thi",
+    role: "Thí sinh",
+  };
+
+  const cachedUser = getUserInfoFromCookie(request);
+  if (cachedUser) {
+    user = { ...user, ...cachedUser };
+  }
+
+  const payload = decodeJwtPayload(token);
+  if (payload) {
+    if (payload.user_id && !user.username) {
+      user.username = String(payload.user_id);
+    }
+    if (payload.user_role) {
+      user.rawRole = String(payload.user_role);
+      user.role =
+        payload.user_role === "admin"
+          ? "Quản trị viên"
+          : payload.user_role === "candidate"
+            ? "Thí sinh"
+            : String(payload.user_role);
+    }
+    if (payload.full_name && typeof payload.full_name === "string") {
+      user.full_name = payload.full_name;
+      user.name = payload.full_name;
+    }
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/me`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (response.ok) {
+      const result = (await response.json()) as { data?: Record<string, unknown> };
+      const data = result.data;
+      if (data) {
+        const isAdmin =
+          data.role_id === 1 ||
+          user.rawRole === "admin" ||
+          (typeof data.role_code === "string" && data.role_code === "admin");
+        user = {
+          name:
+            typeof data.full_name === "string"
+              ? data.full_name
+              : isAdmin
+                ? "Quản trị viên"
+                : user.name,
+          full_name: typeof data.full_name === "string" ? data.full_name : user.full_name,
+          email: typeof data.email === "string" ? data.email : user.email,
+          username: typeof data.username === "string" ? data.username : user.username,
+          cccd: typeof data.username === "string" ? data.username : user.cccd,
+          phone: typeof data.phone === "string" ? data.phone : user.phone,
+          role: isAdmin ? "Quản trị viên" : "Thí sinh",
+          rawRole: isAdmin ? "admin" : user.rawRole || "candidate",
+          has_pii_pin:
+            typeof data.has_pii_pin === "boolean" ? data.has_pii_pin : user.has_pii_pin,
+        };
+      }
+    }
+  } catch (error) {
+    console.error("[Auth] Optional sync with /me API failed:", error);
+  }
+
+  return { user, token };
+}
+
+/**
  * Hàm AuthGuard cốt lõi dùng cho các Route Loaders.
  * - Kiểm tra session token, nếu không có sẽ tự động redirect về /dang-nhap.
  * - Đồng bộ với /api/v1/me để lấy dữ liệu mới nhất.

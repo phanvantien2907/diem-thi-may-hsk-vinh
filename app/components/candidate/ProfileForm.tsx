@@ -33,12 +33,16 @@ import { ETHNICITIES } from "~/lib/constants/ethnicities";
 interface ProfileFormProps {
   /** Dữ liệu hồ sơ hiện có (null = chưa có hồ sơ, cần tạo mới) */
   profile: CandidateResponseDTO | null;
+  /** Số CMND/CCCD mặc định (nếu đã có hoặc vừa quét OCR) */
+  defaultCccd?: string;
   /** Họ tên lấy từ thông tin đăng nhập/tài khoản (fallback khi profile chưa có) */
   defaultFullName?: string;
   /** Ngày sinh lấy từ thông tin đăng nhập/tài khoản hoặc CCCD (fallback khi profile chưa có) */
   defaultDob?: string;
   /** Giới tính suy luận từ CCCD (fallback khi profile chưa có) */
   defaultGender?: "male" | "female";
+  /** Chế độ Guest-First: chưa đăng nhập, khi bấm "Tạo hồ sơ" sẽ tạo tài khoản + hồ sơ cùng lúc */
+  isGuest?: boolean;
   /** Callback khi submit form thành công */
   onSubmit: (data: CandidateProfileFormValues, isNew: boolean) => Promise<void>;
   /** Vô hiệu hóa submit (chế độ xem trước admin) */
@@ -67,9 +71,11 @@ const GENDER_LABEL_MAP: Record<string, string> = {
 // ─── Component ────────────────────────────────────────────────────────────────
 export const ProfileForm = React.memo(function ProfileForm({
   profile,
+  defaultCccd = "",
   defaultFullName = "",
   defaultDob = "",
   defaultGender,
+  isGuest = false,
   onSubmit,
   disabled = false,
 }: ProfileFormProps) {
@@ -83,11 +89,16 @@ export const ProfileForm = React.memo(function ProfileForm({
     register,
     handleSubmit,
     control,
+    setValue,
     reset,
     formState: { errors, isSubmitting },
   } = useForm<CandidateProfileFormValues>({
     resolver: zodResolver(candidateProfileSchema),
     defaultValues: {
+      cccd: defaultCccd,
+      phone: "",
+      email: "",
+      password: "",
       full_name: initialFullName,
       full_name_cn: profile?.full_name_cn ?? "",
       dob: initialDob,
@@ -98,6 +109,52 @@ export const ProfileForm = React.memo(function ProfileForm({
       chinese_study_years: profile?.chinese_study_years ?? undefined,
     },
   });
+
+  // Lắng nghe sự kiện OCR Auto-Fill trực tiếp qua CustomEvent để cập nhật tức thì vào ô input mà không re-render toàn trang
+  React.useEffect(() => {
+    const handleOCRAutoFill = (evt: Event) => {
+      const customEvt = evt as CustomEvent<{
+        id_number?: string;
+        full_name?: string;
+        dob?: string;
+        gender?: "male" | "female";
+      }>;
+      const detail = customEvt.detail;
+      if (!detail) return;
+      if (detail.id_number) {
+        setValue("cccd", detail.id_number.trim(), {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+      }
+      if (detail.full_name) {
+        setValue("full_name", detail.full_name.trim(), {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+      }
+      if (detail.dob) {
+        setValue("dob", detail.dob, {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+      }
+      if (detail.gender === "male" || detail.gender === "female") {
+        setValue("gender", detail.gender, {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+      }
+    };
+    window.addEventListener("hsk:ocr-autofill-profile", handleOCRAutoFill);
+    return () => {
+      window.removeEventListener("hsk:ocr-autofill-profile", handleOCRAutoFill);
+    };
+  }, [setValue]);
 
   // Tự động đồng bộ khi dữ liệu profile hoặc thông tin tài khoản thay đổi
   React.useEffect(() => {
@@ -140,8 +197,8 @@ export const ProfileForm = React.memo(function ProfileForm({
       <CardContent>
         <form onSubmit={handleSubmit(handleFormSubmit)}>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-5 lg:grid-cols-3">
-            {/* Họ và tên — span 2 col on tablet+ */}
-            <div className="flex flex-col gap-1.5 md:col-span-2">
+            {/* Họ và tên — span 2 col on desktop (lg:grid-cols-3) so 8 fields form 3 full rows on lg and 4 full rows on md */}
+            <div className="flex flex-col gap-1.5 lg:col-span-2">
               <Label htmlFor="full_name">
                 Họ và tên <span className="text-destructive">*</span>
               </Label>
@@ -309,6 +366,76 @@ export const ProfileForm = React.memo(function ProfileForm({
               )}
             </div>
           </div>
+
+          {/* Trường thông tin tài khoản khi khách chưa đăng nhập (Unified Guest Registration) */}
+          {isGuest && (
+            <div className="mt-5 pt-5 border-t border-border/60 grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-5">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="cccd">
+                  Số CMND (9 số) / CCCD (12 số) <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="cccd"
+                  inputMode="numeric"
+                  maxLength={12}
+                  placeholder="VD: 187654321 hoặc 038099012345"
+                  aria-invalid={!!errors.cccd}
+                  {...register("cccd")}
+                />
+                {errors.cccd && (
+                  <p className="text-xs text-destructive">{errors.cccd.message}</p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="phone">
+                  Số điện thoại <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="phone"
+                  type="tel"
+                  placeholder="0901234567"
+                  aria-invalid={!!errors.phone}
+                  {...register("phone")}
+                />
+                {errors.phone && (
+                  <p className="text-xs text-destructive">{errors.phone.message}</p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="email">
+                  Email <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="thisinh@example.com"
+                  aria-invalid={!!errors.email}
+                  {...register("email")}
+                />
+                {errors.email && (
+                  <p className="text-xs text-destructive">{errors.email.message}</p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="password">
+                  Mật khẩu tạo tài khoản <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="Tối thiểu 8 ký tự (A-Z, a-z, 0-9, @!#...)"
+                  aria-invalid={!!errors.password}
+                  {...register("password")}
+                />
+                {errors.password && (
+                  <p className="text-xs text-destructive">{errors.password.message}</p>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Submit button */}
           <div className="mt-6 flex justify-end">

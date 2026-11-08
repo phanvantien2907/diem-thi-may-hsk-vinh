@@ -3,10 +3,37 @@
 > **Base URL:** `http://<host>:<port>/api/v1`
 > **Content-Type:** `application/json`
 > **Ngôn ngữ lỗi:** Tiếng Việt (tất cả thông báo lỗi trả về bằng Tiếng Việt)
-> **Phiên bản:** v1.2.4
-> **Cập nhật lần cuối:** 2026-10-28
+> **Phiên bản:** v1.2.8
+> **Cập nhật lần cuối:** 2026-11-08
 
 ## Changelog
+
+### v1.2.8 (2026-11-08)
+- 🪪 **Hỗ trợ đồng thời CMND 9 số (cũ) & CCCD 12 số (mới) + Pipeline OCR Auto-Fill Thời gian thực**:
+  - **Chuẩn hóa định dạng Mã định danh (`^(\d{9}|\d{12})$`)**: Toàn bộ các luồng Đăng ký (`POST /api/v1/auth/register`), Đăng nhập (`POST /api/v1/auth/login`), Tạo tài khoản nhân sự (`POST /api/v1/admin/staff-accounts`) và Hồ sơ giấy tờ tùy thân đều chấp nhận **đúng 9 chữ số (CMND cũ)** hoặc **12 chữ số (CCCD gắn chip)** thông qua custom validator tag `cccd_or_cmnd`. Từ chối sớm (HTTP 400) mọi chuỗi số có độ dài 10, 11 hoặc khác 9/12 chữ số.
+  - **Fast-Path Ingestion (`POST /api/v1/cccd/upload` → `202 Accepted` trong < 50ms)**: Kiểm tra nhanh định dạng ảnh (`.jpg`, `.jpeg`, `.png`, ≤ 5MB), lưu file tạm và đẩy tác vụ vào `worker.WorkerPool` kèm `task_id` (UUID v4).
+  - **Real-Time WebSocket Delivery (`ocr_progress`, `ocr_completed`, `ocr_failed`)**: Worker nền phát tiến trình qua kênh Redis Pub/Sub `cccd:ocr_events` (`QUEUED` → `PROCESSING` → `COMPLETED`/`FAILED`), chuẩn hóa `id_number` (9 hoặc 12 số), `full_name` (in hoa), `dob` (`DD/MM/YYYY`), `address` và tự động dọn dẹp file ảnh tạm sau khi xử lý xong. Tuyệt đối **không sử dụng sinh trắc học/nhận diện khuôn mặt** trong luồng OCR thẻ.
+
+### v1.2.7 (2026-11-07)
+- 🪪 **Module CCCD OCR (`internal/cccd`) — Trích xuất & Đối chiếu chéo Giấy tờ tùy thân bằng AI**:
+  - **Hỗ trợ 7 loại/mặt giấy tờ Việt Nam**: CMND 9 số (trước/sau), CMND 12 số (trước/sau), CCCD gắn chip 2014 (trước/sau) và Thẻ Căn cước mới 2024 theo Luật Căn cước 2023 (trước/sau).
+  - **Cơ chế xử lý bất đồng bộ (`POST /api/v1/cccd/extract` → `202 Accepted`)**: Trả ngay `request_id` để tránh vướng `WriteTimeout: 15s`, chạy qua Worker Pool (`CCCD_MAX_CONCURRENCY`), đẩy kết quả tức thì qua WebSocket event `CCCD_EXTRACTED` và hỗ trợ polling dự phòng tại `GET /api/v1/cccd/jobs/:id` (TTL 10 phút).
+  - **Pipeline 2-Pass & Kiểm tra chéo (Điều 21 Luật Căn cước 2023)**: Tiền xử lý ảnh trong RAM (độ phân giải, độ nét, độ sáng, resize ≤ 1600px), chuẩn hóa văn bản/số nhầm lẫn OCR (`O→0`, `I→1`, `S→5`…), đối chiếu mã tỉnh (63 tỉnh/thành), chữ số thứ 4 (giới tính + thế kỷ sinh), 2 chữ số năm sinh, mốc hết hạn 14/25/40/60 tuổi; tự động chạy Pass 2 với `hints` khi phát hiện mâu thuẫn chéo.
+  - **Kiến trúc chuẩn `CLAUDE.md`**: Tách bạch đầy đủ `handler.go`, `service.go`, `mapper.go`, `route.go`, `dto/request/`, `dto/response/`, `entities/`, `enum/` và bổ sung helper `utils.Accepted`.
+
+### v1.2.6 (2026-11-05)
+- 🔔 **Hệ thống Thông báo Thời gian thực (Real-Time Notification) & Bảo mật/Chịu tải WebSocket Hub**:
+  - **Handshake an toàn không lộ JWT trên URL (`POST /api/v1/ws/ticket`)**: Cấp vé dùng 1 lần (One-Time Ticket, TTL 30 giây) để mở kết nối `ws://<host>/ws?ticket=<ticket>` (hoặc xác thực qua frame đầu tiên `{"type":"auth","token":"<jwt>"}` trong 5 giây). Chặn hoàn toàn việc truyền `?token=<jwt>` trên URL với `HTTP 401 Unauthorized` nhằm ngăn chặn rò rỉ JWT trong log proxy/reverse-proxy.
+  - **Định tuyến mục tiêu & Giới hạn đa tab (`map[account_id][]*Client`)**: Hỗ trợ tối đa **5 kết nối đồng thời/user**; khi mở tab thứ 6, kết nối cũ nhất bị đóng tự động với mã `4002`. Các sự kiện cá nhân (`NOTIFICATION_PAYLOAD`, `notification_read`, `account_updated`) chỉ gửi đích danh tới các kết nối của `account_id` tương ứng.
+  - **Mã đóng kết nối tùy chỉnh (Custom Close Codes `4001`, `4002`, `4003`)**: Tự động đóng kết nối với mã `4001` khi JWT hết hạn (để Frontend thực hiện silent refresh + xin vé mới + reconnect); ngắt tức thì toàn bộ kết nối của `account_id` với mã `4003` khi người dùng đăng xuất hoặc bị Admin vô hiệu hóa tài khoản.
+  - **Chống tràn bộ đệm & Bão Broadcast**: Giới hạn kênh gửi `256` tin nhắn/client (tự động ngắt client chậm) và gộp/debounce các sự kiện tần suất cao (`seat_updated`) trong cửa sổ `250ms`.
+  - **Đồng bộ tin nhắn bị lỡ & Đồng bộ trạng thái đọc đa tab**: Bổ sung `GET /api/v1/notifications?after_id=<max_local_id>` khi kết nối lại và phát sự kiện `notification_read` qua WebSocket khi gọi `PATCH /api/v1/notifications/:id/read`.
+
+### v1.2.5 (2026-11-03)
+- ⚡ **Giải quyết Deadlock State Machine & Top-Down Transactional Cascade**:
+  - Triệt tiêu hoàn toàn vòng lặp bế tắc (circular deadlock) giữa Đợt thi cha (`exam_periods`) và Ca thi con (`exam_sessions`):
+    - Sửa định nghĩa `valid_session_count` trong `periodMetrics`: tính các ca thi con đang ở trạng thái `draft` nhưng đã hoàn thiện cấu hình (`date`, `capacity > 0`, `registration_deadline`) là ca thi hợp lệ để công bố đợt thi cha.
+    - Triển khai **Top-Down Transactional Cascade (ACID)** trong `POST /api/v1/admin/exam-periods/:id/publish`: Trong duy nhất một transaction, khi công bố đợt thi cha, tự động cascade cập nhật toàn bộ các ca thi con hợp lệ thuộc đợt từ `draft` sang `open` (hoặc `scheduled` nếu có hẹn giờ `publish_at` trong tương lai), xóa cache Redis đồng bộ.
 
 ### v1.2.4 (2026-10-28)
 - 🔄 **Viết lại toàn bộ State Machine của module Exam** theo chuẩn nghiệp vụ mới:
@@ -75,6 +102,8 @@
 - [15. Module Dashboard (Bảng điều khiển quản trị)](#15-module-dashboard-bảng-điều-khiển-quản-trị)
 - [16. Chuẩn đóng gói Container & Tối ưu hóa Dung lượng Docker](#16-chuẩn-đóng-gói-container--tối-ưu-hóa-dung-lượng-docker)
 - [17. Kiến trúc Bộ nhớ đệm Redis & Cơ chế Phòng thủ (Redis Defensive Caching)](#17-kiến-trúc-bộ-nhớ-đệm-redis--cơ-chế-phòng-thủ-redis-defensive-caching)
+- [18. Real-Time Session Invalidation, WebSocket Event Payloads & Registration State Machine](#18-real-time-session-invalidation-websocket-event-payloads--registration-state-machine)
+- [19. Module CCCD OCR (Trích xuất & Xác thực CCCD/CMND bằng AI)](#19-module-cccd-ocr-trích-xuất--xác-thực-cccdcmnd-bằng-ai)
 
 ---
 
@@ -240,7 +269,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 | Field | Kiểu | Bắt buộc | Validate | Mô tả |
 |---|---|---|---|---|
-| `cccd` | `string` | ✅ | Đúng 12 ký tự, chỉ chứa số | Số CCCD (Căn cước công dân) |
+| `cccd` | `string` | ✅ | Đúng 9 chữ số (CMND cũ) hoặc 12 chữ số (CCCD mới), regex `^(\d{9}\|\d{12})$` | Số CMND / CCCD |
 | `phone` | `string` | ✅ | Tối đa 20 ký tự | Số điện thoại |
 | `full_name` | `string` | ✅ | Tối đa 150 ký tự | Họ và tên đầy đủ |
 | `email` | `string` | ✅ | Email hợp lệ, tối đa 150 ký tự | Địa chỉ email |
@@ -275,8 +304,8 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 | Code | Thông báo | Nguyên nhân |
 |---|---|---|
 | `400` | `"Dữ liệu yêu cầu không hợp lệ"` | JSON body sai format |
-| `400` | Chi tiết lỗi validation | Thiếu/sai field (ví dụ: CCCD không đủ 12 số) |
-| `409` | `"tài khoản đã tồn tại"` | CCCD hoặc email đã được đăng ký |
+| `400` | `"Số CMND/CCCD không hợp lệ (phải bao gồm đúng 9 hoặc 12 chữ số)"` | Số CMND/CCCD không khớp `^(\d{9}\|\d{12})$` |
+| `409` | `"Số CMND/CCCD này đã được đăng ký tài khoản"` / `"tài khoản đã tồn tại"` | CMND/CCCD hoặc email đã được đăng ký |
 
 ---
 
@@ -299,10 +328,10 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 
 | Field | Kiểu | Bắt buộc | Validate | Mô tả |
 |---|---|---|---|---|
-| `identifier` | `string` | ✅ | Không rỗng | CCCD (12 số) hoặc Email |
+| `identifier` | `string` | ✅ | Không rỗng; nếu chỉ chứa chữ số thì phải khớp `^(\d{9}\|\d{12})$` | Số CMND (9 số), CCCD (12 số) hoặc Email |
 | `password` | `string` | ✅ | Không rỗng | Mật khẩu |
 
-> **Lưu ý:** Server tự phát hiện `identifier` là CCCD hay Email dựa trên format.
+> **Lưu ý:** Server tự phát hiện `identifier` là CMND (9 số) / CCCD (12 số) hay Email dựa trên format. Nếu `identifier` chỉ chứa chữ số nhưng không phải 9 hoặc 12 số, server trả ngay `400 Bad Request` (`"Số CMND/CCCD đăng nhập phải bao gồm đúng 9 hoặc 12 chữ số"`).
 
 **Request Headers (tự động gửi):**
 
@@ -724,7 +753,7 @@ Khi tạo hoặc thay đổi mật khẩu, **bắt buộc** tuân theo:
 | Field | Kiểu | Bắt buộc | Validate | Mô tả |
 |---|---|---|---|---|
 | `confirm_account_id` | `integer` | ✅ | Khớp với `:id` | ID tài khoản xác nhận |
-| `confirm_identity` | `string` | ✅ | Khớp với `username` (CCCD), `email` hoặc `full_name` | Chuỗi xác nhận danh tính chống xóa nhầm |
+| `confirm_identity` | `string` | ✅ | Khớp với `full_name`, `doc_number` (số CCCD/Hộ chiếu), `username` hoặc `email` | Chuỗi xác nhận danh tính chống xóa nhầm |
 | `reason` | `string` | ✅ | 5–500 ký tự | Lý do vô hiệu hóa (ghi vào `audit_logs`) |
 | `paid_resolution` | `string` | ❌ | `block` (mặc định) hoặc `refund` | Cách xử lý nếu thí sinh có đơn đã thanh toán (`confirmed`) |
 
@@ -1405,13 +1434,37 @@ bao gồm cả hồ sơ chưa có giấy tờ mới nhất và các hồ sơ có
 
 ---
 
-### 3.10c. [Admin] Từ chối giấy tờ, Thu hồi phê duyệt & Mở lại xét duyệt
+### 3.10c. [Admin] Từ chối giấy tờ, Thu hồi phê duyệt & Mở lại xét duyệt (Strict State Machine)
 
 | Endpoint | Chuyển trạng thái | Mô tả |
 |---|---|---|
-| `POST /api/v1/admin/candidates/:id/reject` | `pending -> rejected` | Từ chối hồ sơ đang chờ duyệt (bắt buộc `reason`). |
-| `POST /api/v1/admin/candidates/:id/revoke-approval` | `verified -> rejected` | **Thu hồi phê duyệt:** Bắt buộc `reason` (5–500 ký tự). Tự động hủy các đơn `pending_payment` và nhả ghế `held -> available`. Với đơn đã thanh toán (`confirmed`), mặc định chặn (`paid_resolution: "block"` -> `409 Conflict`) hoặc chuyển thanh toán sang `pending_refund` và nhả ghế khi truyền `"paid_resolution": "refund"`. |
-| `POST /api/v1/admin/candidates/:id/reopen-review` | `rejected -> pending` | **Mở lại xét duyệt:** Bắt buộc `reason` (5–500 ký tự), đưa hồ sơ bị từ chối về lại `pending` và ghi `REOPEN_REVIEW` vào `audit_logs`. |
+| `POST /api/v1/admin/candidates/:id/approve` | `pending -> verified` | **Duyệt hồ sơ:** Chỉ cho phép khi trạng thái hiện tại là `pending`. Không cho phép duyệt trực tiếp hồ sơ `rejected`. |
+| `POST /api/v1/admin/candidates/:id/reject` | `pending -> rejected` | **Từ chối hồ sơ:** Chỉ cho phép khi trạng thái hiện tại là `pending` (bắt buộc `reason`). |
+| `POST /api/v1/admin/candidates/:id/revoke-approval` | `verified -> rejected` | **Thu hồi phê duyệt:** Chỉ cho phép khi trạng thái hiện tại là `verified`. Bắt buộc `reason` (5–500 ký tự). Tự động hủy các đơn `pending_payment` và nhả ghế `held -> available`. Với đơn đã thanh toán (`confirmed`), mặc định chặn (`paid_resolution: "block"` -> `409 Conflict`) hoặc chuyển thanh toán sang `pending_refund` và nhả ghế khi truyền `"paid_resolution": "refund"`. |
+| `POST /api/v1/admin/candidates/:id/reopen-review` | `rejected -> pending` | **Mở lại xét duyệt:** Chỉ cho phép khi trạng thái hiện tại là `rejected`. Bắt buộc `reason` (5–500 ký tự), đưa hồ sơ bị từ chối về lại `pending` và ghi `REOPEN_REVIEW` vào `audit_logs`. |
+
+---
+
+### 3.10d. [Admin] Lịch sử thao tác của thí sinh (Audit Logs theo thí sinh)
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/admin/candidates/:id/audit-logs` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Xem nhật ký các thao tác **do chính thí sinh thực hiện** (Actor = `candidate_account_id`), bao gồm nộp giấy tờ, thay đổi thông tin, v.v. có phân trang |
+
+> [!NOTE]
+> Hệ thống lọc theo `audit_log_actor_account_id = candidate_account_id` (hành động do chính thí sinh là tác nhân thực hiện). Các hành động can thiệp quản trị từ Admin lên hồ sơ thí sinh (như Admin duyệt, từ chối, khóa PII) được ghi nhận trong audit log quản trị chung của hệ thống.
+
+**Query Params:**
+
+| Param | Kiểu | Bắt buộc | Validate | Mô tả |
+|---|---|---|---|---|
+| `scope` | `string` | ❌ | `all`, `candidate_documents`, `registrations` | Phạm vi nhật ký (`candidate_documents`: thao tác giấy tờ tùy thân; `registrations`: thao tác ca thi & đăng ký; mặc định `all`) |
+| `page` | `integer` | ❌ | Min 1, mặc định 1 | Trang hiện tại |
+| `limit` | `integer` | ❌ | Min 1, max 100, mặc định 10 | Số bản ghi mỗi trang (5 hoặc 10 bản ghi/trang trên UI modal) |
+
+**Response (200 OK):** Mảng `AuditLogResponseDTO` (luôn trả về `[]` khi rỗng, không trả `null`) kèm `meta` phân trang (`page`, `per_page`, `total_items`, `total_pages`).
 
 ---
 
@@ -2368,7 +2421,12 @@ Các trạng thái khác trả 409.
 
 **Request Body:** Không cần.
 
-**Điều kiện:** cần **≥ 1 ca thi hợp lệ** trong đợt; ngược lại 409.
+**Điều kiện:** Cần **≥ 1 ca thi hợp lệ** trong đợt (đã cấu hình ngày thi `date`, sức chứa `capacity > 0`, hạn đăng ký `registration_deadline`); ngược lại trả HTTP 409 `INVALID_STATE_TRANSITION`.
+
+**Transactional Cascade (ACID):**
+- Trong **cùng một database transaction**, khi đợt thi cha chuyển sang `published`, hệ thống tự động cascade cập nhật toàn bộ các ca thi con hợp lệ thuộc đợt đang ở trạng thái `draft` sang `open` (hoặc `scheduled` nếu có thời điểm hẹn giờ `publish_at` trong tương lai).
+- Triệt tiêu hoàn toàn vòng lặp bế tắc (circular deadlock) giữa thực thể cha và thực thể con.
+- Tự động xóa bộ nhớ đệm (Redis Cache Invalidation) cho danh sách đợt thi và ca thi liên quan.
 
 **Response (200 OK):** `ExamPeriodResponseDTO` với `status = "published"`.
 
@@ -2522,9 +2580,14 @@ ngược lại 409.
 |---|---|
 | **Endpoint** | `POST /api/v1/me/registrations` |
 | **Auth** | 🔐 JWT |
+| **Headers** | `Idempotency-Key`: string (Tùy chọn — UUID duy nhất từ client để kích hoạt bộ nhớ đệm Idempotency) |
 | **Use-case** | Thí sinh chọn ca thi → hệ thống tự động giữ ghế 15 phút → tạo đơn đăng ký `pending_payment` |
 
 > **⚠️ Quan trọng:** Ghế được giữ tối đa **15 phút**. Nếu không thanh toán trong thời gian này, ghế tự động được trả lại.
+
+**Cơ chế Idempotency & Race Condition (Double-click Safe):**
+1. **Khóa Idempotency (Redis Cache)**: Khi client đính kèm header `Idempotency-Key`, phản hồi thành công đầu tiên được cache tại Redis (TTL 5 phút). Bất kỳ request nào gửi lại cùng `Idempotency-Key` sẽ trả về ngay kết quả đã lưu mà không ghi lại DB.
+2. **Graceful Duplicate Resolution**: Khi xảy ra xung đột đăng ký trùng (`DUPLICATE_REGISTRATION`), nếu thí sinh đã có phiếu đăng ký ở trạng thái `pending_payment` cho ca thi đó, hệ thống sẽ tự động trả về phiếu đăng ký đó với HTTP 200/201 thay vì ném lỗi 409 Conflict.
 
 **Request Body:**
 
@@ -2538,7 +2601,7 @@ ngược lại 409.
 |---|---|---|---|---|
 | `exam_session_id` | `integer` | ✅ | Min 1 | ID ca thi muốn đăng ký |
 
-**Response (201 Created):**
+**Response (201 Created / 200 OK):**
 
 ```json
 {
@@ -2572,7 +2635,7 @@ ngược lại 409.
 | Code | Thông báo | Nguyên nhân |
 |---|---|---|
 | `409` | `"Không còn ghế trống"` | Hết chỗ |
-| `409` | `"Bạn đã đăng ký ca thi này"` | Đăng ký trùng |
+| `409` | `"Bạn đã đăng ký ca thi này rồi"` | Đã đăng ký và đã hoàn tất thanh toán (`confirmed`) từ trước |
 
 ---
 
@@ -2874,11 +2937,42 @@ Phân hệ **Kết quả Đăng ký (Registration Results)** cho phép Admin the
 - **Query Params:** `period_id` (tùy chọn), `session_id` (tùy chọn).
 - **Response (200 OK):** Mảng `SlotDiscrepancyDTO` liệt kê các ca thi có `confirmed_registrations != booked_seats`, `pending_payment_registrations != held_seats`, hoặc `unpaid_confirmed_registrations > 0`.
 
-#### 5.11.7. Xuất danh sách đăng ký (PDF / Excel CSV)
+#### 5.11.7. Xuất danh sách đăng ký thi HSK (Native Excel .xlsx / PDF / JSON .txt)
 - **Endpoint:** `GET /api/v1/admin/registration-results/export`
 - **Auth:** 🔐 JWT + Admin
-- **Query Params:** `period_id` hoặc `session_id` (bắt buộc ít nhất 1), `format` (`pdf` | `excel` | `csv`), `eligibility`, `registration_status`, `slot_scope`, `search`.
-- **Response (200 OK):** File binary `.pdf` (font Unicode Việt-Trung `NotoSerifSC`) hoặc `.csv` (có UTF-8 BOM mở trực tiếp bằng Microsoft Excel), đồng thời ghi nhận `EXPORT` trong `audit_logs`.
+- **Query Params:**
+  - `period_id` (int, tùy chọn): Lọc theo ID đợt thi.
+  - `session_id` (int, tùy chọn): Lọc theo ID ca thi (Bắt buộc ít nhất một trong hai: `period_id` hoặc `session_id`).
+  - `format` (string, bắt buộc): Định dạng xuất, chấp nhận: `excel` hoặc `xlsx` (Native OpenXML spreadsheet), `pdf` (Tài liệu in ấn A4), `json` hoặc `txt` (Dữ liệu JSON thô dạng văn bản), `csv` (tương thích ngược định dạng text/json).
+  - `eligibility` (string, tùy chọn): Lọc điều kiện dự thi (`eligible`, `ineligible`, `pending_review`, `all`).
+  - `registration_status` (string, tùy chọn): Lọc trạng thái đăng ký (`confirmed`, `pending_payment`, `cancelled`, `all`).
+  - `slot_scope` (string, tùy chọn): Lọc theo phạm vi đăng ký (`single`, `multiple`, `all`).
+  - `search` hoặc `search_query` (string, tùy chọn): Tìm kiếm từ khóa theo Tên thí sinh, CCCD, Số điện thoại hoặc Email.
+- **Header phản hồi:**
+  - `Content-Disposition: attachment; filename="ket-qua-dang-ky-DD-MM-YYYY.<ext>"` (Đặt tên động theo định dạng ngày thi của ca hoặc ngày hiện tại, loại bỏ hậu tố cứng `-dot-x`).
+  - `Content-Type`: 
+    - `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` (cho `.xlsx`)
+    - `application/pdf` (cho `.pdf`)
+    - `text/plain; charset=utf-8` (cho `.txt`)
+- **Kiến trúc High-Performance Streaming & Chống OOM**:
+  - Không nạp toàn bộ danh sách kết quả vào slice RAM. Pipeline sử dụng database cursor đọc từng dòng dữ liệu và stream trực tiếp ra socket qua `http.ResponseWriter`.
+  - **Excel (`.xlsx`)**: Sinh tệp OpenXML chuẩn bằng `excelize.StreamWriter`, thiết lập độ rộng cột trước khi stream từng dòng dữ liệu, giải phóng toàn bộ DOM cây cell khỏi RAM.
+  - **JSON (`.txt`)**: Ghi mảng JSON `[\n`, định dạng pretty-print từng bản ghi và định kỳ gọi `http.Flusher.Flush()` (mỗi 50 bản ghi) để giảm thiểu tối đa Time-To-First-Byte (TTFB).
+  - **PDF (`.pdf`)**: Phân trang động (22 dòng/trang) trực tiếp từ cursor và nhúng font Unicode `NotoSerifSC`.
+- **Bảo mật Dữ liệu (Decree 13/2023 Compliance)**:
+  - Tất cả danh sách xuất hàng loạt đều được che giấu PII tự động (`091***678`, `040***234`). Dữ liệu thô nguyên bản chỉ xem được qua endpoint chi tiết cá nhân có kiểm toán.
+- **Xử lý Ngoại lệ & Chống Treo Hệ thống**:
+  - **Phát hiện sớm 0 dòng**: Nếu bộ lọc trả về 0 bản ghi, hệ thống không xuất tệp rỗng mà trả về ngay HTTP 400 Bad Request:
+    ```json
+    {
+      "statusCode": 400,
+      "message": "Không có dữ liệu đăng ký phù hợp với bộ lọc đã chọn",
+      "error": "Bad Request"
+    }
+    ```
+  - **Timeout 30s**: Truy vấn được bọc bởi `context.WithTimeout(ctx, 30*time.Second)` tránh việc query phân tích treo connection pool.
+  - **Hủy tác vụ khi mất kết nối**: Chủ động bắt `ctx.Done()`, ngắt ngay lập tức truy vấn PostgreSQL và đóng cursor giải phóng tài nguyên server khi client ngắt kết nối giữa chừng.
+- **Ghi nhận Audit Log**: Tự động ghi nhật ký `EXPORT` với số lượng bản ghi thực tế được xuất vào bảng `audit_logs`.
 
 #### 5.11.8. Admin hủy đăng ký thi (Nhả ghế & kích hoạt hoàn tiền)
 - **Endpoint:** `POST /api/v1/admin/registrations/:id/cancel`
@@ -4330,13 +4424,19 @@ transaction PostgreSQL. Không sử dụng Redis.
 
 ## 9. Module Notification (Thông báo)
 
-### 9.1. Danh sách thông báo
+### 9.1. Danh sách thông báo (Hỗ trợ đồng bộ `after_id`)
 
 | | |
 |---|---|
 | **Endpoint** | `GET /api/v1/notifications` |
 | **Auth** | 🔐 JWT |
-| **Use-case** | Lấy danh sách thông báo hệ thống của người dùng |
+| **Use-case** | Lấy danh sách thông báo hệ thống của người dùng hiện tại. Khi WebSocket kết nối lại (`onopen`), truyền `?after_id=<max_local_id>` để lấy các thông báo bị lỡ trong thời gian rớt mạng |
+
+**Query Params (tùy chọn):**
+
+| Param | Kiểu | Bắt buộc | Mô tả |
+|---|---|---|---|
+| `after_id` | `integer` | ❌ | Chỉ trả về các thông báo có `id > after_id` (dùng cho REST fallback catch-up khi kết nối lại WebSocket) |
 
 **Response (200 OK):**
 
@@ -4345,12 +4445,17 @@ transaction PostgreSQL. Không sử dụng Redis.
   "success": true,
   "data": [
     {
-      "id": 1,
+      "id": 105,
+      "user_id": 42,
       "account_id": 42,
+      "role": "candidate",
+      "type": "PROFILE_REJECTED",
+      "title": "Hồ sơ của bạn đã bị từ chối",
+      "content": "Hồ sơ dự thi HSK của bạn đã bị từ chối. Lý do: Ảnh chân dung bị mờ",
+      "is_read": false,
       "channel": "push",
-      "content": "Bạn đã đăng ký thi HSK 1 thành công",
       "status": "pending",
-      "created_at": "2026-09-07T10:30:00+07:00"
+      "created_at": "2026-11-05T09:00:00Z"
     }
   ],
   "error": null,
@@ -4363,21 +4468,26 @@ transaction PostgreSQL. Không sử dụng Redis.
 | Field | Kiểu | Nullable | Mô tả |
 |---|---|---|---|
 | `id` | `integer` | ❌ | ID thông báo |
-| `account_id` | `integer` | ❌ | ID tài khoản |
+| `user_id` | `integer` | ❌ | ID tài khoản nhận thông báo |
+| `account_id` | `integer` | ❌ | ID tài khoản (alias tương thích ngược) |
+| `role` | `string` | ❌ | Vai trò nhận thông báo (`candidate`, `admin`) |
+| `type` | `string` | ❌ | Phân loại sự kiện: `PROFILE_REJECTED`, `PROFILE_APPROVED`, `EXAM_RESCHEDULED`, `PAYMENT_CONFIRMED`, `SYSTEM` |
+| `title` | `string` | ❌ | Tiêu đề ngắn hiển thị trên Chuông & Toast |
+| `content` | `string` | ❌ | Nội dung chi tiết thông báo |
+| `is_read` | `boolean` | ❌ | `true` nếu đã đọc, `false` nếu chưa đọc |
 | `channel` | `string` | ❌ | `email`, `sms`, `zalo`, `push` |
-| `content` | `string` | ❌ | Nội dung thông báo |
 | `status` | `string` | ❌ | `pending`, `sent`, `failed` |
-| `created_at` | `datetime` | ❌ | Thời điểm tạo |
+| `created_at` | `datetime` | ❌ | Thời điểm tạo (ISO 8601) |
 
 ---
 
-### 9.2. Đánh dấu đã đọc
+### 9.2. Đánh dấu đã đọc (Đồng bộ đa tab qua WebSocket)
 
 | | |
 |---|---|
-| **Endpoint** | `PUT /api/v1/notifications/:id/read` |
+| **Endpoint** | `PATCH /api/v1/notifications/:id/read` (hoặc `PUT /api/v1/notifications/:id/read`) |
 | **Auth** | 🔐 JWT |
-| **Use-case** | Đánh dấu thông báo đã đọc |
+| **Use-case** | Đánh dấu thông báo đã đọc (`is_read = true`) và phát sự kiện WebSocket `notification_read` tới mọi tab đang mở của người dùng đó |
 
 **Path Params:** `id` — ID thông báo (`integer`)
 
@@ -4386,7 +4496,11 @@ transaction PostgreSQL. Không sử dụng Redis.
 ```json
 {
   "success": true,
-  "data": { "message": "Đã đánh dấu thông báo là đã đọc" },
+  "data": {
+    "id": 105,
+    "is_read": true,
+    "message": "Đã đánh dấu thông báo là đã đọc"
+  },
   "error": null,
   "meta": null
 }
@@ -5062,13 +5176,16 @@ ngày thi, `publish_at` và trạng thái hiệu lực của đợt cha — **kh
 | 106 | `PATCH` | `/admin/deliveries/:id` | 🔐👑 | Certificate |
 | 107 | `POST` | `/webhooks/shipping/:courier` | HMAC | Certificate |
 | 108 | `GET` | `/notifications` | 🔐 | Notification |
-| 109 | `PUT` | `/notifications/:id/read` | 🔐 | Notification |
-| 110 | `GET` | `/locations/provinces` | 🔓 | Location |
-| 111 | `GET` | `/locations/provinces/:id/wards` | 🔓 | Location |
-| 112 | `GET` | `/locations/wards/:id/delivery-coverage` | 🔓 | Location |
-| 113 | `GET` | `/admin/locations/stats/candidates-by-province` | 🔐👑 | Location |
-| 114 | `POST` | `/admin/locations/wards/:id/merge` | 🔐👑 | Location |
-| 115 | `GET` | `/admin/audit-logs` | 🔐👑 | Audit |
+| 109 | `PATCH` / `PUT` | `/notifications/:id/read` | 🔐 | Notification |
+| 110 | `POST` | `/ws/ticket` | 🔐 | WebSocket |
+| 111 | `GET` | `/locations/provinces` | 🔓 | Location |
+| 112 | `GET` | `/locations/provinces/:id/wards` | 🔓 | Location |
+| 113 | `GET` | `/locations/wards/:id/delivery-coverage` | 🔓 | Location |
+| 114 | `GET` | `/admin/locations/stats/candidates-by-province` | 🔐👑 | Location |
+| 115 | `POST` | `/admin/locations/wards/:id/merge` | 🔐👑 | Location |
+| 116 | `GET` | `/admin/audit-logs` | 🔐👑 | Audit |
+| 117 | `POST` | `/cccd/extract` | 🔐 | CCCD OCR |
+| 118 | `GET` | `/cccd/jobs/:id` | 🔐 | CCCD OCR |
 
 > **Chú thích:** 🔓 = Public | 🔐 = JWT | 🔐👑 = JWT + Admin | HMAC = Webhook signature
 
@@ -5080,131 +5197,149 @@ ngày thi, `publish_at` và trạng thái hiệu lực của đợt cha — **kh
 
 ## 14. WebSocket Real-time Events
 
-Hệ thống hỗ trợ kết nối WebSocket để nhận các sự kiện real-time (cập nhật ghế, đăng ký, thanh toán…) mà **không cần reload trang**.
+Hệ thống hỗ trợ kết nối WebSocket trong kiến trúc **Single-Instance Modular Monolith** để nhận các sự kiện thời gian thực (thông báo cá nhân, đồng bộ đa tab, cập nhật ghế, đăng ký, thanh toán…) mà **không cần reload trang**.
 
-### 14.1. Kết nối WebSocket
+### 14.1. Cấp vé kết nối một lần (`POST /api/v1/ws/ticket`) & Handshake Bảo mật
+
+> **⚠️ Quy tắc bảo mật bắt buộc:** Server **TỪ CHỐI (`HTTP 401 Unauthorized`)** mọi kết nối WebSocket truyền JWT qua query string (`?token=<jwt>`) để ngăn chặn rò rỉ Access Token trong access log của Nginx/Proxy. Toàn bộ các hook phía frontend (`use-notification-ws.ts` cho thông báo toàn cục, `use-websocket.ts` cho đăng ký thi/dashboard) đều tuân thủ quy trình xin vé (Ticket Handshake) 2 bước dưới đây.
+
+#### Bước 1: Xin vé kết nối dùng 1 lần (One-Time Ticket)
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/ws/ticket` (hoặc `POST /ws/ticket`) |
+| **Auth** | 🔐 JWT (`Authorization: Bearer <access_token>`) |
+| **TTL** | **30 giây**, chỉ sử dụng **1 lần duy nhất** (atomic consume) |
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "ticket": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "expires_in": 30,
+    "expires_at": "2026-11-05T09:00:30Z"
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+#### Bước 2: Mở kết nối WebSocket
 
 | Thuộc tính | Giá trị |
 |---|---|
-| **URL** | `ws://<host>:<port>/ws?token=<jwt_access_token>` |
-| **Protocol** | WebSocket (RFC 6455) |
-| **Authentication** | JWT Access Token truyền qua **query parameter** `token` |
-| **Heartbeat** | Server gửi `ping` mỗi 54 giây, client cần trả `pong` |
+| **URL (Khuyên dùng)** | `ws://<host>:<port>/ws?ticket=<one_time_ticket>` |
+| **Phương thức dự phòng** | Kết nối `ws://<host>:<port>/ws` không tham số và gửi frame đầu tiên `{"type":"auth","token":"<jwt>"}` trong vòng **5 giây** |
+| **Giới hạn đa tab** | Tối đa **5 kết nối đồng thời** trên mỗi `account_id` (`MaxConnectionsPerUser = 5`). Kết nối thứ 6 sẽ tự động đẩy kết nối cũ nhất ra với mã đóng `4002` |
+| **Giới hạn bộ đệm** | Kênh gửi tối đa **256 tin nhắn/client** (`ClientSendBufferSize = 256`). Client chậm làm đầy bộ đệm sẽ bị ngắt kết nối ngay lập tức |
+| **Heartbeat** | Server gửi `ping` mỗi 54 giây, client tự động trả `pong` |
 
-#### Ví dụ kết nối (JavaScript):
+---
 
-```javascript
-// Kết nối WebSocket
-const token = localStorage.getItem("access_token");
-const ws = new WebSocket(`ws://localhost:8080/ws?token=${token}`);
+### 14.2. Bảng Mã Đóng Kết Nối Tùy Chỉnh (Custom WebSocket Close Codes)
 
-ws.onopen = () => {
-  console.log("[WS] Connected");
-};
+| Close Code | Hằng số Backend | Ý nghĩa | Hành vi bắt buộc phía Frontend |
+|---|---|---|---|
+| `4001` | `CloseCodeTokenExpired` | JWT hết hạn trong khi đang kết nối hoặc xác thực thất bại | Gọi silent refresh (`POST /api/v1/auth/refresh`), lấy vé mới từ `POST /api/v1/ws/ticket`, và kết nối lại với Exponential Backoff (`1s -> 2s -> 4s -> 8s -> tối đa 30s`) |
+| `4002` | `CloseCodeMaxConnEvicted` | Mở quá 5 tab/thiết bị đồng thời (tab cũ nhất bị thu hồi theo FIFO) | **Dừng** auto-reconnect trên tab bị thu hồi để tránh vòng lặp tranh chấp kết nối |
+| `4003` | `CloseCodeSessionTerminated` | Người dùng đã đăng xuất (`logout` / `logout-all`) hoặc tài khoản bị Admin vô hiệu hóa | **Dừng** auto-reconnect ngay lập tức và chuyển hướng về trang đăng nhập |
 
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  console.log("[WS] Event:", data);
+---
 
-  switch (data.type) {
-    case "seats_released":
-      // Reload danh sách ca thi để cập nhật số ghế
-      refetchSessions();
-      break;
-    case "registration_created":
-      // Cập nhật số ghế còn lại của session tương ứng
-      updateSlotCount(data.payload.session_id, -1);
-      break;
-    case "registration_cancelled":
-      // Cập nhật ghế được nhả
-      updateSlotCount(data.payload.session_id, +1);
-      break;
-    case "payment_confirmed":
-      // Cập nhật trạng thái đăng ký
-      updateRegistrationStatus(data.payload.registration_id, "confirmed");
-      break;
-  }
-};
+### 14.3. Event Types & Payload Schemas
 
-ws.onclose = (event) => {
-  console.log("[WS] Disconnected, reconnecting...");
-  // Implement reconnect logic (e.g. exponential backoff)
-};
-```
-
-### 14.2. Event Types (Loại sự kiện)
-
-Mỗi message nhận được qua WebSocket có cấu trúc JSON:
+Mỗi message nhận được qua WebSocket có cấu trúc JSON chuẩn (hỗ trợ đồng thời cặp trường `type`/`payload` và `event`/`data`):
 
 ```json
 {
   "type": "<event_type>",
+  "event": "<event_type>",
   "payload": { ... },
-  "timestamp": "2026-10-01T08:30:00Z"
+  "data": { ... },
+  "timestamp": "2026-11-05T09:00:00Z"
 }
 ```
 
-| Event Type | Mô tả | Payload |
-|---|---|---|
-| `registration_created` | Có thí sinh vừa đăng ký (giữ) 1 ghế | `{ registration_id, session_id, seat_id, status }` |
-| `registration_cancelled` | Đơn đăng ký bị hủy (thí sinh hủy tay hoặc hết hạn 15 phút) | `{ registration_id, seat_id, status }` |
-| `payment_confirmed` | Thanh toán thành công → ghế được chốt (booked) | `{ registration_id, seat_id, status }` |
-| `seats_released` | CronJob vừa giải phóng ghế quá hạn 15 phút | `{ released_count, message }` |
-| `seat_updated` | Ghế thay đổi trạng thái (reserved) | `{ session_id, seat_id, new_status }` |
-| `account_updated` | Thông tin tài khoản (profile/password) vừa được cập nhật | `{ account_id }` |
+| Event Type | Phạm vi gửi | Mô tả | Payload Schema |
+|---|---|---|---|
+| `NOTIFICATION_PAYLOAD` | Đích danh (`SendToUser`) | Thông báo thời gian thực mới (ví dụ: từ chối/duyệt hồ sơ, dời lịch thi) | `{ id, user_id, account_id, role, type, title, content, is_read, channel, status, created_at }` |
+| `notification_read` | Đích danh (`SendToUser` tới mọi tab của user) | Đồng bộ trạng thái đã đọc giữa nhiều tab khi người dùng click đọc ở 1 tab | `{ id: 105, user_id: 42, is_read: true }` |
+| `account_updated` | Đích danh (`SendToUser`) | Thông tin tài khoản hoặc mật khẩu của người dùng vừa cập nhật | `{ account_id: 42 }` |
+| `CCCD_EXTRACTED` | Đích danh (`SendToUser`) | Kết quả trích xuất & kiểm tra chéo CCCD/CMND bất đồng bộ (xem mục [19.6](#196-websocket-event-cccd_extracted)) | `IdCardResponseDTO { errorCode, errorMessage, requestId, elapsedMs, data[] }` |
+| `ocr_progress` | Đích danh (`SendToUser`) | Tiến trình xử lý OCR CCCD bất đồng bộ (`QUEUED`, `PROCESSING`) qua Redis Pub/Sub | `{ event: "ocr_progress", task_id, status, progress, timestamp }` |
+| `ocr_completed` | Đích danh (`SendToUser`) | Trích xuất văn bản CCCD thành công qua Redis Pub/Sub (chỉ chứa text, tuyệt đối không có biometrics) | `{ event: "ocr_completed", task_id, status: "COMPLETED", data: { id_number, full_name, dob, address, ... } }` |
+| `ocr_failed` | Đích danh (`SendToUser`) | Trích xuất văn bản CCCD thất bại | `{ event: "ocr_failed", task_id, status: "FAILED", error, timestamp }` |
+| `seat_updated` | Broadcast (Debounced `250ms`) | Ghế thay đổi trạng thái (được gộp theo cửa sổ 250ms chống bão broadcast) | `{ session_id, seat_id, new_status }` |
+| `registration_created` | Broadcast | Có thí sinh vừa đăng ký (giữ) 1 ghế | `{ registration_id, session_id, seat_id, status }` |
+| `registration_cancelled` | Broadcast | Đơn đăng ký bị hủy (thí sinh hủy tay hoặc hết hạn 15 phút) | `{ registration_id, seat_id, status }` |
+| `payment_confirmed` | Broadcast | Thanh toán thành công → ghế được chốt (`booked`) | `{ registration_id, seat_id, status }` |
+| `seats_released` | Broadcast | CronJob vừa giải phóng ghế quá hạn 15 phút | `{ released_count, message }` |
 
-### 14.3. Cơ chế CronJob tự động giải phóng ghế
-
-- **Tần suất:** Mỗi **60 giây**, hệ thống tự động quét database.
-- **Logic:** Tất cả ghế có trạng thái `held` mà `exam_seat_held_until < NOW()` sẽ được:
-  1. Đặt lại thành `available` (ghế trống)
-  2. Đơn đăng ký tương ứng chuyển thành `cancelled`
-  3. Phát sự kiện WebSocket `seats_released` để FE cập nhật UI ngay lập tức
-- **Kết quả:** Thí sinh không thanh toán trong 15 phút → ghế tự động được nhả cho người khác đăng ký.
-
-### 14.4. Xử lý reconnect phía Frontend
-
-WebSocket có thể bị ngắt do mạng không ổn định. Frontend cần implement **auto-reconnect** với exponential backoff:
-
-```javascript
-function connectWS(token, onMessage) {
-  let retryCount = 0;
-  const maxRetries = 10;
-
-  function connect() {
-    const ws = new WebSocket(`ws://localhost:8080/ws?token=${token}`);
-
-    ws.onopen = () => {
-      console.log("[WS] Connected");
-      retryCount = 0; // Reset retry counter on success
-    };
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      onMessage(data);
-    };
-
-    ws.onclose = () => {
-      if (retryCount < maxRetries) {
-        const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
-        console.log(`[WS] Reconnecting in ${delay}ms...`);
-        setTimeout(connect, delay);
-        retryCount++;
-      }
-    };
-
-    return ws;
-  }
-
-  return connect();
+#### Ví dụ Payload `NOTIFICATION_PAYLOAD`:
+```json
+{
+  "type": "NOTIFICATION_PAYLOAD",
+  "event": "NOTIFICATION_PAYLOAD",
+  "payload": {
+    "id": 105,
+    "user_id": 42,
+    "account_id": 42,
+    "role": "candidate",
+    "type": "PROFILE_REJECTED",
+    "title": "Hồ sơ của bạn đã bị từ chối",
+    "content": "Hồ sơ dự thi HSK của bạn đã bị từ chối. Lý do: Ảnh chân dung bị mờ",
+    "is_read": false,
+    "channel": "push",
+    "status": "pending",
+    "created_at": "2026-11-05T09:00:00Z"
+  },
+  "data": {
+    "id": 105,
+    "user_id": 42,
+    "account_id": 42,
+    "role": "candidate",
+    "type": "PROFILE_REJECTED",
+    "title": "Hồ sơ của bạn đã bị từ chối",
+    "content": "Hồ sơ dự thi HSK của bạn đã bị từ chối. Lý do: Ảnh chân dung bị mờ",
+    "is_read": false,
+    "channel": "push",
+    "status": "pending",
+    "created_at": "2026-11-05T09:00:00Z"
+  },
+  "timestamp": "2026-11-05T09:00:00Z"
 }
 ```
 
-### 14.5. Lưu ý quan trọng
+#### Ví dụ Payload `notification_read` (Đồng bộ đa tab):
+```json
+{
+  "type": "notification_read",
+  "event": "notification_read",
+  "payload": {
+    "id": 105,
+    "user_id": 42,
+    "is_read": true
+  },
+  "data": {
+    "id": 105,
+    "user_id": 42,
+    "is_read": true
+  },
+  "timestamp": "2026-11-05T09:01:10Z"
+}
+```
 
-- **Không gửi dữ liệu lên WS:** Đây là kênh **broadcast một chiều** (server → client). Client chỉ nhận, không gửi.
-- **Dùng `make db-build` thay vì `make db-rs`:** Để tránh mất dữ liệu khi build lại code, luôn dùng `make db-build` (chỉ rebuild API image, giữ nguyên DB volume).
-- **Token hết hạn:** Nếu JWT token hết hạn, server sẽ từ chối kết nối WS. Frontend cần refresh token trước khi reconnect.
+### 14.4. Quy trình Kết nối, Đồng bộ Tin nhắn bị lỡ & Reconnect chuẩn phía Frontend
+
+1. **Xin vé & Kết nối**: Gọi `POST /api/v1/ws/ticket` lấy `ticket`, mở `new WebSocket("ws://host/ws?ticket=" + ticket)`.
+2. **Đồng bộ khi mở kết nối (`onopen`)**: Gọi ngay `GET /api/v1/notifications?after_id=<max_local_id>` và gộp vào `Map<id, NotificationItem>` để chống mất tin khi rớt mạng và khử trùng lặp.
+3. **Đồng bộ đọc đa tab (`onmessage`)**: Khi nhận `event === "notification_read"`, đánh dấu `is_read = true` cho `id` tương ứng và giảm `unreadCount` ngay lập tức mà không cần gọi lại API.
+4. **Xử lý hết hạn Token (`onclose` mã `4001`)**: Tự động gọi `POST /api/v1/auth/refresh`, xin vé WS mới và kết nối lại với Exponential Backoff.
+
+### 14.5. Lưu ý vận hành & Đóng gói Container
+- **Dùng `make db-build` (hoặc `docker-compose up --build -d api`) thay vì `make db-rs`**: Để tránh mất dữ liệu khi build lại code monolith, luôn dùng `make db-build` (chỉ rebuild API image, giữ nguyên DB volume).
 
 ---
 
@@ -5905,4 +6040,337 @@ Admin có thể chủ động kích hoạt làm mới cache trên giao diện qu
 | **Làm mới cache Địa điểm** | `POST /api/v1/admin/locations/clear-cache` | 🔐 Admin | Xóa `hsk:loc:provinces`, `hsk:loc:wards:*`, `hsk:loc:coverage:*` |
 | **Làm mới cache Điểm thi** | `POST /api/v1/admin/results/clear-cache` | 🔐 Admin | Xóa `hsk:res:score:*` và `hsk:result:*` |
 
+---
 
+## 18. Real-Time Session Invalidation, WebSocket Event Payloads & Registration State Machine
+
+### 18.1. Lỗi Đăng Nhập Khi Tài Khoản Bị Vô Hiệu Hóa (`HTTP 403 ACCOUNT_DEACTIVATED`)
+
+Khi thí sinh hoặc người dùng có tài khoản ở trạng thái `disabled` / `deactivated` (hoặc `account_is_deleted = TRUE`) thực hiện đăng nhập tại `POST /api/v1/auth/login`, hệ thống từ chối ngay lập tức với **HTTP 403 Forbidden**:
+
+```json
+{
+  "success": false,
+  "code": "ACCOUNT_DEACTIVATED",
+  "message": "Tài khoản của bạn đã bị vô hiệu hóa. Vui lòng liên hệ Quản trị viên để được hỗ trợ.",
+  "msg": "Tài khoản của bạn đã bị vô hiệu hóa. Vui lòng liên hệ Quản trị viên để được hỗ trợ.",
+  "data": null
+}
+```
+
+### 18.2. Vô Hiệu Hóa Tài Khoản & Thu Hồi Phiên Tức Thì (`FORCE_LOGOUT`)
+
+- **Endpoints:**
+  - `POST /api/v1/admin/candidates/:id/deactivate` (truyền `candidate_id` hoặc `account_id`)
+  - `POST /api/v1/admin/accounts/:id/deactivate`
+  - `DELETE /api/v1/admin/delete-account/:id`
+- **Hành vi đồng bộ tức thì:**
+  1. Cập nhật `accounts.account_status = 'disabled'`, `account_is_deleted = TRUE` và thu hồi toàn bộ `auth_sessions` + ghi dấu thu hồi JWT trên Redis/in-memory (`RevokeAccountTokens`).
+  2. Đẩy sự kiện WebSocket `FORCE_LOGOUT` trực tiếp tới toàn bộ kết nối đang mở của `account_id` đó.
+  3. Đóng cưỡng bức toàn bộ kết nối WebSocket của `account_id` với mã đóng `4002` (`CloseCodeSessionTerminated`).
+
+**Schema Payload WebSocket `FORCE_LOGOUT`:**
+
+```json
+{
+  "event": "FORCE_LOGOUT",
+  "data": {
+    "code": "ACCOUNT_DEACTIVATED",
+    "message": "Tài khoản của bạn đã bị vô hiệu hóa. Vui lòng liên hệ Quản trị viên để được hỗ trợ.",
+    "reason": "Lý do vô hiệu hóa từ Quản trị viên"
+  },
+  "timestamp": "2026-11-05T22:30:00Z"
+}
+```
+
+### 18.3. Đồng Bộ Trạng Thái Hồ Sơ Thời Gian Thực (`PROFILE_STATUS_UPDATED`) & Khóa Đăng Ký Thi
+
+Mọi thao tác xét duyệt hồ sơ của Admin đều phát đồng thời sự kiện `NOTIFICATION_PAYLOAD` và `PROFILE_STATUS_UPDATED` tới `account_id` của thí sinh:
+
+| Thao tác Admin | Endpoint | Sự kiện Notification | Sự kiện Trạng thái (`PROFILE_STATUS_UPDATED`) | Trạng thái Đăng ký (`/dang-ky-thi`) |
+|---|---|---|---|---|
+| **Phê duyệt / Phê duyệt lại** | `PUT /api/v1/admin/candidates/:id/approve-doc` | `PROFILE_APPROVED` | `status: "verified"`, `eligible: true` | **Mở khóa (Unlocked)** tức thì không cần F5 |
+| **Mở lại xét duyệt** | `POST /api/v1/admin/candidates/:id/reopen-review` | `PROFILE_REOPENED` | `status: "pending"`, `eligible: false` | **Khóa (Locked)** — Badge *"Hồ sơ đang chờ xét duyệt lại"* |
+| **Từ chối / Thu hồi phê duyệt** | `PUT /api/v1/admin/candidates/:id/reject-doc` / `POST .../revoke-approval` | `PROFILE_REJECTED` | `status: "rejected"`, `eligible: false` | **Khóa (Locked)** — Yêu cầu nộp lại giấy tờ |
+| **Chuyển ca thi** | `POST /api/v1/admin/registrations/:id/transfer` | `SHIFT_CHANGED` | Sự kiện `SHIFT_CHANGED` kèm `from_session_id`, `to_session_id`, `reason` | Cập nhật thông tin ca thi thời gian thực |
+
+**Schema Payload WebSocket `PROFILE_STATUS_UPDATED`:**
+
+```json
+{
+  "event": "PROFILE_STATUS_UPDATED",
+  "data": {
+    "status": "verified",
+    "eligible": true,
+    "reason": ""
+  },
+  "timestamp": "2026-11-05T22:30:00Z"
+}
+```
+
+
+
+
+---
+
+## 19. Module CCCD OCR (Trích xuất & Xác thực CCCD/CMND bằng AI)
+
+> **Package:** `internal/cccd` · **Base path:** `/api/v1/cccd` · **Auth:** 🔐 JWT (mọi vai trò đã đăng nhập)
+> **Nhà cung cấp AI:** Google Gemini (`GEMINI_MODEL`, mặc định `gemini-2.5-flash`) qua REST `generateContent` với Structured JSON Output.
+> **Định dạng kết quả:** Tương thích FPT.AI Reader (`errorCode`, `errorMessage`, `data[]`), bổ sung `status`/`issues`/`label` cho từng trường.
+
+### 19.1. Tổng quan & Cơ chế bất đồng bộ
+
+Một lần trích xuất (bao gồm retry và **Pass 2** khi phát hiện mâu thuẫn chéo giữa số CCCD ↔ giới tính/năm sinh) có thể mất tới ~48 giây, vượt `WriteTimeout: 15s` của HTTP server. Vì vậy endpoint mặc định chạy **bất đồng bộ**:
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant API as Handler (internal/cccd)
+    participant Q as Worker Pool (CCCD_MAX_CONCURRENCY)
+    participant AI as Gemini API
+    participant WS as WebSocket Hub
+    FE->>API: POST /api/v1/cccd/extract (multipart: image)
+    API->>API: Kiểm tra nhanh (có file, ≤ 5MB)
+    API->>Q: Enqueue job (request_id)
+    API-->>FE: 202 Accepted { request_id, status: "processing" }
+    Q->>Q: Tiền xử lý ảnh trong RAM (độ phân giải, độ nét, độ sáng, resize ≤ 1600px)
+    Q->>AI: Pass 1 (+ Pass 2 nếu có mâu thuẫn)
+    AI-->>Q: RawExtraction JSON
+    Q->>Q: Chuẩn hóa + đối chiếu chéo (Điều 21 Luật Căn cước 2023)
+    Q->>WS: SendToUser(account_id, CCCD_EXTRACTED, IdCardResponseDTO)
+    WS-->>FE: Event CCCD_EXTRACTED
+    FE->>API: (Dự phòng) GET /api/v1/cccd/jobs/:request_id
+```
+
+- Kết quả tác vụ lưu **trong bộ nhớ** (không ghi DB, không ghi ảnh ra đĩa), tự hết hạn sau **10 phút**.
+- Chỉ **chủ sở hữu** (`account_id` trong JWT) mới tra cứu được tác vụ của mình.
+- **Quyền riêng tư (Nghị định 13/2023):** server chỉ log `request_id`, `error_code`, `decision`, `type_new`, `elapsed_ms` — tuyệt đối không log số giấy tờ, họ tên, ngày sinh, địa chỉ.
+
+### 19.2. `POST /api/v1/cccd/upload` — Tải ảnh CCCD xử lý bất đồng bộ siêu tốc (< 50ms)
+
+Endpoint Ingestion tốc độ cao (< 50ms), tiếp nhận file ảnh từ máy cục bộ của người dùng, xác thực kích thước và phần mở rộng, lưu tạm thời vào phân vùng an toàn, sinh `task_id` (UUID v4), đẩy vào Go Worker Pool và trả về ngay `202 Accepted`. Tiến trình xử lý (`QUEUED` → `PROCESSING` → `COMPLETED`/`FAILED`) được đẩy thời gian thực qua Redis Pub/Sub và WebSocket Hub.
+
+**Request** — `Content-Type: multipart/form-data`
+
+| Thành phần | Vị trí | Bắt buộc | Mô tả |
+|---|---|---|---|
+| `image` (hoặc `file`) | form-data | ✅ | File ảnh CCCD (.jpg, .jpeg, .png), ≤ 5 MB |
+| `side` | form-data / query | ❌ | Mặt thẻ cần quét: `"front"` (mặc định, mặt trước) hoặc `"back"` (mặt sau) |
+
+**Response 202 Accepted** (Phản hồi tức thì < 50ms)
+
+```json
+{
+  "success": true,
+  "data": {
+    "task_id": "c1f7a0b2-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+    "status": "QUEUED",
+    "message": "Đã tiếp nhận ảnh CCCD, tác vụ đang được xử lý trong nền"
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+**WebSocket Events nhận được:**
+1. Khi vào hàng đợi: `{ "event": "ocr_progress", "task_id": "...", "status": "QUEUED", "progress": 10 }`
+2. Khi bắt đầu trích xuất: `{ "event": "ocr_progress", "task_id": "...", "status": "PROCESSING", "progress": 50 }`
+3. Khi hoàn tất mặt trước (`side = "front"`):
+```json
+{
+  "event": "ocr_completed",
+  "task_id": "c1f7a0b2-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+  "status": "COMPLETED",
+  "side": "front",
+  "data": {
+    "side": "front",
+    "id_number": "040203012345",
+    "full_name": "NGUYỄN VĂN AN",
+    "dob": "15/03/2003",
+    "gender": "Nam",
+    "sex": "Nam",
+    "address": "Số 12 Lê Lợi, P. Hà Huy Tập, TP. Vinh, Nghệ An",
+    "address_province": "Nghệ An",
+    "address_district": "TP. Vinh",
+    "address_ward": "P. Hà Huy Tập",
+    "address_detail": "Số 12 Lê Lợi",
+    "home_town": "Nghệ An",
+    "issue_date": "15/03/2021",
+    "expiry_date": "15/03/2028"
+  }
+}
+```
+4. Khi hoàn tất mặt sau (`side = "back"`):
+```json
+{
+  "event": "ocr_back_completed",
+  "task_id": "d2e8b1c3-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+  "status": "COMPLETED",
+  "side": "back",
+  "data": {
+    "side": "back",
+    "issue_date": "15/03/2021",
+    "place_of_issue": "Cục Cảnh sát QLHC về TTXH"
+  }
+}
+```
+
+> **TUYỆT ĐỐI KHÔNG BIOMETRICS:** Dữ liệu trích xuất hoàn toàn là dạng văn bản (ID, Họ tên, Ngày sinh, Địa chỉ...). Không có khuôn mặt hay sinh trắc học để phục vụ việc xét duyệt ảnh thủ công bởi Hội đồng tuyển sinh.
+
+---
+
+### 19.3. `POST /api/v1/cccd/extract` — Gửi ảnh trích xuất (Tương thích FPT.AI Reader)
+
+**Request** — `Content-Type: multipart/form-data`
+
+| Thành phần | Vị trí | Bắt buộc | Mô tả |
+|---|---|---|---|
+| `image` (hoặc `file`) | form-data | ✅ | Ảnh 1 mặt thẻ (JPEG/PNG/GIF), ≤ 5 MB, tối thiểu 640×480 |
+| `sync` | query | ❌ | `true` để chờ kết quả đồng bộ (chỉ dùng cho debug/kiểm thử; có thể bị cắt bởi WriteTimeout) |
+| `X-Request-ID` | header | ❌ | Mã tác vụ do client tự sinh; nếu bỏ trống server tự sinh 12 ký tự hex |
+
+**Response 202 Accepted** (mặc định)
+
+```json
+{
+  "success": true,
+  "data": {
+    "request_id": "a1b2c3d4e5f6",
+    "status": "processing",
+    "message": "Đã tiếp nhận ảnh. Kết quả sẽ được gửi qua WebSocket (CCCD_EXTRACTED).",
+    "created_at": "2026-11-07T08:30:00Z"
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+**Response 200 OK** (khi `?sync=true`) — `data` là `IdCardResponseDTO` (xem 19.4). Lưu ý: lỗi nghiệp vụ (không phải thẻ, thiếu góc…) vẫn trả HTTP 200 với `data.errorCode != 0`, giống FPT.AI Reader.
+
+**Lỗi HTTP**
+
+| HTTP | Khi nào | `error` |
+|---|---|---|
+| 400 | Thiếu file / không đọc được file / ảnh > 5 MB | `"Thiếu file ảnh trong request"`, `"Ảnh vượt quá 5 MB"`… |
+| 401 | Thiếu hoặc sai JWT | — |
+| 503 | Hàng đợi (128 tác vụ) đã đầy | `"Hệ thống đọc giấy tờ đang quá tải, vui lòng thử lại sau"` |
+
+### 19.3. `GET /api/v1/cccd/jobs/:id` — Tra cứu tác vụ (polling dự phòng)
+
+Dùng khi Frontend bị lỡ event WebSocket (mất kết nối, reload trang).
+
+**Response 200 OK**
+
+```json
+{
+  "success": true,
+  "data": {
+    "request_id": "a1b2c3d4e5f6",
+    "status": "completed",
+    "message": "Trích xuất thông tin giấy tờ tùy thân thành công",
+    "created_at": "2026-11-07T08:30:00Z",
+    "completed_at": "2026-11-07T08:30:09Z",
+    "elapsed_ms": 8734,
+    "data": { "errorCode": 0, "errorMessage": "", "requestId": "a1b2c3d4e5f6", "elapsedMs": 8734, "data": [ { "...": "IdCardDataDTO" } ] }
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+| `status` | Ý nghĩa | `data` |
+|---|---|---|
+| `processing` | Đang chờ/đang xử lý | không có |
+| `completed` | Thành công | `IdCardResponseDTO` với `errorCode = 0` |
+| `failed` | Lỗi nghiệp vụ hoặc AI | `IdCardResponseDTO` với `errorCode != 0`, `data: []`; kèm `error`, `error_code` |
+
+**Lỗi:** `404` — `"Không tìm thấy tác vụ đọc giấy tờ hoặc tác vụ đã hết hạn"` (không tồn tại, hết hạn, hoặc thuộc tài khoản khác).
+
+### 19.4. Cấu trúc `IdCardResponseDTO`
+
+```json
+{
+  "errorCode": 0,
+  "errorMessage": "",
+  "requestId": "a1b2c3d4e5f6",
+  "elapsedMs": 8734,
+  "data": [
+    {
+      "type": "new",
+      "type_new": "cccd_12_front",
+      "id":   { "value": "040203012345", "prob": 0.97, "status": "ok", "issues": [], "label": "Số CCCD" },
+      "name": { "value": "NGUYỄN VĂN AN", "prob": 0.97, "status": "ok", "issues": [], "label": "Họ và tên" },
+      "dob":  { "value": "15/03/2003", "prob": 0.97, "status": "ok", "issues": [], "label": "Ngày sinh" },
+      "sex":  { "value": "Nam", "prob": 0.97, "status": "ok", "issues": [], "label": "Giới tính" },
+      "nationality": { "value": "Việt Nam", "...": "..." },
+      "home":    { "...": "..." },
+      "address": { "...": "..." },
+      "address_entities": { "province": { "...": "..." }, "district": { "...": "..." }, "ward": { "...": "..." }, "street": { "...": "..." } },
+      "doe":       { "value": "15/03/2028", "...": "..." },
+      "ethnicity": { "value": null, "prob": 0, "status": "n/a", "issues": [], "label": "Dân tộc" },
+      "religion":  { "status": "n/a", "...": "..." },
+      "features":  { "status": "n/a", "...": "..." },
+      "issue_date":{ "status": "n/a", "...": "..." },
+      "issue_loc": { "status": "n/a", "...": "..." },
+      "decision": "accept",
+      "warnings": []
+    }
+  ]
+}
+```
+
+**`FieldValueDTO`**: `value` (chuỗi đã chuẩn hóa hoặc `null`), `prob` (độ tin cậy heuristic 0–1), `status`, `issues` (danh sách cảnh báo tiếng Việt), `label` (nhãn đúng theo loại thẻ).
+
+| Enum | Giá trị |
+|---|---|
+| `type` | `old`, `old_back`, `new`, `new_back` |
+| `type_new` | `cmnd_09_front`, `cmnd_12_front`, `cccd_12_front`, `old_back`, `new_back`, `can_cuoc_2023_front`, `can_cuoc_2023_back` |
+| `status` (trường) | `ok` (hợp lệ) · `review` (nên cho người dùng kiểm tra) · `invalid` (vi phạm luật cứng) · `missing` (có trên thẻ nhưng không đọc được) · `n/a` (không tồn tại trên mặt thẻ này) |
+| `decision` (thẻ) | `accept` (tự điền form) · `review` (điền form nhưng bắt buộc người dùng xác nhận/sửa) |
+| `status` (tác vụ) | `processing`, `completed`, `failed` (`pending` dự phòng) |
+
+> [!IMPORTANT]
+> Frontend **không được** tự động chấp nhận hồ sơ chỉ dựa vào `decision = "accept"`. Kết quả OCR chỉ dùng để **điền sẵn form**; thí sinh vẫn phải xác nhận và Admin vẫn duyệt hồ sơ theo quy trình module Candidate.
+
+### 19.5. Bảng mã lỗi `errorCode`
+
+| `errorCode` | Ý nghĩa | Gợi ý xử lý phía FE |
+|---|---|---|
+| `0` | Thành công | Điền form từ `data[0]` |
+| `1` | Thiếu ảnh / sai tham số | Yêu cầu chọn lại ảnh |
+| `2` | Giấy tờ bị thiếu góc | "Vui lòng chụp đủ 4 góc thẻ" |
+| `3` | Không tìm thấy giấy tờ / không xác định được loại, mặt thẻ | Yêu cầu chụp lại đúng giấy tờ |
+| `7` | File không phải ảnh | Chọn file ảnh JPEG/PNG |
+| `8` | Ảnh hỏng / định dạng không hỗ trợ | Chọn ảnh khác |
+| `11` | Ảnh vượt quá 5 MB | Nén/giảm kích thước ảnh |
+| `12` | Độ phân giải quá thấp (< 640×480) | Chụp lại gần hơn |
+| `20` | Lỗi nhà cung cấp AI / chưa cấu hình `GEMINI_API_KEY` / quá tải | Thử lại sau hoặc nhập tay |
+| `21` | Quá thời gian chờ AI | Thử lại |
+| `22` | AI trả về sai cấu trúc | Thử lại |
+| `99` | Lỗi hệ thống | Thử lại / nhập tay |
+
+### 19.6. WebSocket Event `CCCD_EXTRACTED`
+
+Gửi đích danh (`SendToUser`) tới mọi tab của `account_id` đã gửi ảnh, khi tác vụ kết thúc (thành công **hoặc** thất bại). `payload`/`data` chính là `IdCardResponseDTO`; FE đối chiếu `requestId` với `request_id` nhận được ở bước 202.
+
+```json
+{
+  "type": "CCCD_EXTRACTED",
+  "event": "CCCD_EXTRACTED",
+  "payload": { "errorCode": 0, "errorMessage": "", "requestId": "a1b2c3d4e5f6", "elapsedMs": 8734, "data": [ { "...": "IdCardDataDTO" } ] },
+  "data":    { "...": "giống payload" },
+  "timestamp": "2026-11-07T08:30:09Z"
+}
+```
+
+### 19.7. Biến môi trường
+
+| Biến | Mặc định | Mô tả |
+|---|---|---|
+| `GEMINI_API_KEY` | *(rỗng)* | API key Google AI Studio. Rỗng → module vẫn khởi động nhưng mọi tác vụ trả `errorCode = 20` |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Model Gemini dùng để trích xuất |
+| `GEMINI_TIMEOUT_S` | `45` | Timeout mỗi lần gọi Gemini (giây). Timeout tổng của 1 tác vụ = `max(60, 2×GEMINI_TIMEOUT_S + 20)` |
+| `CCCD_MAX_CONCURRENCY` | `4` | Số worker nền và số lời gọi Gemini đồng thời tối đa |
+
+Ngưỡng ảnh cố định trong `cccd.DefaultConfig()`: tối đa 5 MB, tối thiểu 640×480, resize cạnh dài ≤ 1600px, retry Gemini 2 lần (backoff 1s/2s, 3s/6s khi gặp HTTP 429), bật Pass 2 khi mâu thuẫn.
