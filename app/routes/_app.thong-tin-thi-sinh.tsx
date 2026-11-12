@@ -229,25 +229,26 @@ function CandidateFormsWrapper({
 
   // ─── Primary Call-To-Action Guest-First OCR Scanner ─────────────────────────
   const dispatchOCRAutoFill = React.useCallback((ocrData: OCRResultData) => {
-    if (ocrData.id_number) {
+    if (ocrData?.id_number) {
       setScannedCccd(ocrData.id_number.trim());
     }
+    const rawSex = ocrData?.gender ?? ocrData?.sex;
     const inferredGender = inferGenderFromOCR(
-      ocrData.gender || ocrData.sex,
-      ocrData.id_number
+      rawSex,
+      ocrData?.id_number
     );
     if (typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("hsk:ocr-autofill-profile", {
           detail: {
-            side: ocrData.side ?? "front",
-            id_number: ocrData.id_number,
-            full_name: ocrData.full_name,
-            dob: normalizeOCRDateToISO(ocrData.dob),
+            side: ocrData?.side ?? "front",
+            id_number: ocrData?.id_number ?? null,
+            full_name: ocrData?.full_name ?? null,
+            dob: normalizeOCRDateToISO(ocrData?.dob),
             gender: inferredGender ?? null,
-            ethnicity: ocrData.ethnicity ?? null,
-            religion: ocrData.religion ?? null,
-            nationality: ocrData.nationality ?? null,
+            ethnicity: ocrData?.ethnicity ?? null,
+            religion: ocrData?.religion ?? null,
+            nationality: ocrData?.nationality ?? null,
           },
         })
       );

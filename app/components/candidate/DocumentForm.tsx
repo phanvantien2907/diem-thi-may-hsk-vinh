@@ -58,6 +58,7 @@ import {
   splitVietnameseAddressClientFallback,
   type OCRResultData,
 } from "~/hooks/useOCRScanner";
+import { mergeStandardWardsFallback } from "~/lib/constants/locations";
 import { toast } from "~/components/ui/toast";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -114,7 +115,13 @@ export const DocumentForm = React.memo(function DocumentForm({
   userCccd,
 }: DocumentFormProps) {
   // Province/Ward state
-  const [wards, setWards] = React.useState<Ward[]>(initialWards);
+  const [wards, setWards] = React.useState<Ward[]>(() =>
+    mergeStandardWardsFallback(
+      initialWards,
+      document?.province_id ? String(document.province_id) : "",
+      provinces
+    )
+  );
   const [selectedProvinceId, setSelectedProvinceId] = React.useState<string>(
     document?.province_id ? String(document.province_id) : ""
   );
@@ -557,8 +564,13 @@ export const DocumentForm = React.memo(function DocumentForm({
 
     // Reuse initial wards if the selected province is the same as the initial document's province
     if (document?.province_id && selectedProvinceId === String(document.province_id)) {
-      setWards(initialWards);
-      applyPendingWardMatch(initialWards, selectedProvinceId);
+      const mergedInitial = mergeStandardWardsFallback(
+        initialWards,
+        selectedProvinceId,
+        provinces
+      );
+      setWards(mergedInitial);
+      applyPendingWardMatch(mergedInitial, selectedProvinceId);
       return;
     }
 
@@ -567,12 +579,28 @@ export const DocumentForm = React.memo(function DocumentForm({
       .then((res) => res.json())
       .then((result: { data: Ward[] }) => {
         const loadedWards = result.data ?? [];
-        setWards(loadedWards);
-        applyPendingWardMatch(loadedWards, selectedProvinceId);
+        const mergedWards = mergeStandardWardsFallback(
+          loadedWards,
+          selectedProvinceId,
+          provinces
+        );
+        setWards(mergedWards);
+        applyPendingWardMatch(mergedWards, selectedProvinceId);
       })
-      .catch(console.error)
+      .catch((err) => {
+        console.error(err);
+        const fallbackWards = mergeStandardWardsFallback(
+          [],
+          selectedProvinceId,
+          provinces
+        );
+        if (fallbackWards.length > 0) {
+          setWards(fallbackWards);
+          applyPendingWardMatch(fallbackWards, selectedProvinceId);
+        }
+      })
       .finally(() => setLoadingWards(false));
-  }, [selectedProvinceId, apiBaseUrl, document?.province_id, initialWards, applyPendingWardMatch]);
+  }, [selectedProvinceId, apiBaseUrl, document?.province_id, initialWards, provinces, applyPendingWardMatch]);
 
   // ─── Chọn file cục bộ (chưa gửi lên Cloudinary) ─────────────────────────────
   function handleFileSelect(

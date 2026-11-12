@@ -311,11 +311,21 @@ export function matchWardByName<T extends { id: number; name: string }>(
  * Infers candidate gender ("male" | "female") from OCR `sex` ("Nam" / "Nữ")
  * or falls back to the 4th digit of a 12-digit Vietnamese CCCD number
  * (even digit = male, odd digit = female).
+ *
+ * CRITICAL LOGIC FIX:
+ * Legacy 9-digit CMNDs physically DO NOT have a gender field printed on them.
+ * Under no circumstances may gender be inferred or hallucinated for a 9-digit ID.
  */
 export function inferGenderFromOCR(
   rawSex?: string | null,
   idNumber?: string | null
 ): "male" | "female" | undefined {
+  const cleanId = (idNumber ?? "").trim();
+  // 9-digit CMND physically has NO gender on card. Never infer or hallucinate.
+  if (/^\d{9}$/.test(cleanId)) {
+    return undefined;
+  }
+
   if (rawSex) {
     const normalized = rawSex
       .trim()
@@ -330,7 +340,8 @@ export function inferGenderFromOCR(
       return "female";
     }
   }
-  const cleanId = (idNumber || "").trim();
+
+  // Older 12-digit barcode CCCDs (2014) or chip cards: derive from 4th digit if rawSex was omitted
   if (/^\d{12}$/.test(cleanId)) {
     const genderDigit = Number(cleanId[3]);
     if (!Number.isNaN(genderDigit)) {

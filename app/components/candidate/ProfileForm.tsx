@@ -137,35 +137,36 @@ export const ProfileForm = React.memo(function ProfileForm({
           shouldTouch: true,
         });
       }
-      if (detail.full_name) {
+      if (detail?.full_name) {
         setValue("full_name", detail.full_name.trim(), {
           shouldValidate: true,
           shouldDirty: true,
           shouldTouch: true,
         });
       }
-      if (detail.dob) {
+      if (detail?.dob) {
         setValue("dob", detail.dob, {
           shouldValidate: true,
           shouldDirty: true,
           shouldTouch: true,
         });
       }
-      if (detail.gender === "male" || detail.gender === "female") {
+      if (detail?.gender === "male" || detail?.gender === "female") {
         setValue("gender", detail.gender, {
           shouldValidate: true,
           shouldDirty: true,
           shouldTouch: true,
         });
-      } else if (detail.side !== "back" && detail.gender === null) {
-        // 9-digit CMND without gender on card: leave dropdown unselected
-        setValue("gender", undefined as unknown as "male", {
+      } else if (detail?.side !== "back" && (detail?.gender == null || detail?.gender === "")) {
+        // 9-digit CMND without gender on card: leave dropdown unselected for manual selection
+        setValue("gender", "" as unknown as "male", {
           shouldValidate: false,
+          shouldDirty: false,
         });
       }
 
       const normalizedEthnicity = sanitizeOCREthnicity(
-        detail.ethnicity,
+        detail?.ethnicity,
         ETHNICITIES
       );
       if (normalizedEthnicity) {
@@ -174,7 +175,7 @@ export const ProfileForm = React.memo(function ProfileForm({
           shouldDirty: true,
           shouldTouch: true,
         });
-      } else if (detail.side !== "back" && !(watch("ethnicity") || "").trim()) {
+      } else if (detail?.side !== "back" && !(watch("ethnicity") || "").trim()) {
         setValue("ethnicity", "Kinh", {
           shouldValidate: true,
           shouldDirty: true,
@@ -182,14 +183,14 @@ export const ProfileForm = React.memo(function ProfileForm({
         });
       }
 
-      const normalizedReligion = sanitizeOCRReligion(detail.religion);
+      const normalizedReligion = sanitizeOCRReligion(detail?.religion);
       if (normalizedReligion) {
         setValue("religion", normalizedReligion, {
           shouldValidate: true,
           shouldDirty: true,
           shouldTouch: true,
         });
-      } else if (detail.side !== "back" && !(watch("religion") || "").trim()) {
+      } else if (detail?.side !== "back" && !(watch("religion") || "").trim()) {
         setValue("religion", "Không", {
           shouldValidate: true,
           shouldDirty: true,

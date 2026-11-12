@@ -1,0 +1,92 @@
+[
+  {
+    "code": "NA",
+    "name": "Tỉnh Nghệ An",
+    "districts": [
+      {
+        "code": "VINH",
+        "name": "Thành phố Vinh",
+        "wards": [
+          "Phường Hà Huy Tập",
+          "Phường Hưng Dũng",
+          "Phường Bến Thủy",
+          "Phường Trường Thi",
+          "Phường Lê Lợi",
+          "Phường Đội Cung",
+          "Phường Quang Trung",
+          "Phường Cửa Nam",
+          "Phường Hồng Sơn",
+          "Phường Trung Đô",
+          "Phường Vinh Tân",
+          "Phường Đông Vĩnh",
+          "Phường Quán Bàu",
+          "Phường Lê Mao",
+          "Phường Hưng Bình",
+          "Phường Hưng Phúc",
+          "Xã Nghi Phú",
+          "Xã Hưng Lộc",
+          "Xã Nghi Kim",
+          "Xã Hưng Đông",
+          "Xã Nghi Ân",
+          "Xã Hưng Chính",
+          "Xã Hưng Hòa",
+          "Xã Nghi Đức",
+          "Xã Nghi Liên"
+        ]
+      },
+      {
+        "code": "CUALO",
+        "name": "Thị xã Cửa Lò",
+        "wards": [
+          "Phường Nghi Hương",
+          "Phường Nghi Tân",
+          "Phường Nghi Thủy",
+          "Phường Nghi Thu",
+          "Phường Nghi Hải",
+          "Phường Nghi Hòa",
+          "Phường Thu Thủy"
+        ]
+      }
+    ]
+  },
+  {
+    "code": "HN",
+    "name": "Thành phố Hà Nội",
+    "districts": [
+      {
+        "code": "HOANKIEM",
+        "name": "Quận Hoàn Kiếm",
+        "wards": [
+          "Phường Hàng Bạc",
+          "Phường Hàng Bài",
+          "Phường Tràng Tiền"
+        ]
+      },
+      {
+        "code": "CAUGIAY",
+        "name": "Quận Cầu Giấy",
+        "wards": [
+          "Phường Dịch Vọng",
+          "Phường Yên Hòa",
+          "Phường Mai Dịch"
+        ]
+      }
+    ]
+  },
+  {
+    "code": "HCM",
+    "name": "Thành phố Hồ Chí Minh",
+    "districts": [
+      {
+        "code": "Q1",
+        "name": "Quận 1",
+        "wards": [
+          "Phường Bến Nghé",
+          "Phường Bến Thành",
+          "Phường Tân Định"
+        ]
+      }
+    ]
+  }
+]
+

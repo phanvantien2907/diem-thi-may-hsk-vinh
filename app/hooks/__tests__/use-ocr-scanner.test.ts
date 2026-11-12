@@ -8,8 +8,14 @@ import {
   processOCRWebSocketFrame,
   requestGuestOrUserWsTicket,
   uploadOCRDocumentFile,
+  inferGenderFromOCR,
+  matchWardByName,
   type OCRResultData,
 } from "../useOCRScanner.ts";
+import {
+  DEFAULT_VINH_WARDS,
+  mergeStandardWardsFallback,
+} from "../../lib/constants/locations.ts";
 
 test("buildOCRWebSocketUrl builds ws URL for guest mode without ticket and with ticket", () => {
   assert.equal(
@@ -193,4 +199,59 @@ test("processOCRWebSocketFrame transitions store through QUEUED -> PROCESSING ->
 
   assert.equal(store.getSnapshot().data?.id_number, "038099012345");
   assert.equal(completedPayloads.length, 2);
+});
+
+test("inferGenderFromOCR strictly returns undefined for 9-digit CMND and correctly parses 12-digit CCCD gender", () => {
+  // 9-digit CMND physically has NO gender on card -> MUST return undefined
+  assert.equal(inferGenderFromOCR(undefined, "188020231"), undefined);
+  assert.equal(inferGenderFromOCR(null, "187654321"), undefined);
+  assert.equal(inferGenderFromOCR("", "187654321"), undefined);
+  assert.equal(inferGenderFromOCR("nam", "187654321"), undefined); // 9-digit safeguard: never infer
+  assert.equal(inferGenderFromOCR("nu", "187654321"), undefined);
+
+  // 12-digit CCCD with explicit sex text
+  assert.equal(inferGenderFromOCR("Nam", "038090012345"), "male");
+  assert.equal(inferGenderFromOCR("NỮ", "038195012345"), "female");
+  assert.equal(inferGenderFromOCR("male", "038090012345"), "male");
+  assert.equal(inferGenderFromOCR("female", "038195012345"), "female");
+
+  // 12-digit CCCD fallback via 4th digit (0/2/4/6/8 = male, 1/3/5/7/9 = female)
+  assert.equal(inferGenderFromOCR(undefined, "038090012345"), "male");
+  assert.equal(inferGenderFromOCR(undefined, "038290012345"), "male");
+  assert.equal(inferGenderFromOCR(undefined, "038195012345"), "female");
+  assert.equal(inferGenderFromOCR(undefined, "038395012345"), "female");
+});
+
+test("matchWardByName finds all standard Vinh wards including Phường Hà Huy Tập and Phường Hưng Dũng", () => {
+  // Test "P. Hà Huy Tập"
+  const haHuyTap = matchWardByName(DEFAULT_VINH_WARDS, "P. Hà Huy Tập");
+  assert.ok(haHuyTap, "Phường Hà Huy Tập should be found");
+  assert.equal(haHuyTap?.name, "Phường Hà Huy Tập");
+
+  // Test "Phường Hưng Dũng"
+  const hungDung = matchWardByName(DEFAULT_VINH_WARDS, "Phường Hưng Dũng");
+  assert.ok(hungDung, "Phường Hưng Dũng should be found");
+  assert.equal(hungDung?.name, "Phường Hưng Dũng");
+
+  // Test "Quán Bàu" (suffix match)
+  const quanBau = matchWardByName(DEFAULT_VINH_WARDS, "Quán Bàu");
+  assert.ok(quanBau, "Phường Quán Bàu should be found");
+  assert.equal(quanBau?.name, "Phường Quán Bàu");
+
+  // Test fullAddress fallback: "Số 12 Lê Lợi, P. Hà Huy Tập, TP. Vinh, Nghệ An"
+  const fromFullAddress = matchWardByName(
+    DEFAULT_VINH_WARDS,
+    undefined,
+    "Số 12 Lê Lợi, P. Hà Huy Tập, TP. Vinh, Nghệ An"
+  );
+  assert.ok(fromFullAddress, "Should match from full address string");
+  assert.equal(fromFullAddress?.name, "Phường Hà Huy Tập");
+
+  // Test mergeStandardWardsFallback adds missing wards if API only returned 8 wards
+  const initial8Wards = DEFAULT_VINH_WARDS.slice(0, 8);
+  const provinces = [{ id: 6, code: "NA", name: "Nghệ An" }];
+  const merged = mergeStandardWardsFallback(initial8Wards, "6", provinces);
+  assert.equal(merged.length, 25);
+  assert.ok(merged.some((w) => w.name === "Phường Hà Huy Tập"));
+  assert.ok(merged.some((w) => w.name === "Phường Hưng Dũng"));
 });
