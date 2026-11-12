@@ -28,6 +28,10 @@ import {
 } from "~/components/ui/select";
 import { FormCombobox } from "~/components/ui/form-combobox";
 import { ETHNICITIES } from "~/lib/constants/ethnicities";
+import {
+  sanitizeOCREthnicity,
+  sanitizeOCRReligion,
+} from "~/hooks/useOCRScanner";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 interface ProfileFormProps {
@@ -90,6 +94,7 @@ export const ProfileForm = React.memo(function ProfileForm({
     handleSubmit,
     control,
     setValue,
+    watch,
     reset,
     formState: { errors, isSubmitting },
   } = useForm<CandidateProfileFormValues>({
@@ -114,10 +119,14 @@ export const ProfileForm = React.memo(function ProfileForm({
   React.useEffect(() => {
     const handleOCRAutoFill = (evt: Event) => {
       const customEvt = evt as CustomEvent<{
+        side?: "front" | "back";
         id_number?: string;
         full_name?: string;
         dob?: string;
-        gender?: "male" | "female";
+        gender?: "male" | "female" | null;
+        ethnicity?: string | null;
+        religion?: string | null;
+        nationality?: string | null;
       }>;
       const detail = customEvt.detail;
       if (!detail) return;
@@ -148,13 +157,59 @@ export const ProfileForm = React.memo(function ProfileForm({
           shouldDirty: true,
           shouldTouch: true,
         });
+      } else if (detail.side !== "back" && detail.gender === null) {
+        // 9-digit CMND without gender on card: leave dropdown unselected
+        setValue("gender", undefined as unknown as "male", {
+          shouldValidate: false,
+        });
+      }
+
+      const normalizedEthnicity = sanitizeOCREthnicity(
+        detail.ethnicity,
+        ETHNICITIES
+      );
+      if (normalizedEthnicity) {
+        setValue("ethnicity", normalizedEthnicity, {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+      } else if (detail.side !== "back" && !(watch("ethnicity") || "").trim()) {
+        setValue("ethnicity", "Kinh", {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+      }
+
+      const normalizedReligion = sanitizeOCRReligion(detail.religion);
+      if (normalizedReligion) {
+        setValue("religion", normalizedReligion, {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+      } else if (detail.side !== "back" && !(watch("religion") || "").trim()) {
+        setValue("religion", "Không", {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
+      }
+
+      if (detail.nationality && detail.nationality.trim()) {
+        setValue("nationality", detail.nationality.trim(), {
+          shouldValidate: true,
+          shouldDirty: true,
+          shouldTouch: true,
+        });
       }
     };
     window.addEventListener("hsk:ocr-autofill-profile", handleOCRAutoFill);
     return () => {
       window.removeEventListener("hsk:ocr-autofill-profile", handleOCRAutoFill);
     };
-  }, [setValue]);
+  }, [setValue, watch]);
 
   // Tự động đồng bộ khi dữ liệu profile hoặc thông tin tài khoản thay đổi
   React.useEffect(() => {

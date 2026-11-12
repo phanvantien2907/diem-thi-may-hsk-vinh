@@ -12,8 +12,11 @@ export interface OCRResultData {
   id_number: string;
   full_name: string;
   dob: string;
-  gender?: string;
-  sex?: string;
+  gender?: string | null;
+  sex?: string | null;
+  ethnicity?: string | null;
+  religion?: string | null;
+  nationality?: string | null;
   address?: string;
   address_province?: string;
   address_district?: string;
@@ -23,6 +26,128 @@ export interface OCRResultData {
   issue_date?: string;
   place_of_issue?: string;
   expiry_date?: string;
+}
+
+/**
+ * Normalizes and matches an extracted `ethnicity` string against canonical Vietnamese
+ * ethnic group options (`ETHNICITIES`), stripping accidental prefixes such as `"Dân tộc: "`.
+ */
+export function sanitizeOCREthnicity(
+  raw?: string | null,
+  options: ReadonlyArray<{ value: string; label: string }> = []
+): string {
+  if (!raw) return "";
+  const stripped = raw
+    .replace(/^(dân\s*tộc|dan\s*toc|ethnicity)\s*[:.\-]?\s*/i, "")
+    .trim();
+  if (!stripped) return "";
+
+  const fold = (s: string) =>
+    s
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/đ/g, "d")
+      .replace(/['’\-_\s]+/g, " ")
+      .trim();
+
+  const targetFolded = fold(stripped);
+  if (
+    !targetFolded ||
+    targetFolded === "null" ||
+    targetFolded === "n/a" ||
+    targetFolded === "na"
+  ) {
+    return "";
+  }
+
+  for (const opt of options) {
+    if (fold(opt.value) === targetFolded || fold(opt.label) === targetFolded) {
+      return opt.value;
+    }
+  }
+
+  return stripped
+    .split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+/**
+ * Normalizes an extracted `religion` string, stripping prefixes such as `"Tôn giáo: "`
+ * and canonicalizing `"Không"` / `"Phật giáo"` / `"Công giáo"`.
+ */
+export function sanitizeOCRReligion(raw?: string | null): string {
+  if (!raw) return "";
+  const stripped = raw
+    .replace(/^(tôn\s*giáo|ton\s*giao|religion)\s*[:.\-]?\s*/i, "")
+    .trim();
+  if (!stripped) return "";
+
+  const folded = stripped
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .trim();
+
+  if (!folded || folded === "null" || folded === "n/a" || folded === "na") {
+    return "";
+  }
+  if (folded === "khong" || folded === "none" || folded === "khong co") {
+    return "Không";
+  }
+  if (folded === "phat giao" || folded === "phat") return "Phật giáo";
+  if (folded === "cong giao" || folded === "thien chua giao") return "Công giáo";
+  if (folded === "tin lanh") return "Tin Lành";
+  if (folded === "cao dai") return "Cao Đài";
+  if (folded === "hoa hao") return "Hòa Hảo";
+
+  return stripped.charAt(0).toUpperCase() + stripped.slice(1);
+}
+
+/**
+ * Sanitizes and normalizes an incoming `OCRResultData` payload before hydrating forms.
+ */
+export function sanitizeOCRPayload(
+  raw: Partial<OCRResultData> | null | undefined,
+  defaultSide: "front" | "back" = "front"
+): OCRResultData | null {
+  if (!raw) return null;
+  const cleanId = (raw.id_number ?? "")
+    .replace(/^(số|so|id|no)\s*[:.\-]?\s*/i, "")
+    .trim();
+  const cleanName = (raw.full_name ?? "")
+    .replace(/^(họ\s*và\s*tên|họ\s*tên|full\s*name)\s*[:.\-]?\s*/i, "")
+    .trim();
+  const cleanGenderRaw = (raw.gender ?? raw.sex ?? "")
+    .replace(/^(giới\s*tính|gioi\s*tinh|sex|gender)\s*[:.\-]?\s*/i, "")
+    .trim();
+
+  return {
+    ...raw,
+    side: raw.side ?? defaultSide,
+    id_number: cleanId,
+    full_name: cleanName,
+    dob: (raw.dob ?? "").trim(),
+    gender: cleanGenderRaw || null,
+    sex: cleanGenderRaw || null,
+    ethnicity: sanitizeOCREthnicity(raw.ethnicity),
+    religion: sanitizeOCRReligion(raw.religion),
+    nationality: (raw.nationality ?? "")
+      .replace(/^(quốc\s*tịch|quoc\s*tich|nationality)\s*[:.\-]?\s*/i, "")
+      .trim(),
+    address: (raw.address ?? "").trim(),
+    address_province: (raw.address_province ?? "").trim(),
+    address_district: (raw.address_district ?? "").trim(),
+    address_ward: (raw.address_ward ?? "").trim(),
+    address_detail: (raw.address_detail ?? "").trim(),
+    home_town: (raw.home_town ?? "").trim(),
+    issue_date: (raw.issue_date ?? "").trim(),
+    place_of_issue: (raw.place_of_issue ?? "").trim(),
+    expiry_date: (raw.expiry_date ?? "").trim(),
+  };
 }
 
 /**
@@ -542,15 +667,11 @@ export function processOCRWebSocketFrame(
 
     if (eventType === "ocr_completed" || eventType === "ocr_back_completed") {
       const rawExtracted: OCRResultData | null = inner?.data ?? null;
-      const extracted: OCRResultData | null = rawExtracted
-        ? {
-            ...rawExtracted,
-            side:
-              eventType === "ocr_back_completed"
-                ? "back"
-                : rawExtracted.side ?? "front",
-          }
-        : null;
+      console.log("OCR_PAYLOAD_RECEIVED", rawExtracted);
+      const extracted = sanitizeOCRPayload(
+        rawExtracted,
+        eventType === "ocr_back_completed" ? "back" : "front"
+      );
       if (extracted && resolvedTaskId) {
         ocrTaskResultCache.set(resolvedTaskId, {
           data: extracted,
@@ -720,16 +841,13 @@ export function useOCRScanner({
             payload.status === "COMPLETED"
           ) {
             const rawExtracted: OCRResultData | null = payload.data ?? null;
-            const extracted: OCRResultData | null = rawExtracted
-              ? {
-                  ...rawExtracted,
-                  side:
-                    payload.event === "ocr_back_completed" ||
-                    payload.side === "back"
-                      ? "back"
-                      : rawExtracted.side ?? "front",
-                }
-              : null;
+            console.log("OCR_PAYLOAD_RECEIVED", rawExtracted);
+            const extracted = sanitizeOCRPayload(
+              rawExtracted,
+              payload.event === "ocr_back_completed" || payload.side === "back"
+                ? "back"
+                : "front"
+            );
             if (extracted) {
               ocrTaskResultCache.set(taskId, {
                 data: extracted,

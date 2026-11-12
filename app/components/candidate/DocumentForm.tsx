@@ -455,6 +455,12 @@ export const DocumentForm = React.memo(function DocumentForm({
       ) {
         applyOCRAddressToFields(ocrData);
       }
+      if (ocrData.ethnicity || ocrData.religion) {
+        onOCRDataExtracted?.({
+          ...ocrData,
+          side: "back",
+        });
+      }
       toast.add({
         type: "success",
         title: "Đã tự động điền thông tin mặt sau CCCD",
@@ -462,7 +468,7 @@ export const DocumentForm = React.memo(function DocumentForm({
         timeout: 4000,
       });
     },
-    [applyOCRAddressToFields, setValue]
+    [applyOCRAddressToFields, onOCRDataExtracted, setValue]
   );
 
   const {

@@ -217,9 +217,10 @@ function CandidateFormsWrapper({
   const [document, setDocument] = React.useState(resolvedDocument);
   const [activeToken, setActiveToken] = React.useState<string | null>(token);
   const [scannedCccd, setScannedCccd] = React.useState<string>(userCccd);
-  const [scannedGender, setScannedGender] = React.useState<
-    "male" | "female" | undefined
-  >(() => inferGenderFromOCR(undefined, userCccd));
+  const defaultAccountGender = React.useMemo(
+    () => inferGenderFromOCR(undefined, userCccd),
+    [userCccd]
+  );
   const { isAdminPreview } = useOutletContext<{ isAdminPreview?: boolean }>() || {};
 
   React.useEffect(() => {
@@ -235,17 +236,18 @@ function CandidateFormsWrapper({
       ocrData.gender || ocrData.sex,
       ocrData.id_number
     );
-    if (inferredGender) {
-      setScannedGender(inferredGender);
-    }
     if (typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("hsk:ocr-autofill-profile", {
           detail: {
+            side: ocrData.side ?? "front",
             id_number: ocrData.id_number,
             full_name: ocrData.full_name,
             dob: normalizeOCRDateToISO(ocrData.dob),
-            gender: inferredGender,
+            gender: inferredGender ?? null,
+            ethnicity: ocrData.ethnicity ?? null,
+            religion: ocrData.religion ?? null,
+            nationality: ocrData.nationality ?? null,
           },
         })
       );
@@ -666,7 +668,7 @@ function CandidateFormsWrapper({
         profile={profile}
         defaultCccd={scannedCccd}
         defaultFullName={userFullName}
-        defaultGender={scannedGender}
+        defaultGender={defaultAccountGender}
         isGuest={!activeToken}
         onSubmit={handleProfileSubmit}
         disabled={isAdminPreview}
