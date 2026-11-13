@@ -705,9 +705,11 @@ export function processOCRWebSocketFrame(
 
     if (eventType === "ocr_failed") {
       const errMsg: string =
+        inner?.message ??
+        raw?.message ??
         inner?.error ??
         raw?.error ??
-        "Không thể trích xuất văn bản từ ảnh CMND/CCCD.";
+        "Dịch vụ bận, vui lòng thử lại hoặc nhập thủ công.";
       store.setState({
         task_id: resolvedTaskId || null,
         status: "FAILED",
@@ -743,6 +745,9 @@ export function useOCRScanner({
 
   const wsRef = useRef<WebSocket | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptsRef = useRef<number>(0);
   const activeTaskIdRef = useRef<string | null>(null);
   const completedTaskIdsRef = useRef<Set<string>>(new Set());
   const onCompletedRef = useRef(onCompleted);
@@ -753,6 +758,21 @@ export function useOCRScanner({
       clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
     }
+  }, []);
+
+  const stopTimeout = useCallback(() => {
+    if (timeoutTimerRef.current) {
+      clearTimeout(timeoutTimerRef.current);
+      timeoutTimerRef.current = null;
+    }
+  }, []);
+
+  const stopReconnect = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    reconnectAttemptsRef.current = 0;
   }, []);
 
   useEffect(() => {
@@ -769,6 +789,8 @@ export function useOCRScanner({
   const handleTaskCompletedOnce = useCallback(
     (data: OCRResultData, taskId: string) => {
       stopPolling();
+      stopTimeout();
+      stopReconnect();
       if (taskId && completedTaskIdsRef.current.has(taskId)) {
         return;
       }
@@ -777,12 +799,14 @@ export function useOCRScanner({
       }
       onCompletedRef.current?.(data, taskId);
     },
-    [stopPolling]
+    [stopPolling, stopReconnect, stopTimeout]
   );
 
   const handleTaskFailedOnce = useCallback(
     (errMsg: string, taskId: string) => {
       stopPolling();
+      stopTimeout();
+      stopReconnect();
       if (taskId && completedTaskIdsRef.current.has(taskId)) {
         return;
       }
@@ -791,7 +815,32 @@ export function useOCRScanner({
       }
       onFailedRef.current?.(errMsg, taskId);
     },
-    [stopPolling]
+    [stopPolling, stopReconnect, stopTimeout]
+  );
+
+  const startTimeoutSafeguard = useCallback(
+    (taskId: string) => {
+      stopTimeout();
+      timeoutTimerRef.current = setTimeout(() => {
+        const currentStatus = store.getSnapshot().status;
+        if (
+          currentStatus === "COMPLETED" ||
+          currentStatus === "FAILED" ||
+          currentStatus === "IDLE"
+        ) {
+          return;
+        }
+        const timeoutMsg = "Dịch vụ bận, vui lòng thử lại hoặc nhập thủ công.";
+        store.setState({
+          task_id: taskId || null,
+          status: "FAILED",
+          progress: 0,
+          error: timeoutMsg,
+        });
+        handleTaskFailedOnce(timeoutMsg, taskId);
+      }, 15000);
+    },
+    [handleTaskFailedOnce, stopTimeout, store]
   );
 
   const startFallbackPolling = useCallback(
@@ -930,6 +979,7 @@ export function useOCRScanner({
 
       ws.onopen = () => {
         store.setState({ is_connected: true });
+        reconnectAttemptsRef.current = 0;
       };
 
       ws.onmessage = (msgEvent: MessageEvent) => {
@@ -942,9 +992,26 @@ export function useOCRScanner({
         );
       };
 
-      ws.onclose = () => {
+      ws.onclose = (ev: CloseEvent) => {
         store.setState({ is_connected: false });
         wsRef.current = null;
+
+        // Auto-reconnect with exponential backoff if closed unexpectedly while scan is pending
+        const currentStatus = store.getSnapshot().status;
+        if (
+          ev?.code !== 1000 &&
+          (currentStatus === "PROCESSING" || currentStatus === "QUEUED") &&
+          reconnectAttemptsRef.current < 3
+        ) {
+          const delay = Math.pow(2, reconnectAttemptsRef.current) * 1000; // 1s, 2s, 4s
+          reconnectAttemptsRef.current += 1;
+          reconnectTimerRef.current = setTimeout(() => {
+            const s = store.getSnapshot().status;
+            if (s === "PROCESSING" || s === "QUEUED") {
+              void ensureWebSocketConnected(activeTaskIdRef.current).catch(() => null);
+            }
+          }, delay);
+        }
       };
     },
     [
@@ -964,6 +1031,7 @@ export function useOCRScanner({
    */
   const startOptimisticScan = useCallback(() => {
     stopPolling();
+    stopReconnect();
     activeTaskIdRef.current = null;
     store.setState({
       task_id: null,
@@ -972,8 +1040,9 @@ export function useOCRScanner({
       data: null,
       error: null,
     });
+    startTimeoutSafeguard("");
     void ensureWebSocketConnected(null).catch(() => null);
-  }, [ensureWebSocketConnected, stopPolling, store]);
+  }, [ensureWebSocketConnected, startTimeoutSafeguard, stopPolling, stopReconnect, store]);
 
   /**
    * Binds the active `task_id` returned by `POST /api/v1/cccd/upload` (`202 Accepted`).
@@ -988,6 +1057,8 @@ export function useOCRScanner({
       const cachedData = getCachedOCRResultByTaskId(taskId);
       if (cachedData) {
         completedTaskIdsRef.current.delete(taskId);
+        stopTimeout();
+        stopReconnect();
         store.setState({
           task_id: taskId,
           status: "COMPLETED",
@@ -1006,6 +1077,7 @@ export function useOCRScanner({
         progress: Math.max(current.progress, 25),
         error: null,
       });
+      startTimeoutSafeguard(taskId);
       startFallbackPolling(taskId);
       await ensureWebSocketConnected(taskId);
     },
@@ -1013,6 +1085,9 @@ export function useOCRScanner({
       ensureWebSocketConnected,
       handleTaskCompletedOnce,
       startFallbackPolling,
+      startTimeoutSafeguard,
+      stopReconnect,
+      stopTimeout,
       store,
     ]
   );
@@ -1020,17 +1095,21 @@ export function useOCRScanner({
   const markFailed = useCallback(
     (errorMessage: string) => {
       stopPolling();
+      stopTimeout();
+      stopReconnect();
       store.setState({
         status: "FAILED",
         progress: 0,
         error: errorMessage,
       });
     },
-    [stopPolling, store]
+    [stopPolling, stopReconnect, stopTimeout, store]
   );
 
   const resetScanner = useCallback(() => {
     stopPolling();
+    stopTimeout();
+    stopReconnect();
     activeTaskIdRef.current = null;
     store.setState({
       task_id: null,
@@ -1039,17 +1118,19 @@ export function useOCRScanner({
       data: null,
       error: null,
     });
-  }, [stopPolling, store]);
+  }, [stopPolling, stopReconnect, stopTimeout, store]);
 
   useEffect(() => {
     return () => {
       stopPolling();
+      stopTimeout();
+      stopReconnect();
       if (wsRef.current) {
         wsRef.current.close(1000, "Component unmounted");
         wsRef.current = null;
       }
     };
-  }, [stopPolling]);
+  }, [stopPolling, stopReconnect, stopTimeout]);
 
   return {
     ...snapshot,

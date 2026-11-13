@@ -3,10 +3,19 @@
 > **Base URL:** `http://<host>:<port>/api/v1`
 > **Content-Type:** `application/json`
 > **Ngôn ngữ lỗi:** Tiếng Việt (tất cả thông báo lỗi trả về bằng Tiếng Việt)
-> **Phiên bản:** v1.2.8
-> **Cập nhật lần cuối:** 2026-11-08
+> **Phiên bản:** v1.2.9
+> **Cập nhật lần cuối:** 2026-11-13
 
 ## Changelog
+
+### v1.2.9 (2026-11-13)
+- 👁️ **Omni-Angle Vision & Resolution Relaxation (Hỗ trợ đa góc độ & Tháo bỏ giới hạn độ phân giải)**:
+  - **Gỡ bỏ rào cản độ phân giải tối thiểu (`MinImageWidth: 0`, `MinImageHeight: 0`)**: Xóa bỏ lỗi chặn ảnh `ErrCodeImageTooSmall` ("Độ phân giải quá thấp tối thiểu 640x480"), cho phép tiếp nhận mọi kích thước và hướng ảnh chụp thực tế (chụp dọc `480x640`, trong ví `474x646`, bọc bao plastic `677x453`). Vẫn bảo vệ server với giới hạn kích thước tệp tối đa $\le 5\text{MB}$ và định dạng hợp lệ (`.jpg`, `.jpeg`, `.png`, `.webp`).
+  - **Quy tắc trích xuất đa góc độ & điều kiện môi trường thực tế (Rule 12)**: Tự động xoay chiều đọc cho ảnh nghiêng, méo, ngược (0°, 90°, 180°, 270°), thẻ nằm trong khe ví hoặc bọc nhựa bảo quản.
+- 🛡️ **Kiểm soát Ngoại lệ Đa tầng & Graceful Degradation (Backend & Frontend)**:
+  - **Hủy tác vụ Gemini theo Context khi ngắt kết nối**: Ràng buộc context HTTP/WebSocket với tác vụ OCR worker. Khi người dùng đóng tab trình duyệt hoặc rớt mạng, Go routine lập tức ngắt lệnh gọi Gemini Vision in-flight, bảo vệ hạn ngạch API và RAM server.
+  - **Chuẩn hóa sự kiện lỗi `ocr_failed`**: Trả về `error_code: "API_UNAVAILABLE"` và thông điệp thân thiện: *"Dịch vụ bận, vui lòng thử lại hoặc nhập thủ công."*.
+  - **Frontend 15s Timeout Safeguard & WebSocket Auto-Reconnect**: Tự động dừng skeleton và báo lỗi sau 15 giây; tự động reconnect WebSocket với exponential backoff (1s, 2s, 4s, tối đa 3 lần); dọn dẹp sạch toàn bộ timer và socket khi unmount.
 
 ### v1.2.8 (2026-11-08)
 - 🪪 **Hỗ trợ đồng thời CMND 9 số (cũ) & CCCD 12 số (mới) + Pipeline OCR Auto-Fill Thời gian thực**:

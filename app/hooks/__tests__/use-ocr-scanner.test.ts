@@ -255,3 +255,68 @@ test("matchWardByName finds all standard Vinh wards including Phường Hà Huy 
   assert.ok(merged.some((w) => w.name === "Phường Hà Huy Tập"));
   assert.ok(merged.some((w) => w.name === "Phường Hưng Dũng"));
 });
+
+test("processOCRWebSocketFrame handles ocr_failed event with standardized error message", () => {
+  const store = new OCRScannerStore();
+  let failedErrMsg = "";
+  let failedTaskId = "";
+
+  const frameHandled = processOCRWebSocketFrame(
+    JSON.stringify({
+      event: "ocr_failed",
+      data: {
+        task_id: "task-failed-1",
+        status: "FAILED",
+        progress: 0,
+        error_code: "API_UNAVAILABLE",
+        message: "Dịch vụ bận, vui lòng thử lại hoặc nhập thủ công.",
+        error: "Google API 503 unavailable",
+      },
+    }),
+    store,
+    "task-failed-1",
+    undefined,
+    (errMsg, taskId) => {
+      failedErrMsg = errMsg;
+      failedTaskId = taskId;
+    }
+  );
+
+  assert.equal(frameHandled, true);
+  assert.equal(store.getSnapshot().status, "FAILED");
+  assert.equal(store.getSnapshot().progress, 0);
+  assert.equal(
+    store.getSnapshot().error,
+    "Dịch vụ bận, vui lòng thử lại hoặc nhập thủ công."
+  );
+  assert.equal(failedErrMsg, "Dịch vụ bận, vui lòng thử lại hoặc nhập thủ công.");
+  assert.equal(failedTaskId, "task-failed-1");
+});
+
+test("processOCRWebSocketFrame gracefully falls back to default error message if empty", () => {
+  const store = new OCRScannerStore();
+  let failedErrMsg = "";
+
+  processOCRWebSocketFrame(
+    JSON.stringify({
+      event: "ocr_failed",
+      data: {
+        task_id: "task-failed-empty",
+        status: "FAILED",
+      },
+    }),
+    store,
+    "task-failed-empty",
+    undefined,
+    (errMsg) => {
+      failedErrMsg = errMsg;
+    }
+  );
+
+  assert.equal(store.getSnapshot().status, "FAILED");
+  assert.equal(
+    store.getSnapshot().error,
+    "Dịch vụ bận, vui lòng thử lại hoặc nhập thủ công."
+  );
+  assert.equal(failedErrMsg, "Dịch vụ bận, vui lòng thử lại hoặc nhập thủ công.");
+});
