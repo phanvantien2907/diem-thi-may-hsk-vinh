@@ -22,6 +22,11 @@ export interface OCRResultData {
   address_district?: string;
   address_ward?: string;
   address_detail?: string;
+  province_id?: number | null;
+  district_id?: number | null;
+  ward_id?: number | null;
+  is_legacy_address?: boolean;
+  legacy_ward_name?: string;
   home_town?: string;
   issue_date?: string;
   place_of_issue?: string;
@@ -143,6 +148,11 @@ export function sanitizeOCRPayload(
     address_district: (raw.address_district ?? "").trim(),
     address_ward: (raw.address_ward ?? "").trim(),
     address_detail: (raw.address_detail ?? "").trim(),
+    province_id: typeof raw.province_id === "number" ? raw.province_id : null,
+    district_id: typeof raw.district_id === "number" ? raw.district_id : null,
+    ward_id: typeof raw.ward_id === "number" ? raw.ward_id : null,
+    is_legacy_address: Boolean(raw.is_legacy_address),
+    legacy_ward_name: (raw.legacy_ward_name ?? "").trim(),
     home_town: (raw.home_town ?? "").trim(),
     issue_date: (raw.issue_date ?? "").trim(),
     place_of_issue: (raw.place_of_issue ?? "").trim(),
@@ -220,6 +230,78 @@ export function splitVietnameseAddressClientFallback(fullAddress?: string | null
   };
 }
 
+const LEGACY_PROVINCE_ALIASES: Record<string, string> = {
+  "thua thien hue": "hue",
+  "ha giang": "tuyen quang",
+  "bac kan": "thai nguyen",
+  "hoa binh": "phu tho",
+  "vinh phuc": "phu tho",
+  "bac giang": "bac ninh",
+  "hai duong": "hai phong",
+  "thai binh": "hung yen",
+  "ha nam": "ninh binh",
+  "nam dinh": "ninh binh",
+  "quang binh": "quang tri",
+  "quang nam": "da nang",
+  "kon tum": "quang ngai",
+  "binh dinh": "gia lai",
+  "phu yen": "dak lak",
+  "ninh thuan": "khanh hoa",
+  "binh thuan": "lam dong",
+  "dak nong": "lam dong",
+  "binh phuoc": "dong nai",
+  "binh duong": "ho chi minh",
+  "ba ria vung tau": "ho chi minh",
+  "long an": "tay ninh",
+  "tien giang": "dong thap",
+  "ben tre": "vinh long",
+  "tra vinh": "vinh long",
+  "kien giang": "an giang",
+  "hau giang": "can tho",
+  "soc trang": "can tho",
+  "bac lieu": "ca mau",
+};
+
+const LEGACY_WARD_ALIASES: Record<string, string[]> = {
+  "nam loc": ["nam dan", "thuong tan loc", "thien nhan"],
+  "nam tan": ["nam dan", "thuong tan loc"],
+  "nam thuong": ["nam dan", "thuong tan loc"],
+  "thuong tan loc": ["nam dan"],
+  "nghi hai": ["cua lo"],
+  "nghi hoa": ["cua lo"],
+  "nghi huong": ["cua lo"],
+  "nghi tan": ["cua lo"],
+  "nghi thu": ["cua lo"],
+  "nghi thuy": ["cua lo"],
+  "thu thuy": ["cua lo"],
+  "tan khanh hoa": ["giang thanh"],
+  "hoang van thu": ["luong van tri", "hoang van thu"],
+};
+
+function levenshteinDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  let curr = new Array<number>(n + 1);
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
+
+function similarityRatio(a: string, b: string): number {
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen === 0) return 0;
+  return 1 - levenshteinDistance(a, b) / maxLen;
+}
+
 /**
  * Matches an extracted `address_province` (or full address tail) against the list of Provinces.
  */
@@ -234,20 +316,28 @@ export function matchProvinceByName<T extends { id: number; name: string }>(
   const targetNorm = normalizeAdminUnitName(candidateRaw, "province");
   if (!targetNorm) return undefined;
 
-  // 1. Exact normalized match
-  const exact = provinces.find(
-    (p) => normalizeAdminUnitName(p.name, "province") === targetNorm
-  );
-  if (exact) return exact;
+  const targetKeys = [targetNorm];
+  const alias = LEGACY_PROVINCE_ALIASES[targetNorm];
+  if (alias && !targetKeys.includes(alias)) {
+    targetKeys.push(alias);
+  }
 
-  // 2. Substring / suffix match
-  return provinces.find((p) => {
-    const pNorm = normalizeAdminUnitName(p.name, "province");
-    return (
-      pNorm.length > 0 &&
-      (pNorm.includes(targetNorm) || targetNorm.includes(pNorm))
+  for (const key of targetKeys) {
+    // 1. Exact normalized match
+    const exact = provinces.find(
+      (p) => normalizeAdminUnitName(p.name, "province") === key
     );
-  });
+    if (exact) return exact;
+
+    // 2. Substring / suffix match
+    const partial = provinces.find((p) => {
+      const pNorm = normalizeAdminUnitName(p.name, "province");
+      return pNorm.length > 0 && (pNorm.includes(key) || key.includes(pNorm));
+    });
+    if (partial) return partial;
+  }
+
+  return undefined;
 }
 
 /**
@@ -286,17 +376,29 @@ export function matchWardByName<T extends { id: number; name: string }>(
 
   if (normalizedCandidates.length === 0) return undefined;
 
+  // Expand normalized candidates with known pre-merger commune aliases
+  const expandedCandidates: string[] = [];
+  for (const cand of normalizedCandidates) {
+    if (!expandedCandidates.includes(cand)) expandedCandidates.push(cand);
+    const aliases = LEGACY_WARD_ALIASES[cand];
+    if (aliases) {
+      for (const a of aliases) {
+        if (!expandedCandidates.includes(a)) expandedCandidates.push(a);
+      }
+    }
+  }
+
   // 1. Exact normalized match on any candidate (in priority order)
-  for (const candNorm of normalizedCandidates) {
+  for (const candNorm of expandedCandidates) {
     const exact = wards.find(
       (w) => normalizeAdminUnitName(w.name, "ward") === candNorm
     );
     if (exact) return exact;
   }
 
-  // 2. Word-boundary / substring match on primary ward candidate
+  // 2. Word-boundary / suffix match on primary ward candidate
   const primaryNorm = normalizedCandidates[0];
-  return wards.find((w) => {
+  const boundaryMatch = wards.find((w) => {
     const wNorm = normalizeAdminUnitName(w.name, "ward");
     return (
       wNorm.length > 1 &&
@@ -305,6 +407,21 @@ export function matchWardByName<T extends { id: number; name: string }>(
         primaryNorm.endsWith(` ${wNorm}`))
     );
   });
+  if (boundaryMatch) return boundaryMatch;
+
+  // 3. Fuzzy Levenshtein similarity >= 0.85 against primary candidate
+  let bestWard: T | undefined;
+  let bestScore = 0;
+  for (const w of wards) {
+    const wNorm = normalizeAdminUnitName(w.name, "ward");
+    if (!wNorm) continue;
+    const score = similarityRatio(primaryNorm, wNorm);
+    if (score >= 0.85 && score > bestScore) {
+      bestScore = score;
+      bestWard = w;
+    }
+  }
+  return bestWard;
 }
 
 /**

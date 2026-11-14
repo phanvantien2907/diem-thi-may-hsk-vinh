@@ -3,10 +3,20 @@
 > **Base URL:** `http://<host>:<port>/api/v1`
 > **Content-Type:** `application/json`
 > **Ngôn ngữ lỗi:** Tiếng Việt (tất cả thông báo lỗi trả về bằng Tiếng Việt)
-> **Phiên bản:** v1.2.9
-> **Cập nhật lần cuối:** 2026-11-13
+> **Phiên bản:** v1.2.10
+> **Cập nhật lần cuối:** 2026-11-14
 
 ## Changelog
+
+### v1.2.10 (2026-11-14)
+- 🌍 **Dual-Version Geospatial Cron Synchronization (`GeospatialSyncCron` & Offline Snapshots)**:
+  - **Đồng bộ tự động đa phiên bản (`v1` & `v2`)**: Background worker `GeospatialSyncCron` chạy khi khởi động (khi CSDL chưa đủ danh mục) và định kỳ mỗi 24 giờ, đồng bộ đồng thời dữ liệu trước sáp nhập (`v1`: `https://provinces.open-api.vn/api/?depth=3` — 63 tỉnh, 696 huyện, 10.051 xã/phường) và sau sáp nhập (`v2`: `https://provinces.open-api.vn/api/v2/p/?depth=3` & `https://provinces.open-api.vn/api/v2/w/` — 34 tỉnh, 3.321 xã/phường) vào PostgreSQL (`provinces`, `districts`, `wards` qua migration `000023_geospatial_dual_version`).
+  - **Fallback Snapshot Nội bộ (`//go:embed`) & Redis Cache Invalidation**: Tích hợp sẵn bản snapshot JSON cục bộ (`internal/location/data/v1_snapshot.json`, `v2_provinces_snapshot.json`, `v2_wards_snapshot.json`) và script sinh snapshot `scripts/snapshot_geospatial.go`. Khi mạng ngoài bị lỗi/timeout, worker tự động nạp từ snapshot nội bộ và xóa cache địa điểm (`ClearCache`).
+- 🧠 **Intelligent Legacy OCR Parsing & Address Resolution (`internal/location/matcher`)**:
+  - **Thuật toán Fuzzy Matching & Chuẩn hóa Tiếng Việt**: Hỗ trợ bỏ dấu Unicode, tách tiền tố hành chính (`Tỉnh`, `Thành phố`, `Quận`, `Huyện`, `Thị xã`, `Phường`, `Xã`, `Thị trấn`), so khớp mờ theo Levenshtein ($\ge 0.85$), ánh xạ sáp nhập tỉnh 07/2025 và ánh xạ đơn vị cũ trên CMND 9 số (ví dụ: `"Xã Nam Lộc, Huyện Nam Đàn, Nghệ An"` $\rightarrow$ `"Xã Nam Đàn"`, `is_legacy_address: true`, `legacy_ward_name: "Xã Nam Lộc"`, bảo toàn địa chỉ chi tiết gốc).
+- 🔌 **Endpoints & Payload Mới + Frontend Hydration**:
+  - Bổ sung `POST /api/v1/locations/resolve-address` (công khai) và `POST /api/v1/admin/locations/sync` (Admin).
+  - Mở rộng `OCRResultData` thêm `province_id`, `district_id`, `ward_id`, `is_legacy_address`, `legacy_ward_name`; `DocumentForm` tự động chọn Tỉnh/Xã theo ID hoặc fuzzy fallback và hiển thị thông báo thân thiện khi ánh xạ địa chỉ cũ.
 
 ### v1.2.9 (2026-11-13)
 - 👁️ **Omni-Angle Vision & Resolution Relaxation (Hỗ trợ đa góc độ & Tháo bỏ giới hạn độ phân giải)**:
@@ -4692,6 +4702,90 @@ transaction PostgreSQL. Không sử dụng Redis.
 
 ---
 
+### 10.7. Phân giải Địa chỉ Đa phiên bản (Resolve Address)
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/locations/resolve-address` |
+| **Auth** | 🔓 Public |
+| **Use-case** | Phân giải chuỗi địa chỉ thô (bao gồm địa chỉ trước sáp nhập trên CMND 9 số cũ hoặc CCCD cũ) sang đơn vị hành chính `v2` (Tỉnh/Thành phố, Xã/Phường), kèm `province_id`, `ward_id`, cờ `is_legacy_address` và `legacy_ward_name` |
+
+**Request Body:**
+
+```json
+{
+  "address": "Xã Nam Lộc, Huyện Nam Đàn, Nghệ An",
+  "address_province": "Nghệ An",
+  "address_district": "Huyện Nam Đàn",
+  "address_ward": "Xã Nam Lộc",
+  "address_detail": ""
+}
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "matched": true,
+    "province_id": 6,
+    "province_code": 40,
+    "province_name": "Tỉnh Nghệ An",
+    "district_code": 430,
+    "district_name": "Huyện Nam Đàn",
+    "ward_id": 17935,
+    "ward_code": 17935,
+    "ward_name": "Xã Nam Đàn",
+    "ward_type": "xa",
+    "address_detail": "Xã Nam Lộc, Huyện Nam Đàn, Nghệ An",
+    "canonical_address": "Xã Nam Lộc, Huyện Nam Đàn, Nghệ An, Xã Nam Đàn, Tỉnh Nghệ An",
+    "is_legacy_address": true,
+    "legacy_district": "Huyện Nam Đàn",
+    "legacy_ward_name": "Xã Nam Lộc",
+    "confidence": 0.98,
+    "match_source": "legacy_to_v2"
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+---
+
+### 10.8. [Admin] Đồng bộ Dữ liệu Địa giới Hành chính (Sync Geospatial)
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/v1/admin/locations/sync` |
+| **Auth** | 🔐 JWT + Admin |
+| **Use-case** | Kích hoạt thủ công chu trình đồng bộ địa giới hành chính đa phiên bản (`v1` pre-merger & `v2` post-merger) từ `provinces.open-api.vn` (tự động fallback sang embedded snapshot nếu API ngoài gặp sự cố) và xóa cache Redis |
+
+**Request Body:** Không cần body.
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "source": "openapi",
+    "v1_provinces": 63,
+    "districts": 696,
+    "v1_wards": 10051,
+    "v2_provinces": 34,
+    "v2_wards": 3321,
+    "upserted_provinces": 34,
+    "upserted_districts": 696,
+    "upserted_wards": 13372
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+---
+
 ## 11. Module Audit (Nhật ký hệ thống)
 
 ### 11.1. [Admin] Tra cứu nhật ký
@@ -5192,9 +5286,11 @@ ngày thi, `publish_at` và trạng thái hiệu lực của đợt cha — **kh
 | 113 | `GET` | `/locations/wards/:id/delivery-coverage` | 🔓 | Location |
 | 114 | `GET` | `/admin/locations/stats/candidates-by-province` | 🔐👑 | Location |
 | 115 | `POST` | `/admin/locations/wards/:id/merge` | 🔐👑 | Location |
-| 116 | `GET` | `/admin/audit-logs` | 🔐👑 | Audit |
-| 117 | `POST` | `/cccd/extract` | 🔐 | CCCD OCR |
-| 118 | `GET` | `/cccd/jobs/:id` | 🔐 | CCCD OCR |
+| 116 | `POST` | `/locations/resolve-address` | 🔓 | Location |
+| 117 | `POST` | `/admin/locations/sync` | 🔐👑 | Location |
+| 118 | `GET` | `/admin/audit-logs` | 🔐👑 | Audit |
+| 119 | `POST` | `/cccd/extract` | 🔐 | CCCD OCR |
+| 120 | `GET` | `/cccd/jobs/:id` | 🔐 | CCCD OCR |
 
 > **Chú thích:** 🔓 = Public | 🔐 = JWT | 🔐👑 = JWT + Admin | HMAC = Webhook signature
 

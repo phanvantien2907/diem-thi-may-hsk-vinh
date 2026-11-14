@@ -221,10 +221,12 @@ export const DocumentForm = React.memo(function DocumentForm({
   // ─── Real-time WebSocket OCR Auto-Fill (Zero Full-Page Re-render) ───────────
   const pendingOcrWardRef = React.useRef<{
     provinceId: string;
+    wardId?: number | null;
     ward?: string;
     fullAddress?: string;
     detail?: string;
     district?: string;
+    isLegacy?: boolean;
   } | null>(null);
 
   const applyPendingWardMatch = React.useCallback(
@@ -233,11 +235,13 @@ export const DocumentForm = React.memo(function DocumentForm({
       if (!pending || pending.provinceId !== provinceId) return;
       pendingOcrWardRef.current = null;
 
-      const matchedWard = matchWardByName(
-        loadedWards,
-        pending.ward,
-        pending.fullAddress
-      );
+      const matchedById =
+        typeof pending.wardId === "number" && pending.wardId > 0
+          ? loadedWards.find((w) => Number(w.id) === Number(pending.wardId))
+          : undefined;
+      const matchedWard =
+        matchedById ??
+        matchWardByName(loadedWards, pending.ward, pending.fullAddress);
       if (matchedWard) {
         setValue("ward_id", matchedWard.id, {
           shouldValidate: true,
@@ -295,11 +299,21 @@ export const DocumentForm = React.memo(function DocumentForm({
         ""
       ).trim();
 
-      const matchedProvince = matchProvinceByName(
-        provinces,
-        provinceCandidate,
-        fullAddr
-      );
+      const matchedProvince =
+        (typeof ocrData.province_id === "number" && ocrData.province_id > 0
+          ? provinces.find((p) => Number(p.id) === Number(ocrData.province_id))
+          : undefined) ??
+        matchProvinceByName(provinces, provinceCandidate, fullAddr);
+
+      if (ocrData.is_legacy_address) {
+        toast.add({
+          type: "info",
+          title: "Đã ánh xạ địa chỉ cũ",
+          description: ocrData.legacy_ward_name
+            ? `Đơn vị cũ "${ocrData.legacy_ward_name}" đã được tự động ánh xạ sang đơn vị hành chính mới tương ứng.`
+            : "Địa chỉ cũ trên giấy tờ đã được ánh xạ tự động sang đơn vị hành chính mới tương ứng.",
+        });
+      }
 
       if (matchedProvince) {
         const targetProvinceId = String(matchedProvince.id);
@@ -309,7 +323,13 @@ export const DocumentForm = React.memo(function DocumentForm({
           wards.length > 0
         ) {
           pendingOcrWardRef.current = null;
-          const matchedWard = matchWardByName(wards, wardCandidate, fullAddr);
+          const matchedWardById =
+            typeof ocrData.ward_id === "number" && ocrData.ward_id > 0
+              ? wards.find((w) => Number(w.id) === Number(ocrData.ward_id))
+              : undefined;
+          const matchedWard =
+            matchedWardById ??
+            matchWardByName(wards, wardCandidate, fullAddr);
           if (matchedWard) {
             setValue("ward_id", matchedWard.id, {
               shouldValidate: true,
@@ -336,10 +356,12 @@ export const DocumentForm = React.memo(function DocumentForm({
         } else {
           pendingOcrWardRef.current = {
             provinceId: targetProvinceId,
+            wardId: ocrData.ward_id,
             ward: wardCandidate,
             fullAddress: fullAddr,
             detail: detailCandidate,
             district: districtCandidate,
+            isLegacy: ocrData.is_legacy_address,
           };
           setSelectedProvinceId(targetProvinceId);
           setValue("ward_id", undefined);

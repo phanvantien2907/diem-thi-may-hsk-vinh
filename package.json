@@ -7,7 +7,7 @@
     "dev": "react-router dev",
     "start": "react-router-serve ./build/server/index.js",
     "typecheck": "react-router typegen && tsc",
-    "test": "node --experimental-strip-types --test app/hooks/__tests__/use-notification-ws.test.ts app/hooks/__tests__/use-ocr-scanner.test.ts",
+    "test": "node --experimental-strip-types --test app/hooks/__tests__/use-notification-ws.test.ts app/hooks/__tests__/use-ocr-scanner.test.ts app/hooks/__tests__/geospatial-mapping.test.ts",
     "dev:clean": "rm -rf node_modules/.vite .react-router build && react-router dev",
     "clean": "rm -rf node_modules/.vite .react-router build"
   },
