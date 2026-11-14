@@ -7,6 +7,16 @@ export type OCRStatus = "IDLE" | "QUEUED" | "PROCESSING" | "COMPLETED" | "FAILED
  * Purely textual OCR result payload (Zero Biometrics / No Face Matching).
  * Supports both legacy 9-digit CMND and modern 12-digit CCCD.
  */
+export interface OCRAddressCandidate {
+  id: number;
+  name: string;
+  full_name?: string;
+  unit_type: "province" | "district" | "ward";
+  province_id?: number;
+  district_id?: number;
+  score: number;
+}
+
 export interface OCRResultData {
   side?: "front" | "back";
   id_number: string;
@@ -27,6 +37,8 @@ export interface OCRResultData {
   ward_id?: number | null;
   is_legacy_address?: boolean;
   legacy_ward_name?: string;
+  address_resolution_status?: string;
+  address_candidates?: OCRAddressCandidate[];
   home_town?: string;
   issue_date?: string;
   place_of_issue?: string;
@@ -153,6 +165,10 @@ export function sanitizeOCRPayload(
     ward_id: typeof raw.ward_id === "number" ? raw.ward_id : null,
     is_legacy_address: Boolean(raw.is_legacy_address),
     legacy_ward_name: (raw.legacy_ward_name ?? "").trim(),
+    address_resolution_status: (raw.address_resolution_status ?? "").trim() || undefined,
+    address_candidates: Array.isArray(raw.address_candidates)
+      ? raw.address_candidates
+      : undefined,
     home_town: (raw.home_town ?? "").trim(),
     issue_date: (raw.issue_date ?? "").trim(),
     place_of_issue: (raw.place_of_issue ?? "").trim(),
